@@ -1,0 +1,372 @@
+"""SQLite-backed memory store: sessions, multi-timescale memories, FTS5, vectors.
+
+Memory levels (timescales, finest → coarsest):
+    chunk    raw conversation windows            (exact recall of code/errors)
+    memory   LLM-extracted atomic facts          (decisions, solutions, prefs)
+    session  one summary per session
+    digest   one summary per ISO week
+    project  one rolling profile per project
+
+Vectors are stored as float32 blobs and searched brute-force with numpy — at
+this corpus size (tens of thousands of rows) that is faster than maintaining
+an index, and it keeps the store dependency-free.
+"""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from dataclasses import dataclass, field
+from pathlib import Path
+
+import numpy as np
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS files(
+    path TEXT PRIMARY KEY,
+    mtime REAL,
+    size INTEGER,
+    session_id TEXT,
+    status TEXT,               -- 'distilled' | 'extractive' | 'skipped'
+    ingested_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS sessions(
+    id TEXT PRIMARY KEY,
+    project TEXT,
+    cwd TEXT,
+    git_branch TEXT,
+    title TEXT,
+    summary TEXT,
+    outcome TEXT,
+    started_at TEXT,
+    ended_at TEXT,
+    n_user INTEGER,
+    n_assistant INTEGER,
+    source_path TEXT
+);
+CREATE TABLE IF NOT EXISTS memories(
+    id INTEGER PRIMARY KEY,
+    session_id TEXT,
+    project TEXT,
+    level TEXT NOT NULL,       -- chunk | memory | session | digest | project
+    kind TEXT,                 -- decision|fact|preference|solution|problem|task_state|summary|profile|chunk|digest
+    content TEXT NOT NULL,
+    importance REAL DEFAULT 0.3,
+    ts TEXT,
+    tags TEXT DEFAULT '[]'
+);
+CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
+CREATE INDEX IF NOT EXISTS idx_memories_level ON memories(level);
+CREATE INDEX IF NOT EXISTS idx_memories_project ON memories(project);
+CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts USING fts5(
+    content, tags, content='memories', content_rowid='id'
+);
+CREATE TRIGGER IF NOT EXISTS memories_ai AFTER INSERT ON memories BEGIN
+    INSERT INTO memories_fts(rowid, content, tags) VALUES (new.id, new.content, new.tags);
+END;
+CREATE TRIGGER IF NOT EXISTS memories_ad AFTER DELETE ON memories BEGIN
+    INSERT INTO memories_fts(memories_fts, rowid, content, tags)
+    VALUES('delete', old.id, old.content, old.tags);
+END;
+CREATE TABLE IF NOT EXISTS embeddings(
+    memory_id INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
+    vector BLOB NOT NULL
+);
+CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+"""
+
+
+@dataclass
+class MemoryRow:
+    level: str
+    kind: str
+    content: str
+    importance: float = 0.3
+    session_id: str | None = None
+    project: str | None = None
+    ts: str | None = None
+    tags: list[str] = field(default_factory=list)
+    vector: np.ndarray | None = None
+
+
+class MemoryStore:
+    def __init__(self, db_path: Path):
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(str(db_path))
+        self.db.row_factory = sqlite3.Row
+        self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA foreign_keys=ON")
+        self.db.executescript(SCHEMA)
+        self._migrate()
+        self._emb_cache: tuple[np.ndarray, np.ndarray] | None = None  # (ids, matrix)
+
+    def _migrate(self) -> None:
+        cols = {r["name"] for r in self.db.execute("PRAGMA table_info(sessions)")}
+        if "parent_session" not in cols:
+            self.db.execute("ALTER TABLE sessions ADD COLUMN parent_session TEXT")
+
+    # ---------------- file tracking ----------------
+
+    def file_state(self, path: str) -> tuple[float, int] | None:
+        row = self.db.execute(
+            "SELECT mtime, size FROM files WHERE path=?", (path,)
+        ).fetchone()
+        return (row["mtime"], row["size"]) if row else None
+
+    def mark_file(self, path: str, mtime: float, size: int, session_id: str, status: str) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO files(path, mtime, size, session_id, status) "
+            "VALUES(?,?,?,?,?)",
+            (path, mtime, size, session_id, status),
+        )
+
+    # ---------------- sessions ----------------
+
+    def upsert_session(self, **kw) -> None:
+        cols = ["id", "project", "cwd", "git_branch", "title", "summary", "outcome",
+                "started_at", "ended_at", "n_user", "n_assistant", "source_path",
+                "parent_session"]
+        vals = [kw.get(c) for c in cols]
+        placeholders = ",".join("?" for _ in cols)
+        self.db.execute(
+            f"INSERT OR REPLACE INTO sessions({','.join(cols)}) VALUES({placeholders})",
+            vals,
+        )
+
+    def get_session(self, session_id: str) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT * FROM sessions WHERE id=?", (session_id,)
+        ).fetchone()
+
+    def sessions_for_project(self, project: str, limit: int = 50) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM sessions WHERE project=? ORDER BY ended_at DESC LIMIT ?",
+            (project, limit),
+        ).fetchall()
+
+    def sessions_since(self, iso_ts: str) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM sessions WHERE ended_at >= ? ORDER BY ended_at DESC",
+            (iso_ts,),
+        ).fetchall()
+
+    def list_projects(self) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT project, COUNT(*) AS n_sessions, MAX(ended_at) AS last_active "
+            "FROM sessions GROUP BY project ORDER BY last_active DESC"
+        ).fetchall()
+
+    # ---------------- memories ----------------
+
+    def delete_session_memories(self, session_id: str) -> None:
+        ids = [r["id"] for r in self.db.execute(
+            "SELECT id FROM memories WHERE session_id=?", (session_id,)
+        )]
+        self._delete_memory_ids(ids)
+
+    def delete_scoped(self, level: str, project: str | None = None, ts: str | None = None) -> None:
+        """Delete e.g. an old project profile or a week digest before regeneration."""
+        q = "SELECT id FROM memories WHERE level=?"
+        args: list = [level]
+        if project is not None:
+            q += " AND project=?"
+            args.append(project)
+        if ts is not None:
+            q += " AND ts=?"
+            args.append(ts)
+        ids = [r["id"] for r in self.db.execute(q, args)]
+        self._delete_memory_ids(ids)
+
+    def _delete_memory_ids(self, ids: list[int]) -> None:
+        for mid in ids:
+            self.db.execute("DELETE FROM memories WHERE id=?", (mid,))
+            self.db.execute("DELETE FROM embeddings WHERE memory_id=?", (mid,))
+        if ids:
+            self._emb_cache = None
+
+    def add_memories(self, rows: list[MemoryRow]) -> list[int]:
+        ids = []
+        for r in rows:
+            cur = self.db.execute(
+                "INSERT INTO memories(session_id, project, level, kind, content, "
+                "importance, ts, tags) VALUES(?,?,?,?,?,?,?,?)",
+                (r.session_id, r.project, r.level, r.kind, r.content,
+                 r.importance, r.ts, json.dumps(r.tags)),
+            )
+            mid = cur.lastrowid
+            ids.append(mid)
+            if r.vector is not None:
+                self.db.execute(
+                    "INSERT OR REPLACE INTO embeddings(memory_id, vector) VALUES(?,?)",
+                    (mid, r.vector.astype(np.float32).tobytes()),
+                )
+        if rows:
+            self._emb_cache = None
+        return ids
+
+    def get_memories(self, ids: list[int]) -> list[sqlite3.Row]:
+        if not ids:
+            return []
+        qmarks = ",".join("?" for _ in ids)
+        rows = self.db.execute(
+            f"SELECT m.*, s.title AS session_title FROM memories m "
+            f"LEFT JOIN sessions s ON s.id = m.session_id WHERE m.id IN ({qmarks})",
+            ids,
+        ).fetchall()
+        by_id = {r["id"]: r for r in rows}
+        return [by_id[i] for i in ids if i in by_id]
+
+    def memories_for_session(self, session_id: str, levels: tuple[str, ...] = ("memory",)) -> list[sqlite3.Row]:
+        qmarks = ",".join("?" for _ in levels)
+        return self.db.execute(
+            f"SELECT * FROM memories WHERE session_id=? AND level IN ({qmarks}) "
+            "ORDER BY importance DESC",
+            (session_id, *levels),
+        ).fetchall()
+
+    def expand_chunk(
+        self, memory_id: int, session_id: str | None, neighbor_chars: int = 1_000
+    ) -> str | None:
+        """Return a chunk's content with bounded slices of its ±1 neighbors.
+
+        Chunks for a session are inserted consecutively, so id-adjacency within
+        the same session and level is conversation-adjacency. The hit chunk is
+        returned in full; the previous neighbor contributes its tail and the
+        next neighbor its head, each capped at neighbor_chars — so an expanded
+        hit stays bounded (~chunk + 2*neighbor_chars) no matter the chunk size.
+        """
+        if session_id is None:
+            return None
+        rows = self.db.execute(
+            "SELECT id, content FROM memories WHERE session_id=? AND level='chunk' "
+            "AND id BETWEEN ? AND ? ORDER BY id",
+            (session_id, memory_id - 1, memory_id + 1),
+        ).fetchall()
+        if not rows:
+            return None
+        parts = []
+        for r in rows:
+            if r["id"] < memory_id:
+                parts.append("[…earlier] " + r["content"][-neighbor_chars:])
+            elif r["id"] > memory_id:
+                parts.append("[…later] " + r["content"][:neighbor_chars])
+            else:
+                parts.append(r["content"])
+        return "\n".join(parts)
+
+    def get_profile(self, project: str) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT * FROM memories WHERE level='project' AND project=?", (project,)
+        ).fetchone()
+
+    def get_digests(self, limit: int = 8) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM memories WHERE level='digest' ORDER BY ts DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+
+    # ---------------- search primitives ----------------
+
+    def fts_search(self, query: str, limit: int = 100) -> dict[int, float]:
+        """BM25 keyword search. Returns {memory_id: score} with higher = better."""
+        tokens = [t.replace('"', "") for t in query.split() if t.strip('"')]
+        if not tokens:
+            return {}
+        fts_query = " OR ".join(f'"{t}"' for t in tokens)
+        try:
+            rows = self.db.execute(
+                "SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? "
+                "ORDER BY rank LIMIT ?",
+                (fts_query, limit),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            return {}
+        # fts5 rank: smaller (more negative) = better match
+        return {r["rowid"]: -float(r["rank"]) for r in rows}
+
+    def embedding_matrix(self) -> tuple[np.ndarray, np.ndarray]:
+        """All embeddings as (ids, matrix). Cached until the store mutates."""
+        if self._emb_cache is not None:
+            return self._emb_cache
+        rows = self.db.execute("SELECT memory_id, vector FROM embeddings").fetchall()
+        if not rows:
+            self._emb_cache = (np.empty(0, dtype=np.int64), np.empty((0, 1), dtype=np.float32))
+            return self._emb_cache
+        ids = np.array([r["memory_id"] for r in rows], dtype=np.int64)
+        mat = np.vstack([np.frombuffer(r["vector"], dtype=np.float32) for r in rows])
+        self._emb_cache = (ids, mat)
+        return self._emb_cache
+
+    def filter_memory_ids(
+        self,
+        project: str | None = None,
+        levels: tuple[str, ...] | None = None,
+        kinds: tuple[str, ...] | None = None,
+        after: str | None = None,
+        before: str | None = None,
+    ) -> set[int] | None:
+        """Return the id-set matching the filters, or None if no filters given."""
+        if not any([project, levels, kinds, after, before]):
+            return None
+        q = "SELECT id FROM memories WHERE 1=1"
+        args: list = []
+        if project:
+            q += " AND project=?"
+            args.append(project)
+        if levels:
+            q += f" AND level IN ({','.join('?' for _ in levels)})"
+            args.extend(levels)
+        if kinds:
+            q += f" AND kind IN ({','.join('?' for _ in kinds)})"
+            args.extend(kinds)
+        if after:
+            q += " AND ts >= ?"
+            args.append(after)
+        if before:
+            q += " AND ts <= ?"
+            args.append(before)
+        return {r["id"] for r in self.db.execute(q, args)}
+
+    # ---------------- meta / vector-space guard ----------------
+
+    def get_meta(self, key: str) -> str | None:
+        row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
+        return row["value"] if row else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        self.db.execute(
+            "INSERT OR REPLACE INTO meta(key, value) VALUES(?,?)", (key, value)
+        )
+
+    def assert_embedder(self, descriptor: str) -> None:
+        """Vectors from different models/dims are not comparable — refuse to mix."""
+        current = self.get_meta("embedder")
+        if current is None:
+            self.set_meta("embedder", descriptor)
+            self.db.commit()
+        elif current != descriptor:
+            raise RuntimeError(
+                f"store was embedded with '{current}' but the active embedder is "
+                f"'{descriptor}'. Set AGENTIC_MEMORY_EMBED_PROVIDER to match, or "
+                f"delete the db and re-ingest to switch vector spaces."
+            )
+
+    # ---------------- misc ----------------
+
+    def counts(self) -> dict[str, int]:
+        out = {}
+        for level, n in self.db.execute(
+            "SELECT level, COUNT(*) FROM memories GROUP BY level"
+        ).fetchall():
+            out[level] = n
+        out["sessions"] = self.db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        out["files"] = self.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        out["embeddings"] = self.db.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        return out
+
+    def commit(self) -> None:
+        self.db.commit()
+
+    def close(self) -> None:
+        self.db.commit()
+        self.db.close()
