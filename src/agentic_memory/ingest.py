@@ -22,7 +22,7 @@ from .distill import (
     distill_week,
 )
 from .embed import Embedder
-from .llm import LLMBackend, NullBackend
+from .llm import AgentCoreBackend, RefusalError
 from .store import MemoryRow, MemoryStore
 from .transcript import (
     SessionTranscript,
@@ -39,6 +39,7 @@ class IngestStats:
     unchanged: int = 0
     skipped_trivial: int = 0
     distilled: int = 0
+    fallback: int = 0     # distilled, but by the fallback profile after a refusal/failure
     extractive: int = 0
     errors: int = 0
     profiles: int = 0
@@ -108,33 +109,62 @@ def ingest(
     cfg: Config,
     store: MemoryStore,
     embedder: Embedder,
-    llm: LLMBackend,
+    llm: AgentCoreBackend | None,
+    fallback_llm: AgentCoreBackend | None = None,
     limit: int | None = None,
-    use_llm: bool = True,
+    retry_extractive: bool = False,
 ) -> IngestStats:
+    """llm=None means extractive-only ingestion (no distillation calls).
+
+    fallback_llm, when set, is retried whenever the primary refuses (safety
+    classifiers) or otherwise fails to distill; only if both fail does a
+    session degrade to an extractive digest. retry_extractive re-processes
+    unchanged files previously marked extractive (e.g. past refusals).
+    """
     stats = IngestStats()
     store.assert_embedder(embedder.descriptor)
-    if isinstance(llm, NullBackend):
-        use_llm = False
+    use_llm = llm is not None
 
     # ---- 1. scan ----
+    # retry_extractive is a *targeted repair* mode: re-process ONLY files
+    # previously degraded to an extractive digest (past model refusals or
+    # distill failures) — new and changed files are ignored entirely, so it
+    # never re-does or first-ingests anything.
+    retry_mode = retry_extractive and use_llm
     pending: list[tuple] = []
-    for path, project, parent in discover_transcripts(cfg.source_dir):
-        stats.scanned += 1
-        st_info = path.stat()
-        prev = store.file_state(str(path))
-        if prev == (st_info.st_mtime, st_info.st_size):
-            stats.unchanged += 1
-            continue
-        pending.append((path, project, parent, st_info))
+    for ds in cfg.data_stores:
+        if ds.type != "claude-code":
+            raise ValueError(
+                f"data_store '{ds.name}': unknown type '{ds.type}' "
+                "(only 'claude-code' is implemented)"
+            )
+        for path, project, parent in discover_transcripts(ds.path, ds.exclude):
+            stats.scanned += 1
+            st_info = path.stat()
+            if retry_mode:
+                if store.file_status(str(path)) == "extractive":
+                    pending.append((path, project, parent, st_info))
+                else:
+                    stats.unchanged += 1
+                continue
+            prev = store.file_state(str(path))
+            if prev == (st_info.st_mtime, st_info.st_size):
+                stats.unchanged += 1
+                continue
+            pending.append((path, project, parent, st_info))
     if limit is not None:
         pending = pending[:limit]
-    _log(f"[ingest] {stats.scanned} transcripts on disk, {len(pending)} new/changed")
+    _log(
+        f"[ingest] {stats.scanned} transcripts on disk, {len(pending)} "
+        + ("extractive to retry" if retry_mode else "new/changed")
+    )
 
     # ---- 2. parse ----
     parsed: list[tuple[SessionTranscript, object]] = []
     for path, project, parent, st_info in pending:
-        st = parse_transcript(path, project, parent_session=parent)
+        st = parse_transcript(
+            path, project, parent_session=parent, min_chars=cfg.min_session_chars
+        )
         if st is None:
             store.mark_file(str(path), st_info.st_mtime, st_info.st_size, path.stem, "skipped")
             stats.skipped_trivial += 1
@@ -148,20 +178,33 @@ def ingest(
             return st, _extractive_digest(st), "extractive"
         rendered = render_for_llm(st, 10**9, cfg.tool_result_snippet)  # uncapped
         date = (st.started_at or "")[:10]
-        try:
+
+        def run(backend: AgentCoreBackend) -> SessionDigest:
             if len(rendered) <= cfg.max_transcript_chars:
-                digest = distill_session(llm, cfg.fast_model, st.project, date, rendered)
-                return st, digest, "distilled"
+                return distill_session(
+                    backend, st.project, date, rendered, cfg.min_importance
+                )
             _log(
                 f"[ingest] {st.session_id}: {len(rendered):,} chars -> segmented map-reduce"
             )
-            digest = distill_session_segmented(
-                llm, cfg.fast_model, st.project, date, rendered,
+            return distill_session_segmented(
+                backend, st.project, date, rendered,
                 cfg.segment_chars, cfg.segment_overlap, cfg.max_segments,
+                cfg.segment_hard_cap, cfg.min_importance,
             )
-            return st, digest, "distilled"
+
+        try:
+            return st, run(llm), "distilled"
         except Exception as e:  # noqa: BLE001 — degrade, never lose the session
-            _log(f"[ingest] distill failed for {st.session_id}: {e}")
+            kind = "refusal" if isinstance(e, RefusalError) else "distill failure"
+            _log(f"[ingest] {kind} for {st.session_id}: {e}")
+            if fallback_llm is not None:
+                try:
+                    digest = run(fallback_llm)
+                    _log(f"[ingest] {st.session_id}: recovered via {fallback_llm.name}")
+                    return st, digest, "fallback"
+                except Exception as e2:  # noqa: BLE001
+                    _log(f"[ingest] fallback also failed for {st.session_id}: {e2}")
             return st, _extractive_digest(st), "extractive"
 
     touched_projects: set[str] = set()
@@ -194,9 +237,15 @@ def ingest(
             parent_session=st.parent_session,
         )
         store.add_memories(rows)
-        store.mark_file(st.source_path, st_info.st_mtime, st_info.st_size, st.session_id, status)
+        # "fallback" is recorded as "distilled": the session is fully ingested
+        # and must not be swept up again by --retry-extractive.
+        file_status = "distilled" if status == "fallback" else status
+        store.mark_file(st.source_path, st_info.st_mtime, st_info.st_size, st.session_id, file_status)
         store.commit()
-        if status == "distilled":
+        if status == "fallback":
+            stats.distilled += 1
+            stats.fallback += 1
+        elif status == "distilled":
             stats.distilled += 1
         else:
             stats.extractive += 1
@@ -206,11 +255,11 @@ def ingest(
             if wk:
                 touched_weeks.add(wk)
 
-    # ---- 5. project profiles (deep model) ----
+    # ---- 5. project profiles ----
     if use_llm and touched_projects:
-        _log(f"[ingest] regenerating {len(touched_projects)} project profiles ({cfg.deep_model})")
+        _log(f"[ingest] regenerating {len(touched_projects)} project profiles")
         for project in sorted(touched_projects):
-            sessions = store.sessions_for_project(project, limit=30)
+            sessions = store.sessions_for_project(project, limit=cfg.profile_session_limit)
             if not sessions:
                 continue
             lines = [
@@ -219,7 +268,13 @@ def ingest(
             ]
             cwd = next((s["cwd"] for s in sessions if s["cwd"]), "")
             try:
-                profile = distill_profile(llm, cfg.deep_model, project, cwd, lines)
+                try:
+                    profile = distill_profile(llm, project, cwd, lines)
+                except RefusalError:
+                    if fallback_llm is None:
+                        raise
+                    _log(f"[ingest] profile refusal for {project}; using {fallback_llm.name}")
+                    profile = distill_profile(fallback_llm, project, cwd, lines)
             except Exception as e:  # noqa: BLE001
                 _log(f"[ingest] profile failed for {project}: {e}")
                 stats.errors += 1
@@ -237,7 +292,7 @@ def ingest(
             store.commit()
             stats.profiles += 1
 
-    # ---- 6. weekly digests (fast model) ----
+    # ---- 6. weekly digests ----
     if use_llm and touched_weeks:
         _log(f"[ingest] regenerating {len(touched_weeks)} weekly digests")
         for wk in sorted(touched_weeks):
@@ -250,10 +305,16 @@ def ingest(
                 continue
             lines = [
                 f"- {s['project']} | {s['title']} | {s['summary']} | {s['outcome']}"
-                for s in sessions[:40]
+                for s in sessions[: cfg.digest_session_limit]
             ]
             try:
-                text = distill_week(llm, cfg.fast_model, wk, lines)
+                try:
+                    text = distill_week(llm, wk, lines)
+                except RefusalError:
+                    if fallback_llm is None:
+                        raise
+                    _log(f"[ingest] digest refusal for week {wk}; using {fallback_llm.name}")
+                    text = distill_week(fallback_llm, wk, lines)
             except Exception as e:  # noqa: BLE001
                 _log(f"[ingest] digest failed for week {wk}: {e}")
                 stats.errors += 1

@@ -10,7 +10,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from .llm import LLMBackend
+from .llm import AgentCoreBackend
 
 MEMORY_KINDS = ("decision", "fact", "preference", "solution", "problem", "task_state")
 
@@ -189,8 +189,8 @@ def _extract_json(text: str) -> dict:
     raise ValueError("unbalanced JSON in LLM output")
 
 
-def _call_json(llm: LLMBackend, system: str, prompt: str, model: str) -> dict:
-    raw = llm.complete(system=system, prompt=prompt, model=model)
+def _call_json(llm: AgentCoreBackend, system: str, prompt: str) -> dict:
+    raw = llm.complete(system=system, prompt=prompt)
     try:
         return _extract_json(raw)
     except (ValueError, json.JSONDecodeError):
@@ -198,11 +198,11 @@ def _call_json(llm: LLMBackend, system: str, prompt: str, model: str) -> dict:
             prompt
             + "\n\nYour previous reply was not valid JSON. Reply again with ONLY the JSON object."
         )
-        raw = llm.complete(system=system, prompt=retry, model=model)
+        raw = llm.complete(system=system, prompt=retry)
         return _extract_json(raw)
 
 
-def _parse_memories(data: dict) -> list[DistilledMemory]:
+def _parse_memories(data: dict, min_importance: float = 0.25) -> list[DistilledMemory]:
     memories = []
     for m in data.get("memories", []):
         content = (m.get("content") or "").strip()
@@ -214,32 +214,32 @@ def _parse_memories(data: dict) -> list[DistilledMemory]:
         except (TypeError, ValueError):
             imp = 0.5
         imp = min(1.0, max(0.1, imp))
-        if imp < 0.25:  # drop trivia the model rated 1-2
+        if imp < min_importance:  # drop trivia (default: rated 1-2 of 10)
             continue
         tags = [str(t).lower() for t in (m.get("tags") or []) if isinstance(t, (str, int))][:8]
         memories.append(DistilledMemory(content=content, kind=kind, importance=imp, tags=tags))
     return memories
 
 
-def _digest_from(data: dict) -> SessionDigest:
+def _digest_from(data: dict, min_importance: float = 0.25) -> SessionDigest:
     return SessionDigest(
         title=(data.get("title") or "").strip() or "Untitled session",
         summary=(data.get("summary") or "").strip(),
         outcome=(data.get("outcome") or "").strip(),
-        memories=_parse_memories(data),
+        memories=_parse_memories(data, min_importance),
     )
 
 
 def distill_session(
-    llm: LLMBackend, model: str, project: str, date: str, transcript_text: str
+    llm: AgentCoreBackend, project: str, date: str, transcript_text: str,
+    min_importance: float = 0.25,
 ) -> SessionDigest:
     data = _call_json(
         llm,
         SESSION_SYSTEM,
         SESSION_PROMPT.format(project=project, date=date, transcript=transcript_text),
-        model,
     )
-    return _digest_from(data)
+    return _digest_from(data, min_importance)
 
 
 def segment_text(
@@ -270,17 +270,20 @@ def segment_text(
 
 
 def distill_session_segmented(
-    llm: LLMBackend,
-    model: str,
+    llm: AgentCoreBackend,
     project: str,
     date: str,
     transcript_text: str,
     segment_chars: int,
     overlap: int,
     max_segments: int,
+    hard_cap: int = 600_000,
+    min_importance: float = 0.25,
 ) -> SessionDigest:
     """Map-reduce distillation for sessions too large for one pass."""
-    segments, partial = segment_text(transcript_text, segment_chars, overlap, max_segments)
+    segments, partial = segment_text(
+        transcript_text, segment_chars, overlap, max_segments, hard_cap
+    )
     coverage_note = (
         " NOTE: the session was too large to cover fully; segments are evenly"
         " sampled windows, so there are gaps between them."
@@ -297,10 +300,9 @@ def distill_session_segmented(
                 idx=i, total=len(segments), project=project, date=date,
                 coverage_note=coverage_note, segment=seg,
             ),
-            model,
         )
         summaries.append(f"[segment {i}/{len(segments)}] {(data.get('summary') or '').strip()}")
-        for m in _parse_memories(data):
+        for m in _parse_memories(data, min_importance):
             candidates.append(
                 {"content": m.content, "kind": m.kind,
                  "importance": round(m.importance * 10), "tags": m.tags}
@@ -313,30 +315,27 @@ def distill_session_segmented(
             summaries="\n".join(summaries),
             candidates=json.dumps(candidates, ensure_ascii=False),
         ),
-        model,
     )
-    return _digest_from(data)
+    return _digest_from(data, min_importance)
 
 
 def distill_profile(
-    llm: LLMBackend, model: str, project: str, cwd: str, session_lines: list[str]
+    llm: AgentCoreBackend, project: str, cwd: str, session_lines: list[str]
 ) -> str:
     data = _call_json(
         llm,
         PROFILE_SYSTEM,
         PROFILE_PROMPT.format(project=project, cwd=cwd or "?", sessions="\n".join(session_lines)),
-        model,
     )
     return (data.get("profile") or "").strip()
 
 
 def distill_week(
-    llm: LLMBackend, model: str, week_start: str, session_lines: list[str]
+    llm: AgentCoreBackend, week_start: str, session_lines: list[str]
 ) -> str:
     data = _call_json(
         llm,
         DIGEST_SYSTEM,
         DIGEST_PROMPT.format(week_start=week_start, sessions="\n".join(session_lines)),
-        model,
     )
     return (data.get("digest") or "").strip()

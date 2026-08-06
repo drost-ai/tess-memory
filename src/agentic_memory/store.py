@@ -113,6 +113,12 @@ class MemoryStore:
         ).fetchone()
         return (row["mtime"], row["size"]) if row else None
 
+    def file_status(self, path: str) -> str | None:
+        row = self.db.execute(
+            "SELECT status FROM files WHERE path=?", (path,)
+        ).fetchone()
+        return row["status"] if row else None
+
     def mark_file(self, path: str, mtime: float, size: int, session_id: str, status: str) -> None:
         self.db.execute(
             "INSERT OR REPLACE INTO files(path, mtime, size, session_id, status) "

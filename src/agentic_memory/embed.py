@@ -32,8 +32,9 @@ class Embedder:
     """Interface: embed_passages / embed_query / descriptor."""
 
     descriptor: str = "?"
+    batch_size: int = 64
 
-    def embed_passages(self, texts: list[str], batch_size: int = 64) -> np.ndarray:
+    def embed_passages(self, texts: list[str]) -> np.ndarray:
         raise NotImplementedError
 
     def embed_query(self, query: str) -> np.ndarray:
@@ -41,8 +42,9 @@ class Embedder:
 
 
 class LocalEmbedder(Embedder):
-    def __init__(self, model_name: str):
+    def __init__(self, model_name: str, batch_size: int = 64):
         self.model_name = model_name
+        self.batch_size = batch_size
         self.descriptor = f"local:{model_name}"
         self._model = None
 
@@ -59,13 +61,13 @@ class LocalEmbedder(Embedder):
                 self._model = SentenceTransformer(self.model_name)
         return self._model
 
-    def embed_passages(self, texts: list[str], batch_size: int = 64) -> np.ndarray:
+    def embed_passages(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.empty((0, 1), dtype=np.float32)
         model = self._load()
         vecs = model.encode(
             texts,
-            batch_size=batch_size,
+            batch_size=self.batch_size,
             normalize_embeddings=True,
             show_progress_bar=len(texts) > 256,
         )
@@ -79,7 +81,8 @@ class LocalEmbedder(Embedder):
 
 
 class OpenAICompatEmbedder(Embedder):
-    def __init__(self, settings_path, profile_name: str, dims: int):
+    def __init__(self, settings_path, profile_name: str, dims: int, batch_size: int = 64):
+        self.batch_size = batch_size
         settings = json.load(open(settings_path))
         prof = (settings.get("providerProfiles") or {}).get(profile_name)
         if not prof:
@@ -120,12 +123,12 @@ class OpenAICompatEmbedder(Embedder):
                 time.sleep(2**attempt)
         raise RuntimeError(f"embedding request failed after retries: {last_err}")
 
-    def embed_passages(self, texts: list[str], batch_size: int = 64) -> np.ndarray:
+    def embed_passages(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.empty((0, 1), dtype=np.float32)
         out = [
-            self._post(texts[i : i + batch_size])
-            for i in range(0, len(texts), batch_size)
+            self._post(texts[i : i + self.batch_size])
+            for i in range(0, len(texts), self.batch_size)
         ]
         return np.vstack(out)
 
@@ -136,11 +139,13 @@ class OpenAICompatEmbedder(Embedder):
 def make_embedder(cfg: Config) -> Embedder:
     provider = cfg.embed_provider
     if provider == "local":
-        return LocalEmbedder(cfg.embed_model)
+        return LocalEmbedder(cfg.embed_model, cfg.embed_batch_size)
     try:
-        return OpenAICompatEmbedder(cfg.agent_core_settings, provider, cfg.embed_dims)
+        return OpenAICompatEmbedder(
+            cfg.agent_core_settings, provider, cfg.embed_dims, cfg.embed_batch_size
+        )
     except RuntimeError as e:
         import sys
 
         print(f"[embed] {e}; falling back to local model", file=sys.stderr)
-        return LocalEmbedder(cfg.embed_model)
+        return LocalEmbedder(cfg.embed_model, cfg.embed_batch_size)

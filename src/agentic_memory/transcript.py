@@ -9,6 +9,7 @@ account of tool activity. Sidechains (subagent transcripts) are skipped.
 
 from __future__ import annotations
 
+import fnmatch
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -103,7 +104,7 @@ def _is_harness_text(text: str) -> bool:
 
 
 def parse_transcript(
-    path: Path, project: str, parent_session: str | None = None
+    path: Path, project: str, parent_session: str | None = None, min_chars: int = 200
 ) -> SessionTranscript | None:
     session_id = path.stem
     st = SessionTranscript(
@@ -174,7 +175,7 @@ def parse_transcript(
             elif isinstance(content, str) and content.strip():
                 st.turns.append(Turn("assistant", content.strip(), ts))
 
-    if st.n_user == 0 or st.content_chars < 200:
+    if st.n_user == 0 or st.content_chars < min_chars:
         return None
     return st
 
@@ -281,31 +282,22 @@ def chunk_session(st: SessionTranscript, chunk_chars: int) -> list[tuple[str, st
     return chunks
 
 
-# Project slugs that are not real work: ephemeral cwds of our own LLM calls
-# (claude -p records a transcript of every distillation call — ingesting those
-# would feed the memory system its own exhaust) and macOS temp-dir sessions.
-_EXCLUDED_SLUG_PREFIXES = ("-private-var-folders", "-private-tmp-claude")
-_EXCLUDED_SLUG_MARKERS = ("agentic-memory-llm", "agentic-memory-ac")
-
-
-def _excluded_project(slug: str) -> bool:
-    return slug.startswith(_EXCLUDED_SLUG_PREFIXES) or any(
-        m in slug for m in _EXCLUDED_SLUG_MARKERS
-    )
-
-
-def discover_transcripts(source_dir: Path) -> list[tuple[Path, str, str | None]]:
+def discover_transcripts(
+    source_dir: Path, exclude: tuple[str, ...] | list[str] = ()
+) -> list[tuple[Path, str, str | None]]:
     """Return (path, project_slug, parent_session) for every transcript on disk.
 
     parent_session is None for main sessions; for subagent transcripts
     (<project>/<parent-session>/subagents/agent-*.jsonl) it is the parent
-    session id.
+    session id. `exclude` holds glob patterns matched against project slugs.
     """
     out: list[tuple[Path, str, str | None]] = []
     if not source_dir.is_dir():
         return out
     for proj_dir in sorted(source_dir.iterdir()):
-        if not proj_dir.is_dir() or _excluded_project(proj_dir.name):
+        if not proj_dir.is_dir() or any(
+            fnmatch.fnmatch(proj_dir.name, pat) for pat in exclude
+        ):
             continue
         for f in sorted(proj_dir.glob("*.jsonl")):
             out.append((f, proj_dir.name, None))

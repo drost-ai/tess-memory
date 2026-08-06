@@ -35,14 +35,63 @@ When to reach for it:
 Workflow: list_projects to discover slugs; get_project_context for orientation;
 search_memory for specifics (write SELF-CONTAINED queries — you have the
 conversation context, the search does not); get_session to drill into any
-session id a result mentions. Searches are cheap: if the first query misses,
-reformulate and try again rather than giving up.
+session id a result mentions.
+
+search_memory runs a retrieval agent inside the server: it reformulates,
+fans out sub-queries, follows session links, and returns curated evidence.
+State the FULL information need in one call rather than firing keyword
+fragments; if something is missing, refine the request and call again.
 """
 
 mcp = MCPServer("agentic-memory", instructions=INSTRUCTIONS)
 
 _store: MemoryStore | None = None
 _embedder: Embedder | None = None
+_search_llm: object = None  # None = not tried; False = unavailable
+
+
+def _get_search_llm():
+    """Lazily construct the search-agent backend; False if unusable."""
+    global _search_llm
+    if _search_llm is None:
+        if not CONFIG.search_agent:
+            _search_llm = False
+        else:
+            try:
+                from .llm import AgentCoreBackend
+
+                _search_llm = AgentCoreBackend(
+                    CONFIG, probe=False, profile=CONFIG.search_profile or None
+                )
+            except Exception as e:  # noqa: BLE001 — degrade to static search
+                import sys
+
+                print(
+                    f"[agentic-memory] search agent unavailable ({e}); "
+                    "falling back to static retrieval",
+                    file=sys.stderr,
+                )
+                _search_llm = False
+    return _search_llm or None
+
+
+def _outside_event_loop(fn, *args, **kwargs):
+    """Run fn in a fresh thread if this thread holds a running event loop.
+
+    The agent backend calls asyncio.run(), which raises inside a running
+    loop; MCP tool dispatch is expected to use worker threads, but this
+    guard keeps retrieval working even if it doesn't.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return fn(*args, **kwargs)
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(fn, *args, **kwargs).result()
 
 
 def _get_store() -> MemoryStore:
@@ -63,8 +112,9 @@ def _fmt_hit(h: dict) -> str:
     where = h["project"] or "-"
     when = (h["ts"] or "")[:10]
     anchor = f" (session {h['session_id']}: {h['session_title']})" if h["session_id"] else ""
+    score = f" | score {h['score']}" if h.get("score") is not None else ""
     return (
-        f"- [{h['level']}/{h['kind']} | {where} | {when} | score {h['score']}]"
+        f"- [{h['level']}/{h['kind']} | {where} | {when}{score}]"
         f"{anchor}\n  {h['content']}"
     )
 
@@ -100,19 +150,53 @@ def search_memory(
     before: Annotated[str | None, Field(description=(
         "ISO date upper bound, e.g. '2026-07-31'."
     ))] = None,
-    limit: Annotated[int, Field(description="Max results (default 8).")] = 8,
+    limit: Annotated[int | None, Field(description=(
+        "Max evidence items returned (default: search.evidence_limit in "
+        "settings.toml, 12)."
+    ))] = None,
 ) -> str:
-    """Hybrid semantic+keyword search over everything in past-session memory.
+    """Agentic search over everything in past-session memory.
 
     Use it for: "have we solved this before", past decisions and their
     rationale, exact commands/flags/paths from earlier work, error messages
-    seen before, and the user's preferences. Results carry session ids —
-    drill down with get_session. If the first query misses, reformulate and
-    search again; searches are cheap.
+    seen before, and the user's preferences. A retrieval agent inside the
+    server reformulates the query, fans out sub-searches, follows session
+    links across projects, and returns curated evidence (never a synthesized
+    answer) — so state the FULL information need in one call instead of
+    firing keyword fragments. Results carry session ids — drill down with
+    get_session. If something is missing, refine the request and call again.
     """
+    store, embedder = _get_store(), _get_embedder()
+    llm = _get_search_llm()
+    if llm is not None:
+        try:
+            from .search_agent import agentic_search
+
+            hits, trace = _outside_event_loop(
+                agentic_search,
+                CONFIG, store, embedder, llm, query,
+                project=project, level=level, kind=kind,
+                after=after, before=before, limit=limit,
+            )
+            header = (
+                f"[retrieval agent: {trace.rounds} rounds, "
+                f"{len(trace.queries)} queries"
+                + (f", {len(trace.sessions)} sessions expanded" if trace.sessions else "")
+                + "]"
+            )
+            if trace.note:
+                header += f"\n[agent note: {trace.note}]"
+            if not hits:
+                return f"{header}\nNo matching memories found."
+            return header + "\n" + "\n".join(_fmt_hit(h) for h in hits)
+        except Exception as e:  # noqa: BLE001 — degrade to static search
+            import sys
+
+            print(f"[agentic-memory] agentic search failed ({e}); "
+                  "falling back to static retrieval", file=sys.stderr)
     hits = retrieval.search(
-        _get_store(),
-        _get_embedder(),
+        store,
+        embedder,
         query,
         project=project,
         levels=(level,) if level else None,

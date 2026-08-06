@@ -12,19 +12,28 @@ from .config import CONFIG
 def cmd_ingest(args: argparse.Namespace) -> int:
     from .embed import make_embedder
     from .ingest import ingest
-    from .llm import NullBackend, make_backend
+    from .llm import AgentCoreBackend
     from .store import MemoryStore
 
     CONFIG.ensure_dirs()
     store = MemoryStore(CONFIG.db_path)
     embedder = make_embedder(CONFIG)
-    llm = NullBackend() if args.no_llm else make_backend(CONFIG)
-    print(f"[ingest] source={CONFIG.source_dir}", file=sys.stderr)
+    llm = None if args.no_llm else AgentCoreBackend(CONFIG)
+    fallback = None
+    if llm is not None and CONFIG.agent_core_fallback_profile:
+        # probe=False: no API call unless a refusal actually needs it
+        fallback = AgentCoreBackend(
+            CONFIG, probe=False, profile=CONFIG.agent_core_fallback_profile
+        )
+    for ds in CONFIG.data_stores:
+        print(f"[ingest] data_store {ds.name} ({ds.type}): {ds.path}", file=sys.stderr)
     print(f"[ingest] db={CONFIG.db_path}", file=sys.stderr)
-    print(f"[ingest] llm backend={llm.name}", file=sys.stderr)
+    print(f"[ingest] llm={'none (extractive-only)' if llm is None else llm.name}", file=sys.stderr)
+    if fallback is not None:
+        print(f"[ingest] refusal fallback={fallback.name}", file=sys.stderr)
     stats = ingest(
-        CONFIG, store, embedder, llm,
-        limit=args.limit, use_llm=not args.no_llm,
+        CONFIG, store, embedder, llm, fallback_llm=fallback,
+        limit=args.limit, retry_extractive=args.retry_extractive,
     )
     print(json.dumps(vars(stats), indent=2))
     store.close()
@@ -37,14 +46,37 @@ def cmd_search(args: argparse.Namespace) -> int:
     from .store import MemoryStore
 
     store = MemoryStore(CONFIG.db_path)
-    hits = search(
-        store, make_embedder(CONFIG), args.query,
-        project=args.project,
-        levels=(args.level,) if args.level else None,
-        limit=args.limit,
-    )
+    embedder = make_embedder(CONFIG)
+    hits = None
+    if CONFIG.search_agent and not args.static:
+        from .llm import AgentCoreBackend
+        from .search_agent import agentic_search
+
+        llm = AgentCoreBackend(
+            CONFIG, probe=False, profile=CONFIG.search_profile or None
+        )
+        print(f"[search] retrieval agent: {llm.name}", file=sys.stderr)
+        hits, trace = agentic_search(
+            CONFIG, store, embedder, llm, args.query,
+            project=args.project, level=args.level, limit=args.limit,
+        )
+        print(
+            f"[search] {trace.rounds} rounds, queries: {trace.queries}"
+            + (f", sessions expanded: {trace.sessions}" if trace.sessions else ""),
+            file=sys.stderr,
+        )
+        if trace.note:
+            print(f"[search] agent note: {trace.note}", file=sys.stderr)
+    if hits is None:
+        hits = search(
+            store, embedder, args.query,
+            project=args.project,
+            levels=(args.level,) if args.level else None,
+            limit=args.limit,
+        )
     for h in hits:
-        print(f"[{h['score']:.3f}] ({h['level']}/{h['kind']}) {h['project'] or '-'} "
+        score = f"{h['score']:.3f}" if h["score"] is not None else "  -  "
+        print(f"[{score}] ({h['level']}/{h['kind']}) {h['project'] or '-'} "
               f"{(h['ts'] or '')[:10]}\n    {h['content'][:300]}\n")
     if not hits:
         print("no results")
@@ -75,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("ingest", help="Ingest new/changed session transcripts")
     p.add_argument("--limit", type=int, default=None, help="max sessions to process")
     p.add_argument("--no-llm", action="store_true", help="extractive-only (no LLM calls)")
+    p.add_argument("--retry-extractive", action="store_true",
+                   help="re-distill sessions previously degraded to extractive "
+                        "digests (e.g. past model refusals)")
     p.set_defaults(fn=cmd_ingest)
 
     p = sub.add_parser("search", help="Search the memory store")
@@ -82,7 +117,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--project", default=None)
     p.add_argument("--level", default=None,
                    choices=["chunk", "memory", "session", "digest", "project"])
-    p.add_argument("--limit", type=int, default=8)
+    p.add_argument("--limit", type=int, default=None,
+                   help="max results (default: search.evidence_limit for agentic, "
+                        "retrieval.default_limit for static)")
+    p.add_argument("--static", action="store_true",
+                   help="skip the retrieval agent; plain one-shot hybrid search")
     p.set_defaults(fn=cmd_search)
 
     p = sub.add_parser("status", help="Show store statistics")
