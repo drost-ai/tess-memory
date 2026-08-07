@@ -20,7 +20,9 @@ from . import plan, retrieval
 INSTRUCTIONS = """\
 Long-term memory over the user's past AI coding sessions (ingested transcripts,
 distilled into decisions, solutions, preferences, and project state, plus the
-raw activity stream: exact commands, file paths, and error output).
+raw activity stream: exact commands, file paths, and error output) — and the
+user's durable PLAN: an authored board of vision/epics/slices/tasks/notes per
+project that persists across sessions and harnesses.
 
 When to reach for it:
 - Starting work in a project -> get_project_context (orient before exploring).
@@ -31,19 +33,29 @@ When to reach for it:
 - You need the user's established preferences or past decisions -> search_memory
   with kind='preference' or kind='decision'.
 - "What was I working on?" -> recent_activity.
-- "Note this down", "add it to the plan", "what's next on X" -> the plan tools
-  (plan_board, plan_add, plan_update, plan_get).
+- The user asks to PLAN work ("let's plan this", "break this down", "add it to
+  the plan", "note this down") -> write the plan as plan_add items, not just
+  prose in your reply.
+- You start, finish, or get blocked on planned work -> plan_update, at that
+  moment, not at session end.
 
-The store also carries an AUTHORED planning plane per project: product vision,
-epics, slices, tasks, and freeform notes, with stable ids, parent links, and a
-status lifecycle (planned/in_progress/blocked/complete/dropped; every change
-timestamped). Unlike distilled memory (derived from transcripts after the
-fact), plan items are written by agents mid-session and persist across
-sessions and harnesses — use them as scratchpad, notepad, and ticket system.
-Orient with plan_board (get_project_context shows open items); capture new
-scope with plan_add; LIVE-maintain status with plan_update as work starts and
-finishes, not just at session end. Items are never deleted — they finish as
-complete or retire as dropped.
+Planning plane contract:
+- Decompose: vision = durable product direction; epic = a multi-session
+  feature; slice = a shippable increment; task = one session-sized unit of
+  work; note = durable scratchpad. Nest vision -> epic -> slice -> task
+  (convention, not enforced); create parents first — each plan_add returns
+  the new item's id. Write bodies self-contained (context, acceptance
+  criteria): future sessions read them without today's conversation.
+- Statuses (all timestamped): planned | in_progress | blocked | complete |
+  dropped. Mark in_progress when you begin, complete when done AND verified,
+  blocked/dropped when reality changes (put the reason in the body). Items
+  are never deleted. Never let the board drift from reality.
+- Harness todo lists are ephemeral; this board is durable. Mirror anything
+  that must survive the session into it.
+- The project slug is the session cwd with '/' replaced by '-'
+  (/Users/x/proj -> -Users-x-proj); confirm with list_projects. Plan items
+  are searchable (search_memory level='plan'); the open board rides along in
+  get_project_context, full tree via plan_board.
 
 Workflow: list_projects to discover slugs; get_project_context for orientation;
 search_memory for specifics (write SELF-CONTAINED queries — you have the
@@ -245,7 +257,11 @@ def get_project_context(
         parts.append(f"## Project profile\n{profile['content']}")
     board = plan.render_board(store, project, max_items=12)
     if board:
-        parts.append(f"## Open plan\n{board}")
+        parts.append(
+            f"## Open plan\n{board}\n"
+            "(keep this board live: plan_update the moment work starts or "
+            "finishes; plan_add for new scope; full tree via plan_board)"
+        )
     sessions = store.sessions_for_project(project, limit=10)
     if sessions:
         lines = []
@@ -367,11 +383,12 @@ def plan_add(
 ) -> str:
     """Create a plan item: vision, epic, slice, task, or freeform note.
 
-    The planning plane is authored, durable working memory — it persists across
-    sessions and harnesses, so use it as scratchpad, notepad, and ticket
-    system. New items start as status 'planned'. Check plan_board first to
-    pick the right parent and avoid duplicates. Items are searchable via
-    search_memory (level='plan').
+    When the user asks to plan work, capture the plan HERE — one call per
+    item, parents before children (each call returns the new item's id) —
+    not just as prose in your reply. New items start as 'planned'. The plan
+    is durable working memory: it persists across sessions and harnesses,
+    and items are searchable via search_memory (level='plan'). Check
+    plan_board first to pick the right parent and avoid duplicates.
     """
     try:
         item = plan.add_item(
@@ -408,9 +425,11 @@ def plan_update(
 ) -> str:
     """Update a plan item: move status, edit, reprioritize, or re-parent.
 
-    Maintain status LIVE: mark items in_progress when you start them, complete
-    when finished, blocked/dropped when reality changes. Every transition is
-    timestamped and recorded in the item's history.
+    Maintain status LIVE, at the moment it changes: in_progress when you
+    begin an item, complete when the work is done AND verified, blocked or
+    dropped when reality changes (put the reason in the body). Do not batch
+    updates for session end — a stale board misleads every future session.
+    Every transition is timestamped and recorded in the item's history.
     """
     kwargs: dict = dict(status=status, title=title, body=body,
                         priority=priority, tags=tags)
