@@ -49,7 +49,10 @@ Planning plane contract:
 - Statuses (all timestamped): planned | in_progress | blocked | complete |
   dropped. Mark in_progress when you begin, complete when done AND verified,
   blocked/dropped when reality changes (put the reason in the body). Items
-  are never deleted. Never let the board drift from reality.
+  are never deleted. Never let the board drift from reality — and roll
+  status UP the tree: starting an item's first child makes the parent
+  in_progress; completing its last open child completes the parent. A parent
+  must never read staler than its children.
 - Harness todo lists are ephemeral; this board is durable. Mirror anything
   that must survive the session into it.
 - The project slug is the session cwd with '/' replaced by '-'
@@ -452,9 +455,11 @@ def plan_update(
 
     Maintain status LIVE, at the moment it changes: in_progress when you
     begin an item, complete when the work is done AND verified, blocked or
-    dropped when reality changes (put the reason in the body). Do not batch
-    updates for session end — a stale board misleads every future session.
-    Every transition is timestamped and recorded in the item's history.
+    dropped when reality changes (put the reason in the body). Roll status up
+    the tree too: a parent epic/slice goes in_progress with its first started
+    child and complete with its last finished one. Do not batch updates for
+    session end — a stale board misleads every future session. Every
+    transition is timestamped and recorded in the item's history.
     """
     kwargs: dict = dict(status=status, title=title, body=body,
                         priority=priority, tags=tags)
