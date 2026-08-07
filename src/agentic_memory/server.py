@@ -15,7 +15,7 @@ from pydantic import Field
 from .config import CONFIG
 from .embed import Embedder, make_embedder
 from .store import MemoryStore
-from . import retrieval
+from . import plan, retrieval
 
 INSTRUCTIONS = """\
 Long-term memory over the user's past AI coding sessions (ingested transcripts,
@@ -31,6 +31,18 @@ When to reach for it:
 - You need the user's established preferences or past decisions -> search_memory
   with kind='preference' or kind='decision'.
 - "What was I working on?" -> recent_activity.
+- "Note this down", "add it to the plan", "what's next on X" -> the plan tools
+  (plan_board, plan_add, plan_update, plan_get).
+
+The store also carries an AUTHORED planning plane per project: product vision,
+epics, slices, tasks, and freeform notes, with stable ids, parent links, and a
+status lifecycle (open/in_progress/blocked/done/dropped). Unlike distilled
+memory (derived from transcripts after the fact), plan items are written by
+agents mid-session and persist across sessions and harnesses — use them as
+scratchpad, notepad, and ticket system. Orient with plan_board
+(get_project_context shows open items); capture new scope with plan_add; keep
+status truthful with plan_update before the session ends. Items are never
+deleted — they finish as done or retire as dropped.
 
 Workflow: list_projects to discover slugs; get_project_context for orientation;
 search_memory for specifics (write SELF-CONTAINED queries — you have the
@@ -137,7 +149,8 @@ def search_memory(
         "Timescale filter: 'chunk' = raw activity (exact commands, error "
         "output, code snippets); 'memory' = distilled atomic facts; "
         "'session' = whole-session summaries; 'digest' = weekly summaries; "
-        "'project' = rolling project profiles. Omit to search all levels."
+        "'project' = rolling project profiles; 'plan' = authored plan items "
+        "(vision/epics/slices/tasks/notes). Omit to search all levels."
     ))] = None,
     kind: Annotated[str | None, Field(description=(
         "Memory-kind filter (applies to level='memory'): decision | fact | "
@@ -217,17 +230,21 @@ def get_project_context(
         "(slugs are the project cwd with slashes replaced by dashes)."
     ))],
 ) -> str:
-    """Orient in a project: rolling profile + the last 10 session summaries.
+    """Orient in a project: rolling profile, open plan, last 10 session summaries.
 
     Call this when starting work in a project the user has history with —
-    it covers architecture, key decisions, current state, known problems, and
-    the user's preferences for that project, cheaper than re-exploring.
+    it covers architecture, key decisions, current state, known problems, the
+    user's preferences for that project, and the open plan board, cheaper than
+    re-exploring.
     """
     store = _get_store()
     parts: list[str] = []
     profile = store.get_profile(project)
     if profile:
         parts.append(f"## Project profile\n{profile['content']}")
+    board = plan.render_board(store, project, max_items=12)
+    if board:
+        parts.append(f"## Open plan\n{board}")
     sessions = store.sessions_for_project(project, limit=10)
     if sessions:
         lines = []
@@ -316,6 +333,130 @@ def recent_activity(
         ]
         parts.append(f"## Sessions in the last {days} days\n" + "\n".join(lines))
     return "\n\n".join(parts) if parts else f"No activity recorded in the last {days} days."
+
+
+@mcp.tool()
+def plan_add(
+    project: Annotated[str, Field(description=(
+        "Project slug the item belongs to — same slugs as list_projects "
+        "(the project cwd with slashes replaced by dashes)."
+    ))],
+    kind: Annotated[str, Field(description=(
+        "vision | epic | slice | task | note. Typical nesting: vision -> epic "
+        "-> slice -> task (a convention, not enforced). 'note' is freeform "
+        "scratchpad — attach it to any item or leave it top-level."
+    ))],
+    title: Annotated[str, Field(description=(
+        "Short imperative title; for notes, a one-line gist."
+    ))],
+    body: Annotated[str, Field(description=(
+        "Full text: context, rationale, acceptance criteria, scratch content. "
+        "Write it SELF-CONTAINED — future sessions read this without today's "
+        "conversation."
+    ))] = "",
+    parent_id: Annotated[int | None, Field(description=(
+        "id of the parent item (find ids with plan_board). Omit for top-level."
+    ))] = None,
+    priority: Annotated[int, Field(description=(
+        "1 (highest) to 5 (lowest); default 3."
+    ))] = 3,
+    tags: Annotated[list[str] | None, Field(description=(
+        "Lowercase keyword tags for retrieval."
+    ))] = None,
+) -> str:
+    """Create a plan item: vision, epic, slice, task, or freeform note.
+
+    The planning plane is authored, durable working memory — it persists across
+    sessions and harnesses, so use it as scratchpad, notepad, and ticket
+    system. Check plan_board first to pick the right parent and avoid
+    duplicates. Items are searchable via search_memory (level='plan').
+    """
+    try:
+        item = plan.add_item(
+            _get_store(), _get_embedder(), project=project, kind=kind,
+            title=title, body=body, parent_id=parent_id, priority=priority,
+            tags=tags or [],
+        )
+    except ValueError as e:
+        return f"Cannot create item: {e}"
+    return f"Created {plan.format_line(item)} in {project}"
+
+
+@mcp.tool()
+def plan_update(
+    item_id: Annotated[int, Field(description="Plan item id (see plan_board).")],
+    status: Annotated[str | None, Field(description=(
+        "New status: open | in_progress | blocked | done | dropped. Items are "
+        "never deleted — 'done' completes, 'dropped' retires. Omit to keep."
+    ))] = None,
+    title: Annotated[str | None, Field(description="New title. Omit to keep.")] = None,
+    body: Annotated[str | None, Field(description=(
+        "Replacement body text (full replacement, not appended). Omit to keep."
+    ))] = None,
+    priority: Annotated[int | None, Field(description=(
+        "New priority 1-5. Omit to keep."
+    ))] = None,
+    parent_id: Annotated[int | None, Field(description=(
+        "New parent id; 0 makes the item top-level. Omit to keep."
+    ))] = None,
+    tags: Annotated[list[str] | None, Field(description=(
+        "Replacement tag list. Omit to keep."
+    ))] = None,
+) -> str:
+    """Update a plan item: move status, edit, reprioritize, or re-parent.
+
+    Keep the board truthful: mark items in_progress when you start them, done
+    when finished, blocked/dropped when reality changes. Every transition is
+    recorded in the item's history.
+    """
+    kwargs: dict = dict(status=status, title=title, body=body,
+                        priority=priority, tags=tags)
+    if parent_id is not None:
+        kwargs["parent_id"] = parent_id
+    try:
+        item, changes = plan.update_item(
+            _get_store(), _get_embedder(), item_id, **kwargs
+        )
+    except ValueError as e:
+        return f"Cannot update item: {e}"
+    if not changes:
+        return f"No changes applied to {plan.format_line(item)}"
+    return f"Updated {plan.format_line(item)} — " + "; ".join(changes)
+
+
+@mcp.tool()
+def plan_board(
+    project: Annotated[str, Field(description=(
+        "Project slug — same slugs as list_projects."
+    ))],
+    include_done: Annotated[bool, Field(description=(
+        "Include done/dropped items (default: open work only)."
+    ))] = False,
+) -> str:
+    """The project's authored plan as a tree: vision/epics/slices/tasks/notes.
+
+    Shows ids, status, and priority for every item. Call it when starting
+    work, and before plan_add to find parent ids and avoid duplicates.
+    """
+    board = plan.render_board(_get_store(), project, include_done=include_done)
+    return board or (
+        f"No plan items for '{project}' yet — plan_add creates the first "
+        "(check the slug against list_projects if that's unexpected)."
+    )
+
+
+@mcp.tool()
+def plan_get(
+    item_id: Annotated[int, Field(description=(
+        "Plan item id, as shown by plan_board or search results."
+    ))],
+) -> str:
+    """One plan item in full: body, parent, children, and change history."""
+    store = _get_store()
+    item = store.plan_get(item_id)
+    if not item:
+        return f"No plan item #{item_id}."
+    return plan.render_item(store, item)
 
 
 @mcp.tool()

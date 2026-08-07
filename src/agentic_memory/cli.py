@@ -45,6 +45,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     from .retrieval import search
     from .store import MemoryStore
 
+    project = _to_slug(args.project) if args.project else None
     store = MemoryStore(CONFIG.db_path)
     embedder = make_embedder(CONFIG)
     hits = None
@@ -58,7 +59,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         print(f"[search] retrieval agent: {llm.name}", file=sys.stderr)
         hits, trace = agentic_search(
             CONFIG, store, embedder, llm, args.query,
-            project=args.project, level=args.level, limit=args.limit,
+            project=project, level=args.level, limit=args.limit,
         )
         print(
             f"[search] {trace.rounds} rounds, queries: {trace.queries}"
@@ -70,7 +71,7 @@ def cmd_search(args: argparse.Namespace) -> int:
     if hits is None:
         hits = search(
             store, embedder, args.query,
-            project=args.project,
+            project=project,
             levels=(args.level,) if args.level else None,
             limit=args.limit,
         )
@@ -80,6 +81,31 @@ def cmd_search(args: argparse.Namespace) -> int:
               f"{(h['ts'] or '')[:10]}\n    {h['content'][:300]}\n")
     if not hits:
         print("no results")
+    store.close()
+    return 0
+
+
+def _to_slug(project: str) -> str:
+    """Accept a project slug, or a filesystem path (resolved and slugified).
+
+    Slugs start with '-' (they are cwds with slashes replaced by dashes),
+    which argparse rejects as a positional — paths like '.' sidestep that.
+    """
+    if "/" in project or project in (".", ".."):
+        from pathlib import Path
+
+        return str(Path(project).expanduser().resolve()).replace("/", "-")
+    return project
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    from . import plan
+    from .store import MemoryStore
+
+    project = _to_slug(args.project)
+    store = MemoryStore(CONFIG.db_path)
+    board = plan.render_board(store, project, include_done=args.all)
+    print(board or f"no plan items for '{project}'")
     store.close()
     return 0
 
@@ -116,13 +142,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("query")
     p.add_argument("--project", default=None)
     p.add_argument("--level", default=None,
-                   choices=["chunk", "memory", "session", "digest", "project"])
+                   choices=["chunk", "memory", "session", "digest", "project", "plan"])
     p.add_argument("--limit", type=int, default=None,
                    help="max results (default: search.evidence_limit for agentic, "
                         "retrieval.default_limit for static)")
     p.add_argument("--static", action="store_true",
                    help="skip the retrieval agent; plain one-shot hybrid search")
     p.set_defaults(fn=cmd_search)
+
+    p = sub.add_parser("plan", help="Show a project's plan board")
+    p.add_argument("project",
+                   help="project slug or path — e.g. '.' for the current project "
+                        "(slugs start with '-'; pass them after '--')")
+    p.add_argument("--all", action="store_true", help="include done/dropped items")
+    p.set_defaults(fn=cmd_plan)
 
     p = sub.add_parser("status", help="Show store statistics")
     p.set_defaults(fn=cmd_status)

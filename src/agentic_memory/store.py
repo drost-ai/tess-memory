@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,7 +54,8 @@ CREATE TABLE IF NOT EXISTS memories(
     content TEXT NOT NULL,
     importance REAL DEFAULT 0.3,
     ts TEXT,
-    tags TEXT DEFAULT '[]'
+    tags TEXT DEFAULT '[]',
+    plan_id INTEGER            -- links a level='plan' mirror row to plan_items.id
 );
 CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_memories_level ON memories(level);
@@ -72,6 +74,28 @@ CREATE TABLE IF NOT EXISTS embeddings(
     memory_id INTEGER PRIMARY KEY REFERENCES memories(id) ON DELETE CASCADE,
     vector BLOB NOT NULL
 );
+CREATE TABLE IF NOT EXISTS plan_items(
+    id INTEGER PRIMARY KEY,
+    project TEXT NOT NULL,
+    kind TEXT NOT NULL,                   -- vision | epic | slice | task | note
+    parent_id INTEGER REFERENCES plan_items(id),
+    title TEXT NOT NULL,
+    body TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',  -- open|in_progress|blocked|done|dropped
+    priority INTEGER NOT NULL DEFAULT 3,  -- 1 highest .. 5 lowest
+    tags TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plan_project ON plan_items(project);
+CREATE TABLE IF NOT EXISTS plan_events(
+    id INTEGER PRIMARY KEY,
+    item_id INTEGER NOT NULL REFERENCES plan_items(id),
+    ts TEXT,
+    event TEXT,                           -- created | status | edit
+    detail TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_plan_events_item ON plan_events(item_id);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 """
 
@@ -87,23 +111,35 @@ class MemoryRow:
     ts: str | None = None
     tags: list[str] = field(default_factory=list)
     vector: np.ndarray | None = None
+    plan_id: int | None = None  # set on level='plan' mirror rows
 
 
 class MemoryStore:
     def __init__(self, db_path: Path):
         db_path.parent.mkdir(parents=True, exist_ok=True)
-        self.db = sqlite3.connect(str(db_path))
+        # check_same_thread=False: MCP tool dispatch and the search agent may
+        # touch the store from worker threads; CPython's sqlite3 serializes
+        # statement execution, and plan writes additionally hold self.lock.
+        self.db = sqlite3.connect(str(db_path), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA journal_mode=WAL")
+        self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA foreign_keys=ON")
         self.db.executescript(SCHEMA)
         self._migrate()
+        self.lock = threading.RLock()  # serializes multi-statement write groups
         self._emb_cache: tuple[np.ndarray, np.ndarray] | None = None  # (ids, matrix)
 
     def _migrate(self) -> None:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(sessions)")}
         if "parent_session" not in cols:
             self.db.execute("ALTER TABLE sessions ADD COLUMN parent_session TEXT")
+        mcols = {r["name"] for r in self.db.execute("PRAGMA table_info(memories)")}
+        if "plan_id" not in mcols:
+            self.db.execute("ALTER TABLE memories ADD COLUMN plan_id INTEGER")
+        # Created here, not in SCHEMA: on pre-plan databases the column only
+        # exists after the ALTER above.
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_memories_plan ON memories(plan_id)")
 
     # ---------------- file tracking ----------------
 
@@ -195,9 +231,9 @@ class MemoryStore:
         for r in rows:
             cur = self.db.execute(
                 "INSERT INTO memories(session_id, project, level, kind, content, "
-                "importance, ts, tags) VALUES(?,?,?,?,?,?,?,?)",
+                "importance, ts, tags, plan_id) VALUES(?,?,?,?,?,?,?,?,?)",
                 (r.session_id, r.project, r.level, r.kind, r.content,
-                 r.importance, r.ts, json.dumps(r.tags)),
+                 r.importance, r.ts, json.dumps(r.tags), r.plan_id),
             )
             mid = cur.lastrowid
             ids.append(mid)
@@ -270,6 +306,63 @@ class MemoryStore:
             "SELECT * FROM memories WHERE level='digest' ORDER BY ts DESC LIMIT ?",
             (limit,),
         ).fetchall()
+
+    # ---------------- plan items (authored planning plane) ----------------
+
+    def plan_insert(
+        self, *, project: str, kind: str, title: str, body: str,
+        parent_id: int | None, priority: int, tags: list[str], now: str,
+    ) -> int:
+        cur = self.db.execute(
+            "INSERT INTO plan_items(project, kind, parent_id, title, body, "
+            "priority, tags, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            (project, kind, parent_id, title, body, priority,
+             json.dumps(tags), now, now),
+        )
+        return cur.lastrowid
+
+    def plan_get(self, item_id: int) -> sqlite3.Row | None:
+        return self.db.execute(
+            "SELECT * FROM plan_items WHERE id=?", (item_id,)
+        ).fetchone()
+
+    def plan_children(self, item_id: int) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM plan_items WHERE parent_id=? ORDER BY priority, id",
+            (item_id,),
+        ).fetchall()
+
+    def plan_items_for(self, project: str) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM plan_items WHERE project=? ORDER BY id", (project,)
+        ).fetchall()
+
+    def plan_set(self, item_id: int, fields: dict, now: str) -> None:
+        sets = ", ".join(f"{k}=?" for k in fields)  # keys are internal, never user input
+        self.db.execute(
+            f"UPDATE plan_items SET {sets}, updated_at=? WHERE id=?",
+            (*fields.values(), now, item_id),
+        )
+
+    def plan_log(self, item_id: int, event: str, detail: str, ts: str) -> None:
+        self.db.execute(
+            "INSERT INTO plan_events(item_id, ts, event, detail) VALUES(?,?,?,?)",
+            (item_id, ts, event, detail),
+        )
+
+    def plan_history(self, item_id: int) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM plan_events WHERE item_id=? ORDER BY id", (item_id,)
+        ).fetchall()
+
+    def replace_plan_mirror(self, item_id: int, row: MemoryRow) -> None:
+        """Keep exactly one retrieval-index row (level='plan') per plan item."""
+        ids = [r["id"] for r in self.db.execute(
+            "SELECT id FROM memories WHERE plan_id=?", (item_id,)
+        )]
+        self._delete_memory_ids(ids)
+        row.plan_id = item_id
+        self.add_memories([row])
 
     # ---------------- search primitives ----------------
 
@@ -368,6 +461,7 @@ class MemoryStore:
         out["sessions"] = self.db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         out["files"] = self.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
         out["embeddings"] = self.db.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
+        out["plan_items"] = self.db.execute("SELECT COUNT(*) FROM plan_items").fetchone()[0]
         return out
 
     def commit(self) -> None:

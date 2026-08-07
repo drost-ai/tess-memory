@@ -32,7 +32,9 @@ You do NOT answer the request — you curate raw memories for the caller to read
 The store holds, per past session: distilled memories (kinds: decision,
 solution, preference, problem, task_state, fact), session summaries, raw
 activity chunks (exact commands/errors/code), rolling project profiles, and
-weekly digests.
+weekly digests. It also holds authored plan items (level 'plan': vision/
+epics/slices/tasks/notes with stable ids and live status) — the user's
+intended plan, written by agents, not derived from history.
 
 Each round, reply with ONLY a JSON object — one of:
   {"action": "search", "queries": ["...", "..."]}
