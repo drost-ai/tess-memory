@@ -116,6 +116,21 @@ class Config:
         self.data_dir.mkdir(parents=True, exist_ok=True)
 
 
+def to_slug(project: str) -> str:
+    """Normalize a project reference: absolute or ~ paths become slugs.
+
+    Claude Code's convention: the session cwd with '/' replaced by '-'.
+    Relative paths are NOT resolved here (the MCP server cannot see the
+    caller's cwd); the CLI resolves them against its own cwd before calling.
+    """
+    p = (project or "").strip()
+    if p.startswith("~"):
+        p = os.path.expanduser(p)
+    if p.startswith("/"):
+        return p.rstrip("/").replace("/", "-") or "-"
+    return p
+
+
 def _path(raw: str) -> Path:
     return Path(raw).expanduser()
 

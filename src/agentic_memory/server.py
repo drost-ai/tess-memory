@@ -12,7 +12,7 @@ from typing import Annotated
 from mcp.server.mcpserver import MCPServer
 from pydantic import Field
 
-from .config import CONFIG
+from .config import CONFIG, to_slug
 from .embed import Embedder, make_embedder
 from .store import MemoryStore
 from . import plan, retrieval
@@ -53,8 +53,10 @@ Planning plane contract:
 - Harness todo lists are ephemeral; this board is durable. Mirror anything
   that must survive the session into it.
 - The project slug is the session cwd with '/' replaced by '-'
-  (/Users/x/proj -> -Users-x-proj); confirm with list_projects. Plan items
-  are searchable (search_memory level='plan'); the open board rides along in
+  (/Users/x/proj -> -Users-x-proj). Any tool's project argument also accepts
+  the absolute cwd path verbatim — the server converts it. Confirm slugs with
+  list_projects (it also lists plan-only boards). Plan items are searchable
+  (search_memory level='plan'); the open board rides along in
   get_project_context, full tree via plan_board.
 
 Workflow: list_projects to discover slugs; get_project_context for orientation;
@@ -155,8 +157,9 @@ def search_memory(
         "corruption during incremental ingest in agentic-memory sqlite store'."
     ))],
     project: Annotated[str | None, Field(description=(
-        "Project slug to scope the search (get slugs from list_projects). "
-        "Omit to search across all projects."
+        "Project slug to scope the search (get slugs from list_projects), or "
+        "an absolute cwd path (converted server-side). Omit to search across "
+        "all projects."
     ))] = None,
     level: Annotated[str | None, Field(description=(
         "Timescale filter: 'chunk' = raw activity (exact commands, error "
@@ -192,6 +195,7 @@ def search_memory(
     firing keyword fragments. Results carry session ids — drill down with
     get_session. If something is missing, refine the request and call again.
     """
+    project = to_slug(project) if project else None
     store, embedder = _get_store(), _get_embedder()
     llm = _get_search_llm()
     if llm is not None:
@@ -240,7 +244,8 @@ def search_memory(
 def get_project_context(
     project: Annotated[str, Field(description=(
         "Project slug from list_projects, e.g. '-Users-sam-agents-assistant' "
-        "(slugs are the project cwd with slashes replaced by dashes)."
+        "(slugs are the project cwd with slashes replaced by dashes), or the "
+        "absolute cwd path (converted server-side)."
     ))],
 ) -> str:
     """Orient in a project: rolling profile, open plan, last 10 session summaries.
@@ -250,6 +255,7 @@ def get_project_context(
     user's preferences for that project, and the open plan board, cheaper than
     re-exploring.
     """
+    project = to_slug(project)
     store = _get_store()
     parts: list[str] = []
     profile = store.get_profile(project)
@@ -312,14 +318,28 @@ def get_session(
 
 @mcp.tool()
 def list_projects() -> str:
-    """List all projects with ingested memory, newest activity first."""
+    """List all known projects, newest activity first.
+
+    Covers both planes: projects with ingested session memory and projects
+    that so far exist only as a plan board (planned before their first
+    session). This is the authority for project slugs.
+    """
     rows = _get_store().list_projects()
     if not rows:
-        return "No projects ingested yet."
-    return "\n".join(
-        f"- {r['project']} ({r['n_sessions']} sessions, last active {(r['last_active'] or '?')[:10]})"
-        for r in rows
-    )
+        return "No projects yet."
+    lines = []
+    for r in rows:
+        if r["n_sessions"]:
+            line = (f"- {r['project']} ({r['n_sessions']} sessions, "
+                    f"last active {(r['last_active'] or '?')[:10]}")
+            if r["n_plan"]:
+                line += f"; {r['n_plan']} plan items"
+            line += ")"
+        else:
+            line = (f"- {r['project']} (no sessions yet; {r['n_plan']} plan "
+                    f"items, updated {(r['plan_updated'] or '?')[:10]})")
+        lines.append(line)
+    return "\n".join(lines)
 
 
 @mcp.tool()
@@ -356,7 +376,8 @@ def recent_activity(
 def plan_add(
     project: Annotated[str, Field(description=(
         "Project slug the item belongs to — same slugs as list_projects "
-        "(the project cwd with slashes replaced by dashes)."
+        "(the project cwd with slashes replaced by dashes), or the absolute "
+        "cwd path (converted server-side)."
     ))],
     kind: Annotated[str, Field(description=(
         "vision | epic | slice | task | note. Typical nesting: vision -> epic "
@@ -390,15 +411,19 @@ def plan_add(
     and items are searchable via search_memory (level='plan'). Check
     plan_board first to pick the right parent and avoid duplicates.
     """
+    project = to_slug(project)
+    store = _get_store()
+    note = plan.unknown_project_note(store, project)  # before the write
     try:
         item = plan.add_item(
-            _get_store(), _get_embedder(), project=project, kind=kind,
+            store, _get_embedder(), project=project, kind=kind,
             title=title, body=body, parent_id=parent_id, priority=priority,
             tags=tags or [],
         )
     except ValueError as e:
         return f"Cannot create item: {e}"
-    return f"Created {plan.format_line(item)} in {project}"
+    out = f"Created {plan.format_line(item)} in {project}"
+    return f"{out}\n{note}" if note else out
 
 
 @mcp.tool()
@@ -449,7 +474,8 @@ def plan_update(
 @mcp.tool()
 def plan_board(
     project: Annotated[str, Field(description=(
-        "Project slug — same slugs as list_projects."
+        "Project slug — same slugs as list_projects — or the absolute cwd "
+        "path (converted server-side)."
     ))],
     include_done: Annotated[bool, Field(description=(
         "Include complete/dropped items (default: open work only)."
@@ -460,6 +486,7 @@ def plan_board(
     Shows ids, status, and priority for every item. Call it when starting
     work, and before plan_add to find parent ids and avoid duplicates.
     """
+    project = to_slug(project)
     board = plan.render_board(_get_store(), project, include_done=include_done)
     return board or (
         f"No plan items for '{project}' yet — plan_add creates the first "

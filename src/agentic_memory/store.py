@@ -203,11 +203,36 @@ class MemoryStore:
             (iso_ts,),
         ).fetchall()
 
-    def list_projects(self) -> list[sqlite3.Row]:
-        return self.db.execute(
+    def list_projects(self) -> list[dict]:
+        """All known projects: with ingested sessions, plan boards, or both."""
+        sess = {r["project"]: r for r in self.db.execute(
             "SELECT project, COUNT(*) AS n_sessions, MAX(ended_at) AS last_active "
-            "FROM sessions GROUP BY project ORDER BY last_active DESC"
-        ).fetchall()
+            "FROM sessions GROUP BY project"
+        )}
+        plans = {r["project"]: r for r in self.db.execute(
+            "SELECT project, COUNT(*) AS n_plan, MAX(updated_at) AS plan_updated "
+            "FROM plan_items GROUP BY project"
+        )}
+        out = []
+        for project in set(sess) | set(plans):
+            s, p = sess.get(project), plans.get(project)
+            out.append({
+                "project": project,
+                "n_sessions": s["n_sessions"] if s else 0,
+                "last_active": s["last_active"] if s else None,
+                "n_plan": p["n_plan"] if p else 0,
+                "plan_updated": p["plan_updated"] if p else None,
+            })
+        out.sort(key=lambda r: max(r["last_active"] or "", r["plan_updated"] or ""),
+                 reverse=True)
+        return out
+
+    def known_projects(self) -> set[str]:
+        rows = self.db.execute(
+            "SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL "
+            "UNION SELECT DISTINCT project FROM plan_items"
+        )
+        return {r["project"] for r in rows}
 
     # ---------------- memories ----------------
 

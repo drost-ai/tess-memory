@@ -79,6 +79,27 @@ def _validate_parent(
         cur = store.plan_get(cur["parent_id"]) if cur["parent_id"] else None
 
 
+def unknown_project_note(store: MemoryStore, project: str) -> str | None:
+    """Warning text when a plan write targets a project the store has never
+    seen (no sessions, no plan items) — the typo guard. Call BEFORE the write;
+    returns None for known projects. Creating a board for a genuinely new
+    project stays legal; the note just makes a misfiled slug visible to the
+    agent at the moment it can still self-correct."""
+    known = store.known_projects()
+    if project in known:
+        return None
+    import difflib
+
+    close = difflib.get_close_matches(project, sorted(known), n=1, cutoff=0.6)
+    note = (
+        f"Note: '{project}' has no prior sessions or plan items, so this "
+        "starts a new board. If you meant an existing project, verify the slug"
+    )
+    if close:
+        note += f" (closest known: {close[0]})"
+    return note + "."
+
+
 # ---------------- retrieval-index mirror ----------------
 
 
