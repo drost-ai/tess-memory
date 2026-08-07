@@ -4,11 +4,13 @@ Everything else in the store is retrospective — distilled after the fact from
 transcripts of what already happened. Plan items are prospective and authored:
 an agent mid-session creates and maintains them deliberately — product vision,
 epics, slices, tasks, and freeform notes — with stable ids, parent links, and
-a status lifecycle (open / in_progress / blocked / done / dropped).
+a status lifecycle (planned / in_progress / blocked / complete / dropped).
+Every status change stamps status_at on the item and lands, timestamped, in
+plan_events.
 
 Two rules keep an autonomous writer safe:
-- No hard deletes: items retire by status (done/dropped) and every transition
-  is recorded in plan_events.
+- No hard deletes: items retire by status (complete/dropped) and every
+  transition is recorded in plan_events.
 - Every write re-mirrors the item into the retrieval index (level='plan'), so
   search_memory finds plan state exactly like distilled memories; a failed
   embedding degrades the mirror to keyword-only, never blocks the write.
@@ -26,12 +28,12 @@ from .embed import Embedder
 from .store import MemoryRow, MemoryStore
 
 PLAN_KINDS = ("vision", "epic", "slice", "task", "note")
-PLAN_STATUSES = ("open", "in_progress", "blocked", "done", "dropped")
-OPEN_STATUSES = ("open", "in_progress", "blocked")
+PLAN_STATUSES = ("planned", "in_progress", "blocked", "complete", "dropped")
+OPEN_STATUSES = ("planned", "in_progress", "blocked")
 
 _KIND_ORDER = {k: i for i, k in enumerate(PLAN_KINDS)}
 _STATUS_ORDER = {
-    s: i for i, s in enumerate(("in_progress", "blocked", "open", "done", "dropped"))
+    s: i for i, s in enumerate(("in_progress", "blocked", "planned", "complete", "dropped"))
 }
 _UNSET: Any = object()
 _INDEX_CONTENT_CAP = 6_000  # mirror content cap; matches the chunk_chars scale
@@ -93,7 +95,7 @@ def render_for_index(item) -> str:
 
 def index_importance(item) -> float:
     imp = 1.0 - 0.1 * item["priority"]  # p1 -> 0.9 … p5 -> 0.5
-    if item["status"] in ("done", "dropped"):
+    if item["status"] in ("complete", "dropped"):
         imp -= 0.2  # open work outranks finished history
     return max(0.3, min(0.9, imp))
 
@@ -178,7 +180,7 @@ def update_item(
     fields: dict = {}
     changes: list[str] = []
     if status is not None:
-        status = status.strip().lower()
+        status = status.strip().lower().replace("-", "_")  # accept "in-progress"
         if status not in PLAN_STATUSES:
             raise ValueError(f"status must be one of: {', '.join(PLAN_STATUSES)}")
         if status != item["status"]:
@@ -214,6 +216,8 @@ def update_item(
     if not fields:
         return item, []
     now = _now()
+    if "status" in fields:
+        fields["status_at"] = now  # when the item entered its current status
     with store.lock:
         store.plan_set(item_id, fields, now)
         store.plan_log(
@@ -289,7 +293,7 @@ def render_board(
         out.extend(lines)
     hidden = len(items) - len(lines)
     if hidden:
-        out.append(f"({hidden} done/dropped hidden — plan_board include_done=true)")
+        out.append(f"({hidden} complete/dropped hidden — plan_board include_done=true)")
     return "\n".join(out)
 
 
@@ -299,6 +303,7 @@ def render_item(store: MemoryStore, item) -> str:
     lines.append(
         f"Project: {item['project']} | created {(item['created_at'] or '')[:10]}"
         f" | updated {(item['updated_at'] or '')[:10]}"
+        f" | {item['status']} since {(item['status_at'] or '')[:16] or '?'}"
     )
     if item["parent_id"]:
         parent = store.plan_get(item["parent_id"])

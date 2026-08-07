@@ -81,9 +81,10 @@ CREATE TABLE IF NOT EXISTS plan_items(
     parent_id INTEGER REFERENCES plan_items(id),
     title TEXT NOT NULL,
     body TEXT NOT NULL DEFAULT '',
-    status TEXT NOT NULL DEFAULT 'open',  -- open|in_progress|blocked|done|dropped
+    status TEXT NOT NULL DEFAULT 'planned',  -- planned|in_progress|blocked|complete|dropped
     priority INTEGER NOT NULL DEFAULT 3,  -- 1 highest .. 5 lowest
     tags TEXT NOT NULL DEFAULT '[]',
+    status_at TEXT,                       -- when the item entered its current status
     created_at TEXT,
     updated_at TEXT
 );
@@ -140,6 +141,16 @@ class MemoryStore:
         # Created here, not in SCHEMA: on pre-plan databases the column only
         # exists after the ALTER above.
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_memories_plan ON memories(plan_id)")
+        pcols = {r["name"] for r in self.db.execute("PRAGMA table_info(plan_items)")}
+        if "status_at" not in pcols:
+            self.db.execute("ALTER TABLE plan_items ADD COLUMN status_at TEXT")
+        self.db.execute(
+            "UPDATE plan_items SET status_at=updated_at WHERE status_at IS NULL"
+        )
+        # Status vocabulary migration (the first plan release used open/done).
+        self.db.execute("UPDATE plan_items SET status='planned' WHERE status='open'")
+        self.db.execute("UPDATE plan_items SET status='complete' WHERE status='done'")
+        self.db.commit()
 
     # ---------------- file tracking ----------------
 
@@ -315,9 +326,10 @@ class MemoryStore:
     ) -> int:
         cur = self.db.execute(
             "INSERT INTO plan_items(project, kind, parent_id, title, body, "
-            "priority, tags, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
+            "priority, tags, status, status_at, created_at, updated_at) "
+            "VALUES(?,?,?,?,?,?,?,'planned',?,?,?)",
             (project, kind, parent_id, title, body, priority,
-             json.dumps(tags), now, now),
+             json.dumps(tags), now, now, now),
         )
         return cur.lastrowid
 

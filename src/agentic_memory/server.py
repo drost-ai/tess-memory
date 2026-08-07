@@ -36,13 +36,14 @@ When to reach for it:
 
 The store also carries an AUTHORED planning plane per project: product vision,
 epics, slices, tasks, and freeform notes, with stable ids, parent links, and a
-status lifecycle (open/in_progress/blocked/done/dropped). Unlike distilled
-memory (derived from transcripts after the fact), plan items are written by
-agents mid-session and persist across sessions and harnesses — use them as
-scratchpad, notepad, and ticket system. Orient with plan_board
-(get_project_context shows open items); capture new scope with plan_add; keep
-status truthful with plan_update before the session ends. Items are never
-deleted — they finish as done or retire as dropped.
+status lifecycle (planned/in_progress/blocked/complete/dropped; every change
+timestamped). Unlike distilled memory (derived from transcripts after the
+fact), plan items are written by agents mid-session and persist across
+sessions and harnesses — use them as scratchpad, notepad, and ticket system.
+Orient with plan_board (get_project_context shows open items); capture new
+scope with plan_add; LIVE-maintain status with plan_update as work starts and
+finishes, not just at session end. Items are never deleted — they finish as
+complete or retire as dropped.
 
 Workflow: list_projects to discover slugs; get_project_context for orientation;
 search_memory for specifics (write SELF-CONTAINED queries — you have the
@@ -368,8 +369,9 @@ def plan_add(
 
     The planning plane is authored, durable working memory — it persists across
     sessions and harnesses, so use it as scratchpad, notepad, and ticket
-    system. Check plan_board first to pick the right parent and avoid
-    duplicates. Items are searchable via search_memory (level='plan').
+    system. New items start as status 'planned'. Check plan_board first to
+    pick the right parent and avoid duplicates. Items are searchable via
+    search_memory (level='plan').
     """
     try:
         item = plan.add_item(
@@ -386,8 +388,9 @@ def plan_add(
 def plan_update(
     item_id: Annotated[int, Field(description="Plan item id (see plan_board).")],
     status: Annotated[str | None, Field(description=(
-        "New status: open | in_progress | blocked | done | dropped. Items are "
-        "never deleted — 'done' completes, 'dropped' retires. Omit to keep."
+        "New status: planned | in_progress | blocked | complete | dropped. "
+        "Items are never deleted — 'complete' finishes, 'dropped' retires. "
+        "Every change is timestamped in the item's history. Omit to keep."
     ))] = None,
     title: Annotated[str | None, Field(description="New title. Omit to keep.")] = None,
     body: Annotated[str | None, Field(description=(
@@ -405,9 +408,9 @@ def plan_update(
 ) -> str:
     """Update a plan item: move status, edit, reprioritize, or re-parent.
 
-    Keep the board truthful: mark items in_progress when you start them, done
+    Maintain status LIVE: mark items in_progress when you start them, complete
     when finished, blocked/dropped when reality changes. Every transition is
-    recorded in the item's history.
+    timestamped and recorded in the item's history.
     """
     kwargs: dict = dict(status=status, title=title, body=body,
                         priority=priority, tags=tags)
@@ -430,7 +433,7 @@ def plan_board(
         "Project slug — same slugs as list_projects."
     ))],
     include_done: Annotated[bool, Field(description=(
-        "Include done/dropped items (default: open work only)."
+        "Include complete/dropped items (default: open work only)."
     ))] = False,
 ) -> str:
     """The project's authored plan as a tree: vision/epics/slices/tasks/notes.
