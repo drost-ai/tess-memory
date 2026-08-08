@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from . import agent_core
 from .config import Config
 from .distill import (
     SessionDigest,
@@ -133,17 +134,23 @@ def ingest(
     retry_mode = retry_extractive and use_llm
     pending: list[tuple] = []
     for ds in cfg.data_stores:
-        if ds.type != "claude-code":
+        if ds.type == "claude-code":
+            found = discover_transcripts(ds.path, ds.exclude)
+            parse = parse_transcript
+        elif ds.type == "agent-core":
+            found = agent_core.discover_sessions(ds.path, ds.exclude)
+            parse = agent_core.parse_session
+        else:
             raise ValueError(
                 f"data_store '{ds.name}': unknown type '{ds.type}' "
-                "(only 'claude-code' is implemented)"
+                "(implemented: 'claude-code', 'agent-core')"
             )
-        for path, project, parent in discover_transcripts(ds.path, ds.exclude):
+        for path, project, parent in found:
             stats.scanned += 1
             st_info = path.stat()
             if retry_mode:
                 if store.file_status(str(path)) == "extractive":
-                    pending.append((path, project, parent, st_info))
+                    pending.append((parse, path, project, parent, st_info))
                 else:
                     stats.unchanged += 1
                 continue
@@ -151,7 +158,7 @@ def ingest(
             if prev == (st_info.st_mtime, st_info.st_size):
                 stats.unchanged += 1
                 continue
-            pending.append((path, project, parent, st_info))
+            pending.append((parse, path, project, parent, st_info))
     if limit is not None:
         pending = pending[:limit]
     _log(
@@ -161,8 +168,8 @@ def ingest(
 
     # ---- 2. parse ----
     parsed: list[tuple[SessionTranscript, object]] = []
-    for path, project, parent, st_info in pending:
-        st = parse_transcript(
+    for parse, path, project, parent, st_info in pending:
+        st = parse(
             path, project, parent_session=parent, min_chars=cfg.min_session_chars
         )
         if st is None:

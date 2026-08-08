@@ -1,0 +1,205 @@
+"""Parse agent-core runtime sessions into clean conversations.
+
+agent-core has three runtime implementations (TypeScript, Rust, Python) that
+share one session convention: a flat sessions/ directory holding a
+<uuid>.json metadata document per session, plus a <uuid>/ directory with
+full-transcript-with-tools.jsonl. The runtimes diverge in where message
+bodies live — TypeScript and Rust inline a `messages` array in the metadata,
+the Python runtime externalizes it to a <uuid>.messages.jsonl sidecar
+(bodyRef) — and in which auxiliary event types they log alongside `message`
+records (provider provenance, tool-execution telemetry, repairs). This module
+normalizes all of it into the same SessionTranscript/Turn shape the
+claude-code parser produces, so everything downstream stays source-agnostic.
+"""
+
+from __future__ import annotations
+
+import fnmatch
+import json
+from pathlib import Path
+
+from .config import to_slug
+from .transcript import (
+    SessionTranscript,
+    Turn,
+    _is_harness_text,
+    _iter_records,
+    _summarize_tool_use,
+    _text_from_content,
+)
+
+
+def _load_meta(meta_path: Path) -> dict | None:
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8", errors="replace"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return meta if isinstance(meta, dict) else None
+
+
+def _session_cwd(meta: dict) -> str | None:
+    if meta.get("cwd"):
+        return meta["cwd"]
+    md = meta.get("metadata") or {}
+    for key in ("originalCwd", "workspaceRoot"):
+        if md.get(key):
+            return md[key]
+    return None
+
+
+def discover_sessions(
+    source_dir: Path, exclude: tuple[str, ...] | list[str] = ()
+) -> list[tuple[Path, str, str | None]]:
+    """Return (meta_path, project_slug, parent_session) for every session.
+
+    The metadata file is the change-detection key: every runtime rewrites it
+    on each session update (updatedAt at minimum), so its (mtime, size) moves
+    whenever the session grows. Metas that cannot be parsed or carry no cwd
+    are skipped — a session that can't be attributed to a project is noise.
+    """
+    out: list[tuple[Path, str, str | None]] = []
+    if not source_dir.is_dir():
+        return out
+    for meta_path in sorted(source_dir.glob("*.json")):
+        meta = _load_meta(meta_path)
+        if meta is None:
+            continue
+        cwd = _session_cwd(meta)
+        if not cwd:
+            continue
+        slug = to_slug(cwd)
+        if any(fnmatch.fnmatch(slug, pat) for pat in exclude):
+            continue
+        parent = (meta.get("metadata") or {}).get("parentSessionId")
+        out.append((meta_path, slug, parent))
+    return out
+
+
+def _messages_from_transcript(path: Path) -> list[tuple[str, object, str | None]]:
+    """(role, content, ts) from full-transcript-with-tools.jsonl.
+
+    Only `message` records carry conversation; the runtimes' other event
+    types (tool-execution telemetry, provider provenance, repairs, …) are
+    skipped, as are unparseable lines — corrupt records exist in real stores.
+    """
+    out = []
+    for rec in _iter_records(path):
+        if rec.get("type") != "message":
+            continue
+        role = rec.get("role")
+        if role in ("user", "assistant"):
+            out.append((role, rec.get("content"), rec.get("persisted_at")))
+    return out
+
+
+def _messages_from_sidecar(path: Path) -> list[tuple[str, object, str | None]]:
+    """(role, content, ts) from a Python-runtime .messages.jsonl sidecar.
+
+    Message bodies nest under a `message` key. The stream can rewrite
+    history (`truncate` then re-append at the same indices), so entries are
+    keyed by message_index with later records winning; `commit` framing
+    records carry no content and are ignored.
+    """
+    by_index: dict[int, tuple[str, object, str | None]] = {}
+    fallback_index = 0
+    for rec in _iter_records(path):
+        if rec.get("type") != "message":
+            continue
+        msg = rec.get("message") or {}
+        role = msg.get("role")
+        if role not in ("user", "assistant"):
+            continue
+        idx = rec.get("message_index")
+        if not isinstance(idx, int):
+            idx = fallback_index
+        fallback_index = idx + 1
+        by_index[idx] = (role, msg.get("content"), rec.get("persisted_at"))
+    return [by_index[i] for i in sorted(by_index)]
+
+
+def _messages_inline(meta: dict) -> list[tuple[str, object, str | None]]:
+    """(role, content, ts) from a TS/Rust metadata `messages` array."""
+    out = []
+    for msg in meta.get("messages") or []:
+        if not isinstance(msg, dict):
+            continue
+        role = msg.get("role")
+        if role in ("user", "assistant"):
+            out.append((role, msg.get("content"), None))
+    return out
+
+
+def _append_message_turns(
+    st: SessionTranscript, role: str, content, ts: str | None
+) -> None:
+    """Normalize one message into Turn records, matching the claude-code
+    parser's semantics: harness-injected user text is dropped, tool_result
+    blocks ride user messages, thinking blocks are ignored."""
+    if role == "user":
+        text = _text_from_content(content)
+        if text and not _is_harness_text(text):
+            st.turns.append(Turn("user", text.strip(), ts))
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    rtext = _text_from_content(block.get("content"))
+                    if rtext:
+                        st.turns.append(Turn("tool_result", rtext.strip(), ts))
+    else:  # assistant
+        if isinstance(content, list):
+            for block in content:
+                if not isinstance(block, dict):
+                    continue
+                btype = block.get("type")
+                if btype == "text":
+                    text = (block.get("text") or "").strip()
+                    if text:
+                        st.turns.append(Turn("assistant", text, ts))
+                elif btype == "tool_use":
+                    st.turns.append(Turn("tool", _summarize_tool_use(block), ts))
+        elif isinstance(content, str) and content.strip():
+            st.turns.append(Turn("assistant", content.strip(), ts))
+
+
+def parse_session(
+    meta_path: Path, project: str, parent_session: str | None = None,
+    min_chars: int = 200,
+) -> SessionTranscript | None:
+    meta = _load_meta(meta_path)
+    if meta is None:
+        return None
+    session_id = str(meta.get("id") or meta_path.stem)
+    md = meta.get("metadata") or {}
+
+    st = SessionTranscript(
+        session_id=session_id,
+        project=project,
+        source_path=str(meta_path),
+        parent_session=parent_session or md.get("parentSessionId"),
+        cwd=_session_cwd(meta),
+        git_branch=md.get("gitBranch"),
+        title=meta.get("name") or (meta.get("firstUserText") or "")[:80] or None,
+        started_at=meta.get("createdAt"),
+        ended_at=meta.get("updatedAt"),
+    )
+
+    # Body sources, best first: the full transcript is the only one that
+    # carries tool results in every runtime; the sidecar (Python) and the
+    # inline array (TS/Rust) cover sessions whose transcript dir is missing.
+    stem = meta_path.stem
+    transcript = meta_path.parent / stem / "full-transcript-with-tools.jsonl"
+    sidecar = meta_path.with_name(f"{stem}.messages.jsonl")
+
+    if transcript.is_file():
+        messages = _messages_from_transcript(transcript)
+    elif sidecar.is_file():
+        messages = _messages_from_sidecar(sidecar)
+    else:
+        messages = _messages_inline(meta)
+
+    for role, content, ts in messages:
+        _append_message_turns(st, role, content, ts)
+
+    if st.n_user == 0 or st.content_chars < min_chars:
+        return None
+    return st
