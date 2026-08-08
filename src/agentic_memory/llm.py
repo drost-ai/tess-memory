@@ -110,8 +110,6 @@ class AgentCoreBackend:
                         "interactive": False,
                         "askQuestion": lambda *_a, **_k: "",
                     },
-                    "print_mode": True,
-                    "printMode": True,
                 }
             )
             runtime["startTurn"]({"prompt": prompt})
