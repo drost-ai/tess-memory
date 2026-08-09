@@ -140,10 +140,15 @@ def ingest(
         elif ds.type == "agent-core":
             found = agent_core.discover_sessions(ds.path, ds.exclude)
             parse = agent_core.parse_session
+        elif ds.type == "transcript":
+            found = agent_core.discover_transcript_files(
+                ds.path, ds.exclude, ds.project
+            )
+            parse = agent_core.parse_transcript_file
         else:
             raise ValueError(
                 f"data_store '{ds.name}': unknown type '{ds.type}' "
-                "(implemented: 'claude-code', 'agent-core')"
+                "(implemented: 'claude-code', 'agent-core', 'transcript')"
             )
         for path, project, parent in found:
             stats.scanned += 1

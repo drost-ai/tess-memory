@@ -10,6 +10,11 @@ the Python runtime externalizes it to a <uuid>.messages.jsonl sidecar
 records (provider provenance, tool-execution telemetry, repairs). This module
 normalizes all of it into the same SessionTranscript/Turn shape the
 claude-code parser produces, so everything downstream stays source-agnostic.
+
+It also implements type="transcript": a directory of bare per-session
+<name>.jsonl files in the same message format but with no metadata document
+(e.g. sessions exported from another agent), attributed to a configured
+project.
 """
 
 from __future__ import annotations
@@ -159,6 +164,64 @@ def _append_message_turns(
                     st.turns.append(Turn("tool", _summarize_tool_use(block), ts))
         elif isinstance(content, str) and content.strip():
             st.turns.append(Turn("assistant", content.strip(), ts))
+
+
+def discover_transcript_files(
+    source_dir: Path, exclude: tuple[str, ...] | list[str] = (),
+    project: str | None = None,
+) -> list[tuple[Path, str, str | None]]:
+    """Discovery for type="transcript": bare per-session JSONL files.
+
+    A directory of root-level <name>.jsonl files, each one whole session in
+    the agent-core transcript message format, with no metadata document —
+    e.g. sessions exported from another agent. With no cwd to derive a slug
+    from, every session lands in the store's configured `project` (required).
+    Sidecars (*.messages.jsonl) belong to native agent-core sessions that may
+    share the directory and are skipped, as are per-session subdirectories.
+    """
+    if not project:
+        raise ValueError(
+            "transcript data_store needs an explicit 'project' (bare jsonl "
+            "files carry no cwd to derive one from)"
+        )
+    out: list[tuple[Path, str, str | None]] = []
+    if not source_dir.is_dir():
+        return out
+    if any(fnmatch.fnmatch(project, pat) for pat in exclude):
+        return out
+    for path in sorted(source_dir.glob("*.jsonl")):
+        if path.name.endswith(".messages.jsonl"):
+            continue
+        out.append((path, project, None))
+    return out
+
+
+def parse_transcript_file(
+    path: Path, project: str, parent_session: str | None = None,
+    min_chars: int = 200,
+) -> SessionTranscript | None:
+    """Parse one bare transcript JSONL file into a SessionTranscript.
+
+    Same message records as full-transcript-with-tools.jsonl; session
+    identity is the filename stem and the time span comes from the records'
+    persisted_at (there is no metadata document to consult)."""
+    st = SessionTranscript(
+        session_id=path.stem,
+        project=project,
+        source_path=str(path),
+        parent_session=parent_session,
+    )
+    for role, content, ts in _messages_from_transcript(path):
+        if ts:
+            if st.started_at is None or ts < st.started_at:
+                st.started_at = ts
+            if st.ended_at is None or ts > st.ended_at:
+                st.ended_at = ts
+        _append_message_turns(st, role, content, ts)
+
+    if st.n_user == 0 or st.content_chars < min_chars:
+        return None
+    return st
 
 
 def parse_session(

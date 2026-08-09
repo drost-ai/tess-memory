@@ -37,6 +37,10 @@ class DataStore:
     path: Path
     type: str = "claude-code"  # selects the discovery/parser implementation
     exclude: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDES))
+    # Project slug assigned to every session in the store. Required for the
+    # "transcript" type (bare jsonl files carry no cwd); ignored by types
+    # that derive the project from the session itself.
+    project: str | None = None
 
     def is_excluded(self, project_slug: str) -> bool:
         return any(fnmatch.fnmatch(project_slug, pat) for pat in self.exclude)
@@ -164,6 +168,7 @@ def load_config(path: Path | None = None) -> Config:
                 path=_path(d["path"]),
                 type=str(d.get("type", "claude-code")),
                 exclude=[str(p) for p in d["exclude"]] if "exclude" in d else list(DEFAULT_EXCLUDES),
+                project=str(d["project"]) if d.get("project") else None,
             )
             for d in raw["data_stores"]
         ]
