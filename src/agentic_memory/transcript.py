@@ -199,10 +199,17 @@ def render_for_llm(st: SessionTranscript, max_chars: int, tool_result_snippet: i
 
     Tool results are truncated hard; if the whole rendering exceeds max_chars,
     keep the head and tail with an elision marker (beginnings carry intent,
-    endings carry outcomes).
+    endings carry outcomes). A [date: …] marker precedes every change of day
+    so long episodic sessions (cron logs, week-spanning personal-agent chats)
+    distill with their timeline intact.
     """
     lines: list[str] = []
+    cur_date: str | None = None
     for t in st.turns:
+        date = t.ts[:10] if t.ts and len(t.ts) >= 10 else None
+        if date and date != cur_date:
+            lines.append(f"[date: {date}]")
+            cur_date = date
         if t.role == "user":
             lines.append(f"[user] {t.text}")
         elif t.role == "assistant":
