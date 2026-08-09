@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS files(
     mtime REAL,
     size INTEGER,
     session_id TEXT,
-    status TEXT,               -- 'distilled' | 'extractive' | 'skipped'
+    status TEXT,               -- 'distilled' | 'fallback' | 'extractive' | 'skipped'
     ingested_at TEXT DEFAULT (datetime('now'))
 );
 CREATE TABLE IF NOT EXISTS sessions(
@@ -497,6 +497,10 @@ class MemoryStore:
             out[level] = n
         out["sessions"] = self.db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         out["files"] = self.db.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+        for status, n in self.db.execute(
+            "SELECT status, COUNT(*) FROM files GROUP BY status"
+        ).fetchall():
+            out[f"files_{status}"] = n
         out["embeddings"] = self.db.execute("SELECT COUNT(*) FROM embeddings").fetchone()[0]
         out["plan_items"] = self.db.execute("SELECT COUNT(*) FROM plan_items").fetchone()[0]
         return out

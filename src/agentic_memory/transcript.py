@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterator
@@ -202,10 +203,33 @@ def render_for_llm(st: SessionTranscript, max_chars: int, tool_result_snippet: i
     endings carry outcomes). A [date: …] marker precedes every change of day
     so long episodic sessions (cron logs, week-spanning personal-agent chats)
     distill with their timeline intact.
+
+    Repeated boilerplate is collapsed: a user/assistant/tool-result turn whose
+    text matches an earlier same-role turn (digits normalized away, so
+    timestamped cron/heartbeat prompts still match) is elided into a counter
+    marker. Heartbeat sessions would otherwise repeat the same imperative
+    prompt ("reply HEARTBEAT_OK") hundreds of times, drowning the signal and
+    priming the distiller to obey the transcript instead of summarizing it.
     """
     lines: list[str] = []
     cur_date: str | None = None
+    seen: set[tuple[str, str]] = set()
+    elided = 0
+
+    def flush_elided() -> None:
+        nonlocal elided
+        if elided:
+            lines.append(f"[…{elided} repeated near-identical turns elided…]")
+            elided = 0
+
     for t in st.turns:
+        if t.role in ("user", "assistant", "tool_result"):
+            key = (t.role, re.sub(r"\d+", "#", t.text))
+            if key in seen:
+                elided += 1
+                continue
+            seen.add(key)
+        flush_elided()
         date = t.ts[:10] if t.ts and len(t.ts) >= 10 else None
         if date and date != cur_date:
             lines.append(f"[date: {date}]")
@@ -220,6 +244,7 @@ def render_for_llm(st: SessionTranscript, max_chars: int, tool_result_snippet: i
             head = int(tool_result_snippet * 0.6)
             clipped = _clip_middle(t.text, head, tool_result_snippet - head)
             lines.append(f"[tool-result] {clipped}")
+    flush_elided()
     rendered = "\n".join(lines)
     if len(rendered) > max_chars:
         head = int(max_chars * 0.6)

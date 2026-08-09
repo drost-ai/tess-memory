@@ -10,6 +10,7 @@ for the projects/weeks that were touched.
 
 from __future__ import annotations
 
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -53,9 +54,27 @@ def _log(msg: str) -> None:
     print(msg, file=sys.stderr, flush=True)
 
 
+# A bracketed harness preamble at the start of a user message: either a paired
+# block ("[Turn context] … [/Turn context]") or a lone tag ("[Cron Cron (@cron)
+# id:0 | 2026-02-06 08:00 PST]").
+_METADATA_BLOCK = re.compile(r"^\[([A-Za-z][^\]]*)\]\s*(?:.*?\[/\1\]\s*)?", re.S)
+
+
+def _strip_leading_metadata(text: str) -> str:
+    """Peel harness preambles off a user message so extractive titles and
+    summaries start at the actual request instead of '[Turn context]…'."""
+    prev = None
+    while text != prev and text.lstrip().startswith("["):
+        prev = text
+        text = _METADATA_BLOCK.sub("", text.lstrip(), count=1)
+    return text.strip()
+
+
 def _extractive_digest(st: SessionTranscript) -> SessionDigest:
     """LLM-free fallback: shallow but never fails."""
-    first_user = next((t.text for t in st.turns if t.role == "user"), "")
+    first_user = _strip_leading_metadata(
+        next((t.text for t in st.turns if t.role == "user"), "")
+    )
     last_assistant = next(
         (t.text for t in reversed(st.turns) if t.role == "assistant"), ""
     )
@@ -247,10 +266,10 @@ def ingest(
             parent_session=st.parent_session,
         )
         store.add_memories(rows)
-        # "fallback" is recorded as "distilled": the session is fully ingested
-        # and must not be swept up again by --retry-extractive.
-        file_status = "distilled" if status == "fallback" else status
-        store.mark_file(st.source_path, st_info.st_mtime, st_info.st_size, st.session_id, file_status)
+        # "fallback" is persisted as its own status so fallback usage stays
+        # queryable per file; it still counts as fully ingested, and
+        # --retry-extractive sweeps only 'extractive' rows, never these.
+        store.mark_file(st.source_path, st_info.st_mtime, st_info.st_size, st.session_id, status)
         store.commit()
         if status == "fallback":
             stats.distilled += 1
