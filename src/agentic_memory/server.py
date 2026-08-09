@@ -7,14 +7,24 @@ text results with session/project anchors so the agent can drill down.
 from __future__ import annotations
 
 import json
+import sqlite3
 from typing import Annotated
 
 from mcp.server.mcpserver import MCPServer
+from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from .config import CONFIG, to_slug
 from .embed import Embedder, make_embedder
 from .store import MemoryStore
+from .transcript_reader import (
+    DEFAULT_PAGE_BYTES,
+    MAX_PAGE_BYTES,
+    MIN_PAGE_BYTES,
+    get_session_source_path,
+    read_transcript_page,
+    resolve_transcript_path,
+)
 from . import plan, retrieval
 
 INSTRUCTIONS = """\
@@ -32,6 +42,8 @@ When to reach for it:
   error text verbatim.
 - You need the user's established preferences or past decisions -> search_memory
   with kind='preference' or kind='decision'.
+- You need the exact source transcript after finding a session ->
+  get_session_transcript, paging with its byte cursor.
 - "What was I working on?" -> recent_activity.
 - The user asks to PLAN work ("let's plan this", "break this down", "add it to
   the plan", "note this down") -> write the plan as plan_add items, not just
@@ -317,6 +329,62 @@ def get_session(
         f"## Outcome\n{s['outcome']}\n\n"
         f"## Memories\n{mem_lines}"
     )
+
+
+@mcp.tool(annotations=ToolAnnotations(
+    readOnlyHint=True,
+    destructiveHint=False,
+    idempotentHint=True,
+    openWorldHint=False,
+))
+def get_session_transcript(
+    session_id: Annotated[str, Field(description=(
+        "Session id exactly as shown by search_memory, get_project_context, or "
+        "get_session. The source path is resolved internally; arbitrary paths "
+        "cannot be read."
+    ))],
+    cursor: Annotated[int, Field(description=(
+        "Zero-based BYTE offset returned as next_cursor by the previous page. "
+        "Use 0 for the first page."
+    ), ge=0)] = 0,
+    max_bytes: Annotated[int, Field(description=(
+        f"Maximum source bytes in this page ({MIN_PAGE_BYTES}-{MAX_PAGE_BYTES}; "
+        "UTF-8 boundaries may make the page slightly smaller)."
+    ), ge=MIN_PAGE_BYTES, le=MAX_PAGE_BYTES)] = DEFAULT_PAGE_BYTES,
+) -> str:
+    """Read one bounded page from a session's existing source transcript.
+
+    This tool is strictly read-only: it does not ingest, distill, embed, index,
+    or modify the transcript or memory database. Continue with `next_cursor`
+    until `complete` is true.
+    """
+    try:
+        source_path = get_session_source_path(CONFIG.db_path, session_id)
+    except (OSError, ValueError, sqlite3.Error) as exc:
+        return f"Unable to open the memory store read-only: {exc}"
+    if not source_path:
+        return f"Unknown session id '{session_id}' or no source transcript path."
+
+    try:
+        path = resolve_transcript_path(
+            source_path,
+            (data_store.path for data_store in CONFIG.data_stores),
+        )
+        page = read_transcript_page(path, cursor=cursor, max_bytes=max_bytes)
+    except (FileNotFoundError, PermissionError, ValueError, OSError) as exc:
+        return f"Unable to read transcript for session '{session_id}': {exc}"
+
+    envelope = {
+        "session_id": session_id,
+        "source_format": "jsonl" if path.suffix == ".jsonl" else "json",
+        "cursor": page.cursor,
+        "next_cursor": page.next_cursor,
+        "page_bytes": page.page_bytes,
+        "source_size_bytes": page.source_size_bytes,
+        "complete": page.complete,
+        "content": page.content,
+    }
+    return json.dumps(envelope, ensure_ascii=False)
 
 
 @mcp.tool()
