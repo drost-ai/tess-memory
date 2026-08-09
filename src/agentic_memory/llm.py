@@ -14,6 +14,8 @@ defaults apply. This package never chooses a model.
 
 from __future__ import annotations
 
+import atexit
+import shutil
 import sys
 import tempfile
 
@@ -51,6 +53,7 @@ class AgentCoreBackend:
         self._bootstrap_runtime = bootstrapRuntime
         self._resolve_session = resolveSession
         self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-")
+        atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
         self._settings_path = (
             str(cfg.agent_core_settings) if cfg.agent_core_settings.is_file() else None
         )
