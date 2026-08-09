@@ -2,6 +2,8 @@
 
 Incremental: files are keyed by (mtime, size); unchanged files are skipped,
 changed sessions are fully re-distilled (their old memories are replaced).
+Streaming: each session is embedded and committed as soon as its
+distillation completes, so memory is queryable while a long ingest runs.
 After session ingestion, project profiles and weekly digests are regenerated
 for the projects/weeks that were touched.
 """
@@ -219,23 +221,15 @@ def ingest(
                     _log(f"[ingest] fallback also failed for {st.session_id}: {e2}")
             return st, _extractive_digest(st), "extractive"
 
+    # ---- 3b. store + embed each session the moment it finishes ----
+    # Streaming, not batch: every distilled session is committed inside the
+    # completion loop, so readers (the MCP servers) see memory grow while a
+    # long ingest runs, and an interrupted run keeps everything already
+    # processed — only in-flight distillations are lost.
     touched_projects: set[str] = set()
     touched_weeks: set[str] = set()
-    results = []
-    if parsed:
-        workers = cfg.llm_workers if use_llm else 8
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = {pool.submit(_distill, st): info for st, info in parsed}
-            done = 0
-            for fut in as_completed(futures):
-                st_info = futures[fut]
-                st, digest, status = fut.result()
-                results.append((st, digest, status, st_info))
-                done += 1
-                _log(f"[ingest] ({done}/{len(parsed)}) {status}: {st.project} / {digest.title[:60]}")
 
-    # ---- 4. store + embed per session ----
-    for st, digest, status, st_info in results:
+    def _store_session(st: SessionTranscript, digest: SessionDigest, status: str, st_info) -> None:
         rows = _session_rows(st, digest, cfg.chunk_chars)
         vecs = embedder.embed_passages([r.content for r in rows])
         for r, v in zip(rows, vecs):
@@ -267,7 +261,19 @@ def ingest(
             if wk:
                 touched_weeks.add(wk)
 
-    # ---- 5. project profiles ----
+    if parsed:
+        workers = cfg.llm_workers if use_llm else 8
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {pool.submit(_distill, st): info for st, info in parsed}
+            done = 0
+            for fut in as_completed(futures):
+                st_info = futures[fut]
+                st, digest, status = fut.result()
+                done += 1
+                _log(f"[ingest] ({done}/{len(parsed)}) {status}: {st.project} / {digest.title[:60]}")
+                _store_session(st, digest, status, st_info)
+
+    # ---- 4. project profiles ----
     if use_llm and touched_projects:
         _log(f"[ingest] regenerating {len(touched_projects)} project profiles")
         for project in sorted(touched_projects):
@@ -304,7 +310,7 @@ def ingest(
             store.commit()
             stats.profiles += 1
 
-    # ---- 6. weekly digests ----
+    # ---- 5. weekly digests ----
     if use_llm and touched_weeks:
         _log(f"[ingest] regenerating {len(touched_weeks)} weekly digests")
         for wk in sorted(touched_weeks):
