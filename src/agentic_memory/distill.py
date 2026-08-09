@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
+from datetime import date
 
 from .llm import AgentCoreBackend
 
@@ -34,13 +35,17 @@ Produce a JSON object with exactly these fields:
       "content": "one self-contained, durable fact worth remembering across sessions",
       "kind": "decision|fact|preference|solution|problem|task_state",
       "importance": 1-10,
-      "tags": ["lowercase", "keywords"]
+      "tags": ["lowercase", "keywords"],
+      "date": "YYYY-MM-DD, only when the memory is tied to a specific day"
     }}
   ]
 }}
 
 Memory guidance:
 - 3 to 12 memories. Prefer fewer, denser memories over many shallow ones.
+- date: transcripts may span days ([date: …] markers, timestamps in messages).
+  When a memory is about a specific day's event (something that happened, was
+  sent, or is due on a date), set "date" to that day; otherwise omit it.
 - kind=decision: an architectural/technical choice and its rationale.
 - kind=solution: a hard-won fix (error message -> root cause -> fix). These are gold.
 - kind=preference: how the user likes things done (style, workflow, tone).
@@ -97,12 +102,15 @@ Produce a JSON object:
   "summary": "4-8 sentences: what happened in THIS segment (work attempted, findings, state changes)",
   "memories": [
     {{"content": "...", "kind": "decision|fact|preference|solution|problem|task_state",
-      "importance": 1-10, "tags": ["..."]}}
+      "importance": 1-10, "tags": ["..."],
+      "date": "YYYY-MM-DD, only when tied to a specific day"}}
   ]
 }}
 
 Memory guidance (same rubric as full-session distillation):
 - 2 to 8 memories for this segment; self-contained; name concrete files/projects/tech.
+- date: when a memory is about a specific day's event (see [date: …] markers or
+  timestamps in messages), set "date" to that day; otherwise omit it.
 - kinds: decision (choice + rationale), solution (error -> root cause -> fix),
   preference (how the user likes things done), problem (open issue/pitfall),
   task_state (where work stands), fact (durable context).
@@ -125,14 +133,16 @@ Produce the final JSON object for the WHOLE session:
   "outcome": "one sentence: completed / partially done / abandoned / blocked, and why",
   "memories": [
     {{"content": "...", "kind": "decision|fact|preference|solution|problem|task_state",
-      "importance": 1-10, "tags": ["..."]}}
+      "importance": 1-10, "tags": ["..."],
+      "date": "YYYY-MM-DD, only when tied to a specific day"}}
   ]
 }}
 
 Rules for memories: consolidate duplicates and near-duplicates from overlapping
 segments into single, best-phrased entries; keep at most 15, preferring the
 highest-importance and most durable ones; keep only one task_state (the final
-one — earlier task states are superseded).
+one — earlier task states are superseded). Preserve candidates' "date" fields
+when consolidating (a merged memory keeps the date of the event it describes).
 
 SEGMENT SUMMARIES:
 {summaries}
@@ -148,6 +158,7 @@ class DistilledMemory:
     kind: str
     importance: float  # 0..1
     tags: list[str] = field(default_factory=list)
+    date: str | None = None  # "YYYY-MM-DD" when tied to a specific day
 
 
 @dataclass
@@ -202,6 +213,19 @@ def _call_json(llm: AgentCoreBackend, system: str, prompt: str) -> dict:
         return _extract_json(raw)
 
 
+def _parse_date(value) -> str | None:
+    """Lenient "YYYY-MM-DD" extraction: accepts full ISO timestamps, rejects
+    placeholders and garbage the model might echo back."""
+    if not isinstance(value, str) or len(value) < 10:
+        return None
+    candidate = value[:10]
+    try:
+        date.fromisoformat(candidate)
+    except ValueError:
+        return None
+    return candidate
+
+
 def _parse_memories(data: dict, min_importance: float = 0.25) -> list[DistilledMemory]:
     memories = []
     for m in data.get("memories", []):
@@ -217,7 +241,10 @@ def _parse_memories(data: dict, min_importance: float = 0.25) -> list[DistilledM
         if imp < min_importance:  # drop trivia (default: rated 1-2 of 10)
             continue
         tags = [str(t).lower() for t in (m.get("tags") or []) if isinstance(t, (str, int))][:8]
-        memories.append(DistilledMemory(content=content, kind=kind, importance=imp, tags=tags))
+        memories.append(DistilledMemory(
+            content=content, kind=kind, importance=imp, tags=tags,
+            date=_parse_date(m.get("date")),
+        ))
     return memories
 
 
@@ -303,10 +330,11 @@ def distill_session_segmented(
         )
         summaries.append(f"[segment {i}/{len(segments)}] {(data.get('summary') or '').strip()}")
         for m in _parse_memories(data, min_importance):
-            candidates.append(
-                {"content": m.content, "kind": m.kind,
-                 "importance": round(m.importance * 10), "tags": m.tags}
-            )
+            candidate = {"content": m.content, "kind": m.kind,
+                         "importance": round(m.importance * 10), "tags": m.tags}
+            if m.date:
+                candidate["date"] = m.date
+            candidates.append(candidate)
     data = _call_json(
         llm,
         SESSION_SYSTEM,

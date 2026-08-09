@@ -92,10 +92,14 @@ def _session_rows(st: SessionTranscript, digest: SessionDigest, chunk_chars: int
             )
         )
     for m in digest.memories:
+        # A memory tied to a specific day (distiller-extracted) is stamped
+        # with that day, not the session end — long episodic sessions would
+        # otherwise skew every memory's recency toward their last message.
+        row_kwargs = {**base, "ts": m.date or base["ts"]}
         rows.append(
             MemoryRow(
                 level="memory", kind=m.kind, content=m.content,
-                importance=m.importance, tags=m.tags, **base,
+                importance=m.importance, tags=m.tags, **row_kwargs,
             )
         )
     for text, ts in chunk_session(st, chunk_chars):
