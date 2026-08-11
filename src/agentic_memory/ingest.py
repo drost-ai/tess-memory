@@ -16,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from . import agent_core
+from .attribution import source_adapter
 from .config import Config
 from .distill import (
     SessionDigest,
@@ -28,13 +28,7 @@ from .distill import (
 from .embed import Embedder
 from .llm import AgentCoreBackend, RefusalError
 from .store import MemoryRow, MemoryStore
-from .transcript import (
-    SessionTranscript,
-    chunk_session,
-    discover_transcripts,
-    parse_transcript,
-    render_for_llm,
-)
+from .transcript import SessionTranscript, chunk_session, render_for_llm
 
 
 @dataclass
@@ -159,24 +153,10 @@ def ingest(
     retry_mode = retry_extractive and use_llm
     pending: list[tuple] = []
     for ds in cfg.data_stores:
-        if ds.type == "claude-code":
-            found = discover_transcripts(ds.path, ds.exclude)
-            parse = parse_transcript
-        elif ds.type == "agent-core":
-            found = agent_core.discover_sessions(ds.path, ds.exclude)
-            parse = agent_core.parse_session
-        elif ds.type == "transcript":
-            found = agent_core.discover_transcript_files(
-                ds.path, ds.exclude, ds.project
-            )
-            parse = agent_core.parse_transcript_file
-        else:
-            raise ValueError(
-                f"data_store '{ds.name}': unknown type '{ds.type}' "
-                "(implemented: 'claude-code', 'agent-core', 'transcript')"
-            )
-        for path, project, parent in found:
+        found, parse = source_adapter(ds)
+        for path, source_project, parent in found:
             stats.scanned += 1
+            project = ds.resolve_project(source_project)
             st_info = path.stat()
             if retry_mode:
                 if store.file_status(str(path)) == "extractive":

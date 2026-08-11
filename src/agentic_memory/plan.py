@@ -46,6 +46,30 @@ def _now() -> str:
 # ---------------- validation ----------------
 
 
+def resolve_project_policy(
+    project: str | None,
+    *,
+    default_project: str = "",
+    lock_writes_to_default: bool = False,
+    write: bool = False,
+) -> str:
+    """Apply an instance's default/locked logical planning namespace.
+
+    Inputs are expected to be normalized project slugs. Legacy instances leave
+    both policy fields unset, so explicit project behavior is unchanged.
+    """
+    requested = (project or "").strip()
+    default = (default_project or "").strip()
+    resolved = requested or default
+    if not resolved:
+        raise ValueError("project is required")
+    if write and lock_writes_to_default and resolved != default:
+        raise ValueError(
+            f"plan writes are locked to project '{default}', not '{resolved}'"
+        )
+    return resolved
+
+
 def _validate_priority(priority) -> int:
     try:
         p = int(priority)

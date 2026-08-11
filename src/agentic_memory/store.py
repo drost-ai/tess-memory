@@ -191,6 +191,86 @@ class MemoryStore:
             "SELECT * FROM sessions WHERE id=?", (session_id,)
         ).fetchone()
 
+    def session_for_file(self, path: str) -> sqlite3.Row | None:
+        """Return the stored session tracked by one ingestion source file."""
+        return self.db.execute(
+            "SELECT s.* FROM files f JOIN sessions s ON s.id=f.session_id "
+            "WHERE f.path=?",
+            (path,),
+        ).fetchone()
+
+    def reattribute_session_project(
+        self, session_id: str, project: str, *, commit: bool = True
+    ) -> dict:
+        """Move one session and its indexed artifacts to a logical project.
+
+        This is deliberately metadata-only: memory ids, content, tags,
+        timestamps, importance, and embedding rows/blobs are untouched. If the
+        old project has no sessions left, its rolling profile is retired rather
+        than left behind as a phantom project.
+        """
+        project = (project or "").strip()
+        if not project:
+            raise ValueError("project is required")
+        with self.lock:
+            session = self.get_session(session_id)
+            if session is None:
+                raise ValueError(f"session '{session_id}' does not exist")
+            old_project = session["project"]
+            if old_project == project:
+                return {
+                    "session_id": session_id,
+                    "old_project": old_project,
+                    "new_project": project,
+                    "memories": 0,
+                    "retired_profiles": 0,
+                }
+            memory_count = self.db.execute(
+                "SELECT COUNT(*) FROM memories WHERE session_id=?", (session_id,)
+            ).fetchone()[0]
+            self.db.execute(
+                "UPDATE sessions SET project=? WHERE id=?", (project, session_id)
+            )
+            self.db.execute(
+                "UPDATE memories SET project=? WHERE session_id=?",
+                (project, session_id),
+            )
+            retired_profiles = 0
+            if old_project and not self.db.execute(
+                "SELECT 1 FROM sessions WHERE project=? LIMIT 1", (old_project,)
+            ).fetchone():
+                ids = [r["id"] for r in self.db.execute(
+                    "SELECT id FROM memories WHERE level='project' AND project=?",
+                    (old_project,),
+                )]
+                self._delete_memory_ids(ids)
+                retired_profiles = len(ids)
+            if commit:
+                self.db.commit()
+            return {
+                "session_id": session_id,
+                "old_project": old_project,
+                "new_project": project,
+                "memories": memory_count,
+                "retired_profiles": retired_profiles,
+            }
+
+    def reattribute_session_projects(
+        self, assignments: list[tuple[str, str]]
+    ) -> list[dict]:
+        """Atomically apply a batch of metadata-only project assignments."""
+        with self.lock:
+            try:
+                results = [
+                    self.reattribute_session_project(session_id, project, commit=False)
+                    for session_id, project in assignments
+                ]
+                self.db.commit()
+                return results
+            except Exception:
+                self.db.rollback()
+                raise
+
     def sessions_for_project(self, project: str, limit: int = 50) -> list[sqlite3.Row]:
         return self.db.execute(
             "SELECT * FROM sessions WHERE project=? ORDER BY ended_at DESC LIMIT ?",

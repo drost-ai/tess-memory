@@ -1,4 +1,4 @@
-"""CLI: agentic-memory {ingest, search, status, serve}."""
+"""CLI: agentic-memory {ingest, reconcile-attribution, search, status, serve}."""
 
 from __future__ import annotations
 
@@ -110,6 +110,21 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_reconcile_attribution(args: argparse.Namespace) -> int:
+    """Repair stored project metadata without constructing models."""
+    from .attribution import reconcile_project_attribution
+    from .store import MemoryStore
+
+    CONFIG.ensure_dirs()
+    store = MemoryStore(CONFIG.db_path)
+    try:
+        stats = reconcile_project_attribution(CONFIG, store, dry_run=args.dry_run)
+        print(json.dumps(vars(stats), indent=2))
+    finally:
+        store.close()
+    return 0
+
+
 def cmd_status(args: argparse.Namespace) -> int:
     from .store import MemoryStore
 
@@ -137,6 +152,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="re-distill sessions previously degraded to extractive "
                         "digests (e.g. past model refusals)")
     p.set_defaults(fn=cmd_ingest)
+
+    p = sub.add_parser(
+        "reconcile-attribution",
+        help="Repair stored project metadata from config (no LLM or embeddings)",
+    )
+    p.add_argument(
+        "--dry-run", action="store_true",
+        help="report project drift without writing the database",
+    )
+    p.set_defaults(fn=cmd_reconcile_attribution)
 
     p = sub.add_parser("search", help="Search the memory store")
     p.add_argument("query")

@@ -67,12 +67,13 @@ Planning plane contract:
   must never read staler than its children.
 - Harness todo lists are ephemeral; this board is durable. Mirror anything
   that must survive the session into it.
-- The project slug is the session cwd with '/' replaced by '-'
-  (/Users/x/proj -> -Users-x-proj). Any tool's project argument also accepts
-  the absolute cwd path verbatim — the server converts it. Confirm slugs with
-  list_projects (it also lists plan-only boards). Plan items are searchable
-  (search_memory level='plan'); the open board rides along in
-  get_project_context, full tree via plan_board.
+- A project is the durable logical memory/planning scope. By default it is the
+  session cwd slug (`/Users/x/proj -> -Users-x-proj`), but an instance may bind
+  sessions from many workspaces to one fixed project (for example `assistant`);
+  cwd then remains provenance only. Treat list_projects as the authority and
+  reuse its exact project key. Absolute cwd paths are accepted for legacy
+  cwd-derived projects. Plan items are searchable (search_memory level='plan');
+  the open board rides along in get_project_context, full tree via plan_board.
 
 Workflow: list_projects to discover slugs; get_project_context for orientation;
 search_memory for specifics (write SELF-CONTAINED queries — you have the
@@ -172,8 +173,8 @@ def search_memory(
         "corruption during incremental ingest in agentic-memory sqlite store'."
     ))],
     project: Annotated[str | None, Field(description=(
-        "Project slug to scope the search (get slugs from list_projects), or "
-        "an absolute cwd path (converted server-side). Omit to search across "
+        "Logical project key to scope the search (get keys from list_projects), "
+        "or an absolute cwd path for a cwd-derived project. Omit to search across "
         "all projects."
     ))] = None,
     level: Annotated[str | None, Field(description=(
@@ -258,9 +259,9 @@ def search_memory(
 @mcp.tool()
 def get_project_context(
     project: Annotated[str, Field(description=(
-        "Project slug from list_projects, e.g. '-Users-sam-agents-assistant' "
-        "(slugs are the project cwd with slashes replaced by dashes), or the "
-        "absolute cwd path (converted server-side)."
+        "Logical project key from list_projects, e.g. 'assistant' or "
+        "'-Users-sam-agents-assistant'. Absolute cwd paths are also accepted "
+        "for cwd-derived projects."
     ))],
 ) -> str:
     """Orient in a project: rolling profile, open plan, last 10 session summaries.
@@ -393,7 +394,7 @@ def list_projects() -> str:
 
     Covers both planes: projects with ingested session memory and projects
     that so far exist only as a plan board (planned before their first
-    session). This is the authority for project slugs.
+    session). This is the authority for logical project keys.
     """
     rows = _get_store().list_projects()
     if not rows:
@@ -446,9 +447,9 @@ def recent_activity(
 @mcp.tool()
 def plan_add(
     project: Annotated[str, Field(description=(
-        "Project slug the item belongs to — same slugs as list_projects "
-        "(the project cwd with slashes replaced by dashes), or the absolute "
-        "cwd path (converted server-side)."
+        "Logical project key the item belongs to — use the exact key from "
+        "list_projects. Absolute cwd paths are also accepted for cwd-derived "
+        "projects."
     ))],
     kind: Annotated[str, Field(description=(
         "vision | epic | slice | task | note. Typical nesting: vision -> epic "
@@ -482,7 +483,15 @@ def plan_add(
     and items are searchable via search_memory (level='plan'). Check
     plan_board first to pick the right parent and avoid duplicates.
     """
-    project = to_slug(project)
+    try:
+        project = plan.resolve_project_policy(
+            to_slug(project),
+            default_project=CONFIG.planning_default_project,
+            lock_writes_to_default=CONFIG.planning_lock_writes_to_default,
+            write=True,
+        )
+    except ValueError as e:
+        return f"Cannot create item: {e}"
     store = _get_store()
     note = plan.unknown_project_note(store, project)  # before the write
     try:
@@ -529,13 +538,25 @@ def plan_update(
     session end — a stale board misleads every future session. Every
     transition is timestamped and recorded in the item's history.
     """
+    store = _get_store()
+    existing = store.plan_get(item_id)
+    if existing is not None:
+        try:
+            plan.resolve_project_policy(
+                existing["project"],
+                default_project=CONFIG.planning_default_project,
+                lock_writes_to_default=CONFIG.planning_lock_writes_to_default,
+                write=True,
+            )
+        except ValueError as e:
+            return f"Cannot update item: {e}"
     kwargs: dict = dict(status=status, title=title, body=body,
                         priority=priority, tags=tags)
     if parent_id is not None:
         kwargs["parent_id"] = parent_id
     try:
         item, changes = plan.update_item(
-            _get_store(), _get_embedder(), item_id, **kwargs
+            store, _get_embedder(), item_id, **kwargs
         )
     except ValueError as e:
         return f"Cannot update item: {e}"
@@ -547,8 +568,8 @@ def plan_update(
 @mcp.tool()
 def plan_board(
     project: Annotated[str, Field(description=(
-        "Project slug — same slugs as list_projects — or the absolute cwd "
-        "path (converted server-side)."
+        "Logical project key — use the exact key from list_projects. Absolute "
+        "cwd paths are also accepted for cwd-derived projects."
     ))],
     include_done: Annotated[bool, Field(description=(
         "Include complete/dropped items (default: open work only)."

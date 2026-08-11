@@ -29,6 +29,26 @@ DEFAULT_EXCLUDES = [
 ]
 
 
+@dataclass(frozen=True)
+class ProjectAttribution:
+    """Resolve a source workspace into its durable logical project.
+
+    With no fixed project this preserves the original engineering behavior:
+    the source's cwd-derived slug is the project. A fixed project decouples
+    memory ownership from execution location for persistent agents and other
+    runtimes that move between workspaces.
+    """
+
+    fixed_project: str | None = None
+
+    @property
+    def mode(self) -> str:
+        return "fixed" if (self.fixed_project or "").strip() else "cwd"
+
+    def resolve(self, source_project: str) -> str:
+        return (self.fixed_project or "").strip() or source_project
+
+
 @dataclass
 class DataStore:
     """One ingestion source: a directory of session transcripts."""
@@ -37,10 +57,18 @@ class DataStore:
     path: Path
     type: str = "claude-code"  # selects the discovery/parser implementation
     exclude: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDES))
-    # Project slug assigned to every session in the store. Required for the
-    # "transcript" type (bare jsonl files carry no cwd); ignored by types
-    # that derive the project from the session itself.
+    # Optional stable logical project assigned after source-cwd discovery and
+    # exclusion. Required for bare "transcript" stores; for claude-code and
+    # agent-core it overrides cwd-derived attribution while cwd stays as
+    # provenance on the session row.
     project: str | None = None
+
+    @property
+    def attribution(self) -> ProjectAttribution:
+        return ProjectAttribution(self.project)
+
+    def resolve_project(self, source_project: str) -> str:
+        return self.attribution.resolve(source_project)
 
     def is_excluded(self, project_slug: str) -> bool:
         return any(fnmatch.fnmatch(project_slug, pat) for pat in self.exclude)
@@ -56,6 +84,13 @@ def _default_stores() -> list[DataStore]:
 class Config:
     # -- data stores ---------------------------------------------------------
     data_stores: list[DataStore] = field(default_factory=_default_stores)
+
+    # -- planning ------------------------------------------------------------
+    # A persistent AI can bind all plan writes to one durable logical project.
+    # Engineering instances leave these unset and retain explicit/cwd-derived
+    # project behavior exactly as before.
+    planning_default_project: str = ""
+    planning_lock_writes_to_default: bool = False
 
     # -- storage -------------------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path("~/.agentic-memory").expanduser())
@@ -153,6 +188,7 @@ def load_config(path: Path | None = None) -> Config:
         raw = {}
 
     cfg = Config()
+    planning = raw.get("planning", {})
     storage = raw.get("storage", {})
     llm = raw.get("llm", {})
     search = raw.get("search", {})
@@ -172,6 +208,17 @@ def load_config(path: Path | None = None) -> Config:
             )
             for d in raw["data_stores"]
         ]
+    cfg.planning_default_project = str(
+        planning.get("default_project", cfg.planning_default_project)
+    ).strip()
+    cfg.planning_lock_writes_to_default = bool(
+        planning.get("lock_writes_to_default", cfg.planning_lock_writes_to_default)
+    )
+    if cfg.planning_lock_writes_to_default and not cfg.planning_default_project:
+        raise ValueError(
+            "[planning] lock_writes_to_default=true requires default_project"
+        )
+
     if "data_dir" in storage:
         cfg.data_dir = _path(storage["data_dir"])
 
