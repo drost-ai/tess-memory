@@ -2,8 +2,8 @@
 
 agent-core-python is the only supported path. The runtime is imported from its
 checkout (it is dependency-free) and each completion runs one non-interactive
-turn through the same seams its own headless runner uses — resolveConfig →
-resolveSession → bootstrapRuntime → runAgentPrompt — with a real system prompt,
+turn through the same seams its own headless runner uses — resolve_config →
+resolve_session → bootstrap_runtime → run_agent_prompt — with a real system prompt,
 tools disabled, and no session persistence.
 
 Provider, model, and credentials are governed entirely by the runtime's own
@@ -36,22 +36,25 @@ class AgentCoreBackend:
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
         try:
+            # agent-core-python's native-Python conversion (v1-refactor)
+            # renamed the public functions to snake_case; the dict payload
+            # contract (camelCase keys) is unchanged.
             from agent_core import (
-                bootstrapRuntime,
-                createAgentRuntimeBindings,
-                isTaskSupervisorGateway,
-                resolveConfig,
-                resolveSession,
-                runAgentPrompt,
+                bootstrap_runtime,
+                create_agent_runtime_bindings,
+                is_task_supervisor_gateway,
+                resolve_config,
+                resolve_session,
+                run_agent_prompt,
             )
         except ImportError as e:
             raise RuntimeError(f"agent-core import failed: {e}") from e
-        self._run_agent_prompt = runAgentPrompt
-        self._create_bindings = createAgentRuntimeBindings
-        self._is_gateway = isTaskSupervisorGateway
-        self._resolve_config = resolveConfig
-        self._bootstrap_runtime = bootstrapRuntime
-        self._resolve_session = resolveSession
+        self._run_agent_prompt = run_agent_prompt
+        self._create_bindings = create_agent_runtime_bindings
+        self._is_gateway = is_task_supervisor_gateway
+        self._resolve_config = resolve_config
+        self._bootstrap_runtime = bootstrap_runtime
+        self._resolve_session = resolve_session
         self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-")
         atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
         self._settings_path = (
