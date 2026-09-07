@@ -191,12 +191,21 @@ def supervisor_lock(config):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def owned_worker(pid, identifier):
+def owned_worker(pid, identifier) -> bool | None:
+    """True confirms ownership; None means a live process cannot be checked."""
     if not process_alive(pid):
         return False
-    result = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'command='], capture_output=True, text=True, timeout=3)
+    try:
+        result = subprocess.run(['/bin/ps', '-p', str(pid), '-o', 'command='], capture_output=True, text=True, timeout=3)
+    except (subprocess.TimeoutExpired, OSError):
+        return None
+    if result.returncode != 0 or not result.stdout.strip():
+        return None if process_alive(pid) else False
     try:
         args = shlex.split(result.stdout.strip())
+    except ValueError:
+        return None
+    try:
         return (len(args) >= 9 and Path(args[0]).name.startswith('python')
                 and args[1:5] == ['-u', '-m', 'agentic_memory.cli', 'scheduler-worker']
                 and args[args.index('--run-id') + 1] == identifier)
@@ -207,7 +216,7 @@ def owned_worker(pid, identifier):
 def stop_run(config, identifier, *, force=False):
     queue = WorkQueue(config)
     run = queue.get_run(identifier)
-    if not run or not run['pid'] or not owned_worker(run['pid'], identifier):
+    if not run or not run['pid'] or owned_worker(run['pid'], identifier) is not True:
         return False
     if os.getpgid(run['pid']) != run['pid']:
         raise RuntimeError('worker is not the expected dedicated process-group leader')
@@ -244,7 +253,11 @@ def serve(config_path: Path, *, stop_event=None):
                     gate.release_owner(identifier)
                 for job in queue.status()['jobs']:
                     if job['state'] == 'running' and job['pid']:
-                        if not owned_worker(job['pid'], job['run_id']):
+                        ownership = owned_worker(job['pid'], job['run_id'])
+                        if ownership is None:
+                            print(f"[scheduler] worker {job['pid']} identity check unavailable; retaining ownership and retrying", file=sys.stderr, flush=True)
+                            continue
+                        if ownership is False:
                             queue.finish(job['run_id'], outcome='worker_lost', error='recorded worker ownership is no longer valid')
                             gate.release_owner(job['run_id'])
                         elif time.time() - job['started'] > config.job_timeout_seconds:

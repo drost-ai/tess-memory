@@ -11,7 +11,7 @@ from unittest import mock
 
 from agentic_memory.scheduler_config import ServiceConfig, ScheduledStore, load_service
 from agentic_memory.scheduler_queue import WorkQueue
-from agentic_memory.scheduler import worker, service_status, serve
+from agentic_memory.scheduler import worker, service_status, serve, owned_worker, stop_run
 from agentic_memory.provider_limits import ProviderGate
 from agentic_memory.scheduler_install import build_plist, owned_plist, service_control
 from test_codex import RecordingEmbedder, write_rollout
@@ -82,6 +82,37 @@ class SchedulerQueueTests(unittest.TestCase):
         queue.finish.assert_not_called()
         gate.return_value.release_owner.assert_not_called()
 
+    def test_supervisor_retains_worker_and_leases_across_unknown_identity_probe(self):
+        import threading
+        import time
+        from contextlib import nullcontext
+        stop = threading.Event()
+        queue = mock.Mock()
+        ticks = 0
+        def recover():
+            nonlocal ticks
+            ticks += 1
+            if ticks == 2:
+                stop.set()
+            return []
+        queue.recover.side_effect = recover
+        queue.status.return_value = {'jobs': [{'state': 'running', 'pid': 123, 'run_id': 'owned', 'started': time.time()}]}
+        queue.claim.return_value = None
+        for store in self.config.stores:
+            store.settings.touch()
+        with mock.patch('agentic_memory.scheduler.load_service', return_value=self.config), \
+             mock.patch('agentic_memory.scheduler.WorkQueue', return_value=queue), \
+             mock.patch('agentic_memory.scheduler._gate') as gate, \
+             mock.patch('agentic_memory.scheduler.supervisor_lock', return_value=nullcontext()), \
+             mock.patch('agentic_memory.scheduler.signal.signal'), \
+             mock.patch('agentic_memory.scheduler.owned_worker', side_effect=[None, True]) as probe, \
+             mock.patch('agentic_memory.scheduler.stop_run') as terminate:
+            serve(self.config.path, stop_event=stop)
+        self.assertEqual(probe.call_count, 2)
+        queue.finish.assert_not_called()
+        gate.return_value.release_owner.assert_not_called()
+        terminate.assert_not_called()
+
     def test_disable_persists_across_restart_and_preserves_active_jobs(self):
         run = self.queue.claim(instance='a', explicit=True)
         self.queue.set_enabled('a', False)
@@ -135,6 +166,44 @@ class SchedulerQueueTests(unittest.TestCase):
         self.assertNotEqual(one['instance'], two['instance'])
         self.assertIsNone(self.queue.claim(now=wake))
         self.assertEqual(len(self.queue.status()['jobs']), 6)
+
+
+class WorkerOwnershipTests(unittest.TestCase):
+    def test_probe_timeout_or_os_failure_is_unknown_instead_of_unowned(self):
+        for error in (subprocess.TimeoutExpired('ps', 3), OSError('probe unavailable')):
+            with mock.patch('agentic_memory.scheduler.process_alive', return_value=True), \
+                 mock.patch('agentic_memory.scheduler.subprocess.run', side_effect=error):
+                self.assertIsNone(owned_worker(123, 'run'))
+
+    def test_live_unreadable_probe_is_unknown_and_dead_process_is_unowned(self):
+        from types import SimpleNamespace
+        for result in (SimpleNamespace(returncode=1, stdout=''), SimpleNamespace(returncode=0, stdout=''),
+                       SimpleNamespace(returncode=0, stdout='"unfinished quotation')):
+            with mock.patch('agentic_memory.scheduler.process_alive', return_value=True), \
+                 mock.patch('agentic_memory.scheduler.subprocess.run', return_value=result):
+                self.assertIsNone(owned_worker(123, 'run'))
+        with mock.patch('agentic_memory.scheduler.process_alive', return_value=False), \
+             mock.patch('agentic_memory.scheduler.subprocess.run') as probe:
+            self.assertIs(owned_worker(123, 'run'), False)
+            probe.assert_not_called()
+
+    def test_positive_ownership_requires_the_expected_worker_command_and_run_id(self):
+        from types import SimpleNamespace
+        command = '/repo/.venv/bin/python -u -m agentic_memory.cli scheduler-worker --config /config --run-id mine'
+        with mock.patch('agentic_memory.scheduler.process_alive', return_value=True), \
+             mock.patch('agentic_memory.scheduler.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=command)):
+            self.assertIs(owned_worker(123, 'mine'), True)
+            self.assertIs(owned_worker(123, 'different'), False)
+
+    def test_stop_run_never_signals_a_process_with_unconfirmed_ownership(self):
+        with mock.patch('agentic_memory.scheduler.WorkQueue') as queue, \
+             mock.patch('agentic_memory.scheduler.owned_worker', return_value=None), \
+             mock.patch('agentic_memory.scheduler.os.killpg') as signal_group, \
+             mock.patch('agentic_memory.scheduler.os.getpgid') as group_id:
+            queue.return_value.get_run.return_value = {'pid': 123}
+            self.assertFalse(stop_run(None, 'run', force=True))
+            signal_group.assert_not_called()
+            group_id.assert_not_called()
 
 
 class SchedulerWorkerTests(unittest.TestCase):
