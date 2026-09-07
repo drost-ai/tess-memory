@@ -127,18 +127,27 @@ class MemoryRow:
 
 
 class MemoryStore:
-    def __init__(self, db_path: Path):
-        db_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: Path, *, readonly: bool = False):
+        if not readonly:
+            db_path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: MCP tool dispatch and the search agent may
         # touch the store from worker threads; CPython's sqlite3 serializes
         # statement execution, and plan writes additionally hold self.lock.
-        self.db = sqlite3.connect(str(db_path), check_same_thread=False)
+        if readonly:
+            uri = db_path.resolve().as_uri() + "?mode=ro"
+            if not Path(str(db_path) + "-wal").exists():
+                uri += "&immutable=1"
+            self.db = sqlite3.connect(uri, uri=True, check_same_thread=False)
+        else:
+            self.db = sqlite3.connect(str(db_path), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
-        self.db.execute("PRAGMA journal_mode=WAL")
+        if not readonly:
+            self.db.execute("PRAGMA journal_mode=WAL")
         self.db.execute("PRAGMA busy_timeout=5000")
         self.db.execute("PRAGMA foreign_keys=ON")
-        self.db.executescript(SCHEMA)
-        self._migrate()
+        if not readonly:
+            self.db.executescript(SCHEMA)
+            self._migrate()
         self.lock = threading.RLock()  # serializes multi-statement write groups
         self._emb_cache: tuple[np.ndarray, np.ndarray] | None = None  # (ids, matrix)
         self._emb_cache_data_version: int | None = None

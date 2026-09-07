@@ -32,7 +32,7 @@ _IMAGE_TYPES = {"image", "input_image", "output_image", "image_url"}
 _TEXT_TYPES = {"text", "input_text", "output_text"}
 _IGNORED_ITEMS = {
     "reasoning", "compaction", "ghost_snapshot", "tool_search_call",
-    "tool_search_output", "image_generation_call",
+    "tool_search_output", "image_generation_call", "compaction_summary",
 }
 _IGNORED_EVENTS = {
     "token_count", "agent_reasoning", "task_started", "task_complete",
@@ -534,6 +534,15 @@ class _Normalizer:
             elif event_type == "mcp_tool_call_end":
                 invocation = p.get("invocation") or {}
                 self.ui_item({**p, **invocation, "type": "McpToolCall", "id": p.get("call_id")}, record, position, offset)
+            elif event_type == "view_image_tool_call":
+                self.item({"type": "function_call", "name": "view_image", "call_id": p.get("call_id"),
+                           "arguments": {"path": p.get("path", "")}}, record, position, offset, "ui_call")
+            elif event_type == "error":
+                # Preserve runtime failures as evidence; opaque transport
+                # metadata and encrypted compaction state are not dialogue.
+                self.emit("tool_result", "[runtime error] " + _text(p.get("message", ""), self.report)
+                          + ("\n[code] " + _text(p["codex_error_info"], self.report)
+                             if p.get("codex_error_info") else ""), record, position, offset)
             elif event_type in ("web_search_end", "patch_apply_end"):
                 self.ui_item({**p, "type": "Extension" if event_type == "web_search_end" else "FileChange",
                               "id": p.get("call_id")}, record, position, offset)

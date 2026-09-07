@@ -221,6 +221,30 @@ def cmd_status(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_audit(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from .audit import inventory
+    from .config import load_config
+    path = Path(args.settings).expanduser()
+    if not path.is_file():
+        raise ValueError("audit settings must exist")
+    print(json.dumps(inventory(load_config(path)), indent=2))
+    return 0
+
+
+def cmd_evaluate(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from .evaluation import evaluate
+    result = evaluate(Path(args.cases), vectors_path=Path(args.vectors) if args.vectors else None,
+                      keyword_only=args.keyword)
+    text = json.dumps(result, indent=2)
+    if args.output:
+        Path(args.output).write_text(text + "\n")
+    else:
+        print(text)
+    return 0 if result["passed"] == result["cases"] else 1
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .server import run
 
@@ -312,6 +336,17 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("serve", help="Run the MCP server (stdio)")
     p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("audit-sources", help="Read-only source inventory and stored coverage; no model calls")
+    p.add_argument("--settings", required=True)
+    p.set_defaults(fn=cmd_audit)
+
+    p = sub.add_parser("evaluate", help="Evaluate private source-labelled retrieval cases read-only")
+    p.add_argument("--cases", required=True)
+    p.add_argument("--vectors", help="precomputed query vectors keyed by case ID (.npz); avoids model calls")
+    p.add_argument("--keyword", action="store_true", help="offline keyword-only baseline; no embeddings or LLM calls")
+    p.add_argument("--output", help="metrics report path (query/transcript text is omitted)")
+    p.set_defaults(fn=cmd_evaluate)
 
     p = sub.add_parser("codex-serve", help="Serve an explicitly configured, dedicated Codex memory store")
     p.add_argument("--settings", required=True)
