@@ -12,8 +12,11 @@ KINDS = ('ingest', 'profiles', 'digests')
 
 
 class WorkQueue:
-    def __init__(self, config):
+    def __init__(self, config, *, readonly=False):
         self.config = config
+        self.readonly = readonly
+        if readonly:
+            return
         config.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         config.db_path.touch(mode=0o600, exist_ok=True)
         db = self.connect()
@@ -44,7 +47,10 @@ class WorkQueue:
             db.close()
 
     def connect(self):
-        db = sqlite3.connect(self.config.db_path, timeout=10)
+        if self.readonly:
+            db = sqlite3.connect(self.config.db_path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)
+        else:
+            db = sqlite3.connect(self.config.db_path, timeout=10)
         db.row_factory = sqlite3.Row
         return db
 

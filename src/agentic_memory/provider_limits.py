@@ -46,13 +46,17 @@ def provider_key(cfg, profile_name: str) -> str:
 
 class ProviderGate:
     def __init__(self, path: Path, *, model_limit: int = 16, embedding_limit: int = 4,
-                 provider_limits: dict[str, int] | None = None, poll_seconds: float = 0.2):
+                 provider_limits: dict[str, int] | None = None, poll_seconds: float = 0.2,
+                 readonly: bool = False):
         if model_limit < 1 or embedding_limit < 1 or any(v < 1 for v in (provider_limits or {}).values()):
             raise ValueError('provider concurrency limits must be positive')
         self.path = path
+        self.readonly = readonly
         self.limits = {'model': model_limit, 'embedding': embedding_limit}
         self.provider_limits = provider_limits or {}
         self.poll_seconds = poll_seconds
+        if readonly:
+            return
         path.parent.mkdir(parents=True, exist_ok=True)
         path.touch(mode=0o600, exist_ok=True)
         db = self.connect()
@@ -78,7 +82,10 @@ class ProviderGate:
             db.close()
 
     def connect(self):
-        db = sqlite3.connect(self.path, timeout=10)
+        if self.readonly:
+            db = sqlite3.connect(self.path.resolve().as_uri() + '?mode=ro', uri=True, timeout=10)
+        else:
+            db = sqlite3.connect(self.path, timeout=10)
         db.row_factory = sqlite3.Row
         return db
 

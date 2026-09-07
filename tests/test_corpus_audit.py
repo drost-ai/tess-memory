@@ -102,6 +102,32 @@ class CorpusAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "embedding space"):
             evaluate(path, vectors_path=vectors)
 
+    def test_evaluation_applies_temporal_bounds_in_keyword_and_hybrid_modes(self):
+        cfg_file = self.root / 'settings.toml'
+        cfg_file.write_text('[storage]\ndata_dir="' + str(self.root) + '"\n')
+        with closing(MemoryStore(self.root / 'memory.db')) as store:
+            store.set_meta('embedder', 'synthetic:2d')
+            ids = store.add_memories([MemoryRow(level='memory', kind='decision', project='p',
+                                               content='Atlas cache choice', ts=stamp,
+                                               vector=np.array([1, 0], dtype=np.float32))
+                                      for stamp in ('2026-01-01', '2026-09-01')])
+        query = 'Atlas cache choice'
+        cases = [{'id': 'old', 'before': '2026-02-01', 'expected_memory_ids': [ids[0]]},
+                 {'id': 'new', 'after': '2026-08-01', 'expected_memory_ids': [ids[1]]}]
+        metadata = {}
+        for case in cases:
+            case.update(settings=str(cfg_file), query=query, project='p')
+            metadata[case['id']] = {'query_sha256': hashlib.sha256(query.encode()).hexdigest(),
+                                    'descriptor': 'synthetic:2d'}
+        path = self.root/'cases.json'
+        path.write_text(json.dumps(cases))
+        vectors = self.root/'queries.npz'
+        np.savez(vectors, old=np.array([1, 0]), new=np.array([1, 0]), __metadata__=json.dumps(metadata))
+        for keyword_only in (True, False):
+            report = evaluate(path, vectors_path=vectors, keyword_only=keyword_only, limit=1)
+            self.assertEqual(report['passed'], 2)
+            self.assertEqual([r['returned_memory_ids'] for r in report['results']], [[ids[0]], [ids[1]]])
+
 
 if __name__ == "__main__":
     unittest.main()

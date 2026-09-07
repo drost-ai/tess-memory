@@ -64,13 +64,15 @@ def evaluate(cases_path: Path, *, vectors_path: Path | None = None, limit: int =
                         matches = store.fts_search(active_case["query"], limit=limit,
                                                    project=active_case.get("project"),
                                                    kinds=(active_case["kind"],) if active_case.get("kind") else None,
-                                                   levels=(active_case["level"],) if active_case.get("level") else None)
+                                                   levels=(active_case["level"],) if active_case.get("level") else None,
+                                                   after=active_case.get("after"), before=active_case.get("before"))
                         hits = [dict(r) for r in store.get_memories(list(matches))]
                     else:
                         hits = retrieval.search(store, embedder, active_case["query"],
                                             project=active_case.get("project"),
                                             kinds=(active_case["kind"],) if active_case.get("kind") else None,
                                             levels=(active_case["level"],) if active_case.get("level") else None,
+                                            after=active_case.get("after"), before=active_case.get("before"),
                                             limit=limit, expand_chunks=False)
                     mids = {h["id"] for h in hits}
                     sids = {h["session_id"] for h in hits}

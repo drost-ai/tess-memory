@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import shlex
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -27,15 +28,15 @@ from .store import MemoryStore
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def _gate(config):
+def _gate(config, *, readonly=False):
     return ProviderGate(config.db_path, model_limit=config.model_limit, embedding_limit=config.embedding_limit,
-                        provider_limits=config.provider_limits)
+                        provider_limits=config.provider_limits, readonly=readonly)
 
 
 def service_status(config):
     from .freshness import safe_error, store_status
-    queue = WorkQueue(config)
-    result = {**queue.status(), 'providers': _gate(config).status(), 'stores': {}}
+    queue = WorkQueue(config, readonly=True)
+    result = {**queue.status(), 'providers': _gate(config, readonly=True).status(), 'stores': {}}
     for scheduled in config.stores:
         store = None
         try:
@@ -228,43 +229,53 @@ def serve(config_path: Path, *, stop_event=None):
     last_heartbeat = 0
     with supervisor_lock(config):
         while not stop_event.is_set():
-            if time.time() - last_heartbeat >= 5:
-                queue.supervisor_heartbeat(os.getpid(), started)
-                last_heartbeat = time.time()
-            for identifier, process in list(active.items()):
-                if process.poll() is not None:
-                    active.pop(identifier)
-                    run = queue.get_run(identifier)
-                    if run and run['outcome'] in ('starting', 'running'):
-                        queue.finish(identifier, outcome='worker_lost', error=f'worker exited with code {process.returncode}')
-                        gate.release_owner(identifier)
-            for identifier in queue.recover():
-                gate.release_owner(identifier)
-            for job in queue.status()['jobs']:
-                if job['state'] == 'running' and job['pid']:
-                    if not owned_worker(job['pid'], job['run_id']):
-                        queue.finish(job['run_id'], outcome='worker_lost', error='recorded worker ownership is no longer valid')
-                        gate.release_owner(job['run_id'])
-                    elif time.time() - job['started'] > config.job_timeout_seconds:
-                        stop_run(config, job['run_id'], force=time.time() - job['started'] > config.job_timeout_seconds + 30)
-            for instance in config.stores:
-                try:
-                    current = instance.settings.stat().st_mtime_ns
-                except OSError:
-                    continue
-                if modified[instance.name] != current:
-                    modified[instance.name] = current
-                    for kind in ('ingest', 'profiles', 'digests'):
-                        queue.request(instance.name, kind)
-            while len(active) < config.parallel_stores and not stop_event.is_set():
-                run = queue.claim()
-                if run is None:
-                    break
-                try:
-                    active[run['id']] = spawn_worker(config, run)
-                    queue.start(run['id'], active[run['id']].pid, allow_finished=True)
-                except Exception as exc:
-                    queue.finish(run['id'], outcome='error', error=f'worker launch failed: {type(exc).__name__}')
+            try:
+                if time.time() - last_heartbeat >= 5:
+                    queue.supervisor_heartbeat(os.getpid(), started)
+                    last_heartbeat = time.time()
+                for identifier, process in list(active.items()):
+                    if process.poll() is not None:
+                        active.pop(identifier)
+                        run = queue.get_run(identifier)
+                        if run and run['outcome'] in ('starting', 'running'):
+                            queue.finish(identifier, outcome='worker_lost', error=f'worker exited with code {process.returncode}')
+                            gate.release_owner(identifier)
+                for identifier in queue.recover():
+                    gate.release_owner(identifier)
+                for job in queue.status()['jobs']:
+                    if job['state'] == 'running' and job['pid']:
+                        if not owned_worker(job['pid'], job['run_id']):
+                            queue.finish(job['run_id'], outcome='worker_lost', error='recorded worker ownership is no longer valid')
+                            gate.release_owner(job['run_id'])
+                        elif time.time() - job['started'] > config.job_timeout_seconds:
+                            stop_run(config, job['run_id'], force=time.time() - job['started'] > config.job_timeout_seconds + 30)
+                for instance in config.stores:
+                    try:
+                        current = instance.settings.stat().st_mtime_ns
+                    except OSError:
+                        continue
+                    if modified[instance.name] != current:
+                        modified[instance.name] = current
+                        for kind in ('ingest', 'profiles', 'digests'):
+                            queue.request(instance.name, kind)
+                while len(active) < config.parallel_stores and not stop_event.is_set():
+                    run = queue.claim()
+                    if run is None:
+                        break
+                    try:
+                        active[run['id']] = spawn_worker(config, run)
+                        queue.start(run['id'], active[run['id']].pid, allow_finished=True)
+                    except sqlite3.OperationalError:
+                        # A spawned worker may already own this run. Keep its
+                        # process and durable claim intact while the DB is busy.
+                        raise
+                    except Exception as exc:
+                        queue.finish(run['id'], outcome='error', error=f'worker launch failed: {type(exc).__name__}')
+            except sqlite3.OperationalError as exc:
+                code = getattr(exc, 'sqlite_errorcode', None)
+                if (code is not None and (code & 0xff) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)) or (code is None and str(exc) not in ('database is locked', 'database table is locked')):
+                    raise
+                print('[scheduler] coordinator busy; retrying without releasing owned work', file=sys.stderr, flush=True)
             stop_event.wait(1)
     # Children keep their own heartbeats and durable ownership. A graceful
     # supervisor stop drains existing work; restart can adopt those workers.

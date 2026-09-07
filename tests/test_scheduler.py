@@ -4,13 +4,15 @@ import os
 from pathlib import Path
 import tempfile
 import subprocess
+import sqlite3
 import sys
 import unittest
 from unittest import mock
 
 from agentic_memory.scheduler_config import ServiceConfig, ScheduledStore, load_service
 from agentic_memory.scheduler_queue import WorkQueue
-from agentic_memory.scheduler import worker
+from agentic_memory.scheduler import worker, service_status, serve
+from agentic_memory.provider_limits import ProviderGate
 from agentic_memory.scheduler_install import build_plist, owned_plist, service_control
 from test_codex import RecordingEmbedder, write_rollout
 
@@ -33,6 +35,52 @@ class SchedulerQueueTests(unittest.TestCase):
         self.assertIsNone(other.claim(now=10**10))
         self.queue.finish(one['id'], now=10**10)
         self.assertEqual(other.claim(now=10**10)['instance'], one['instance'])
+
+    def test_status_does_not_compete_for_a_coordinator_write_lock(self):
+        ProviderGate(self.config.db_path)
+        writer = self.queue.connect()
+        self.addCleanup(writer.close)
+        writer.execute('BEGIN IMMEDIATE')
+        writer.execute("UPDATE scheduled_stores SET enabled=0 WHERE name='a'")
+        before = self.config.db_path.stat().st_mtime_ns
+        status = service_status(self.config)
+        self.assertEqual(len(status['jobs']), 6)
+        self.assertTrue(all(j['enabled'] for j in status['jobs']))
+        self.assertEqual(self.config.db_path.stat().st_mtime_ns, before)
+        self.assertEqual(status['providers']['active'], [])
+        writer.rollback()
+
+    def test_readonly_status_cannot_initialize_or_mutate_the_coordinator(self):
+        readonly = WorkQueue(self.config, readonly=True)
+        with self.assertRaises(sqlite3.OperationalError):
+            readonly.set_enabled('a', False)
+        absent = replace(self.config, data_dir=self.root/'missing')
+        with self.assertRaises(sqlite3.OperationalError):
+            service_status(absent)
+        self.assertFalse(absent.data_dir.exists())
+
+    def test_supervisor_retries_busy_heartbeat_without_releasing_work(self):
+        import threading
+        from contextlib import nullcontext
+        stop = threading.Event()
+        queue = mock.Mock()
+        def recover():
+            stop.set()
+            return []
+        queue.supervisor_heartbeat.side_effect = [sqlite3.OperationalError('database is locked'), None]
+        queue.recover.side_effect = recover
+        queue.status.return_value = {'jobs': []}
+        for store in self.config.stores:
+            store.settings.touch()
+        with mock.patch('agentic_memory.scheduler.load_service', return_value=self.config), \
+             mock.patch('agentic_memory.scheduler.WorkQueue', return_value=queue), \
+             mock.patch('agentic_memory.scheduler._gate') as gate, \
+             mock.patch('agentic_memory.scheduler.supervisor_lock', return_value=nullcontext()), \
+             mock.patch('agentic_memory.scheduler.signal.signal'):
+            serve(self.config.path, stop_event=stop)
+        self.assertEqual(queue.supervisor_heartbeat.call_count, 2)
+        queue.finish.assert_not_called()
+        gate.return_value.release_owner.assert_not_called()
 
     def test_disable_persists_across_restart_and_preserves_active_jobs(self):
         run = self.queue.claim(instance='a', explicit=True)

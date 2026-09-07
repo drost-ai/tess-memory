@@ -266,6 +266,9 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
     if args.action == 'run':
         return run_once(path, args.instance, args.kind)
     config = load_service(path)
+    if args.action == 'status':
+        print(json.dumps(service_status(config), indent=2))
+        return 0
     queue = WorkQueue(config)
     if args.action in ('enable', 'disable'):
         queue.set_enabled(args.instance, args.action == 'enable')

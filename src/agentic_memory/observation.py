@@ -7,6 +7,7 @@ from pathlib import Path
 import sqlite3
 import time
 
+from .freshness import safe_error
 from .scheduler import service_status
 from .scheduler_config import load_service
 
@@ -23,7 +24,7 @@ def private_json(path, value):
 
 
 def operation_peaks(config, since):
-    db = sqlite3.connect(config.db_path)
+    db = sqlite3.connect(config.db_path.resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
     try:
         rows = db.execute('SELECT provider,kind,started,ended FROM call_receipts WHERE ended IS NULL OR ended>=?', (since,)).fetchall()
     finally:
@@ -50,44 +51,72 @@ def observe(config_path: Path, output: Path, *, seconds=86400, interval=60):
     output.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     started = time.time()
     history = output.with_suffix('.jsonl')
-    observations = 0
-    first_success, latest_success = {}, {}
+    observations = sampling_errors = 0
+    latest_success = {}
+    expected_enabled = None
+    disabled_during_observation = set()
+    limit_violation_observed = False
     max_gap = 0
     unhealthy = max_unhealthy = 0
     previous = started
     while True:
         now = time.time()
-        status = service_status(config)
         max_gap = max(max_gap, now - previous)
         previous = now
         observations += 1
-        enabled = {j['instance'] for j in status['jobs'] if j['enabled']}
-        supervisor = status.get('supervisor') or {}
-        healthy = bool(supervisor.get('process_alive') and supervisor.get('heartbeat_age_seconds', float('inf')) <= max(15, interval * 2))
+        error = None
+        try:
+            status = service_status(config)
+            peaks = operation_peaks(config, started)
+        except (sqlite3.Error, OSError) as exc:
+            # Monitoring must report failed samples and keep observing. A
+            # transient lock must not leave a stale, apparently healthy file.
+            status, peaks = None, None
+            error = safe_error(exc)
+            sampling_errors += 1
+        healthy = False
+        if status is not None:
+            enabled = {j['instance'] for j in status['jobs'] if j['enabled']}
+            if expected_enabled is None:
+                expected_enabled = enabled
+            disabled_during_observation.update(expected_enabled - enabled)
+            supervisor = status.get('supervisor') or {}
+            stores_available = all(status['stores'].get(name, {}).get('sessions') is not None for name in expected_enabled)
+            healthy = bool(stores_available and supervisor.get('process_alive') and
+                           supervisor.get('heartbeat_age_seconds', float('inf')) <= max(15, interval * 2))
+            for job in status['jobs']:
+                if job['kind'] == 'ingest' and job['last_success']:
+                    latest_success[job['instance']] = job['last_success']
+            summary = {'at': now, 'supervisor': status['supervisor'],
+                       'stores': {name: {'sessions': data.get('sessions'), 'ingestion': data.get('ingestion'),
+                                         'status': data.get('status'), 'error': data.get('error')}
+                                  for name, data in status['stores'].items()},
+                       'active_calls': status['providers']['active'], 'enabled_stores': sorted(enabled),
+                       'sampling_error': None}
+            limit_violation_observed |= not peaks['within_limits']
+        else:
+            summary = {'at': now, 'supervisor': None, 'stores': {}, 'active_calls': None,
+                       'enabled_stores': None, 'sampling_error': error}
         unhealthy = 0 if healthy else unhealthy + 1
         max_unhealthy = max(max_unhealthy, unhealthy)
-        for job in status['jobs']:
-            if job['kind'] == 'ingest' and job['last_success']:
-                first_success.setdefault(job['instance'], job['last_success'])
-                latest_success[job['instance']] = job['last_success']
-        summary = {'at': now, 'supervisor': status['supervisor'],
-                   'stores': {name: {'sessions': data.get('sessions'), 'ingestion': data.get('ingestion')}
-                              for name, data in status['stores'].items()},
-                   'active_calls': status['providers']['active'], 'enabled_stores': sorted(enabled)}
         with history.open('a') as handle:
             os.fchmod(handle.fileno(), 0o600)
             handle.write(json.dumps(summary) + '\n')
         finished = now - started >= seconds
-        peaks = operation_peaks(config, started)
-        completed_passes = {name: latest_success.get(name, 0) > started for name in enabled}
+        completed_passes = {name: latest_success.get(name, 0) > started for name in (expected_enabled or ())}
         report = {'status': 'complete' if finished else 'observing', 'started_at': started,
                   'updated_at': now, 'requested_seconds': seconds, 'observed_seconds': now - started,
                   'observations': observations, 'largest_observation_gap_seconds': max_gap,
-                  'operation_peaks': peaks, 'ingest_pass_observed': completed_passes,
+                  'sampling_errors': sampling_errors, 'last_sampling_error': error,
+                  'disabled_during_observation': sorted(disabled_during_observation),
+                  'operation_peaks': peaks, 'limit_violation_observed': limit_violation_observed,
+                  'ingest_pass_observed': completed_passes,
                   'supervisor_healthy_at_finish': healthy, 'max_consecutive_unhealthy_samples': max_unhealthy,
                   'latest': summary,
-                  'passed': bool(finished and enabled and all(completed_passes.values()) and peaks['within_limits'] and healthy and max_unhealthy <= 1),
-                  'scope': 'Operational observation only; source problems and model-quality results require their separate acceptance review.'}
+                  'passed': bool(finished and completed_passes and all(completed_passes.values()) and
+                                 not disabled_during_observation and not limit_violation_observed and
+                                 peaks and peaks['within_limits'] and healthy and max_unhealthy <= 1),
+                  'scope': 'Operational observation only; source problems, observation gaps and model-quality results require their separate acceptance review.'}
         private_json(output, report)
         if finished:
             return report
