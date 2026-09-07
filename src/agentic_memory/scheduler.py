@@ -32,6 +32,35 @@ def _gate(config):
                         provider_limits=config.provider_limits)
 
 
+def service_status(config):
+    from .freshness import safe_error, store_status
+    queue = WorkQueue(config)
+    result = {**queue.status(), 'providers': _gate(config).status(), 'stores': {}}
+    for scheduled in config.stores:
+        store = None
+        try:
+            cfg = load_config(scheduled.settings)
+            import tomllib
+            declared = Path(tomllib.loads(scheduled.settings.read_text())['storage']['data_dir']).expanduser()
+            if cfg.data_dir.resolve() != declared.resolve():
+                raise ValueError('environment overrides conflict with this store')
+            if not cfg.db_path.exists():
+                result['stores'][scheduled.name] = {'status': 'not_initialized'}
+                continue
+            store = MemoryStore(cfg.db_path, readonly=True)
+            result['stores'][scheduled.name] = store_status(store, cfg)
+        except Exception as exc:
+            result['stores'][scheduled.name] = {'status': 'unavailable', 'error': safe_error(exc)}
+        finally:
+            if store:
+                store.close()
+    for row in result['jobs']:
+        row['last_error'] = safe_error(row['last_error'])
+    for row in result['recent_runs']:
+        row['error'] = safe_error(row['error'])
+    return result
+
+
 def worker(config_path: Path, run_id: str) -> int:
     config = load_service(config_path)
     queue = WorkQueue(config)
@@ -88,6 +117,8 @@ def worker(config_path: Path, run_id: str) -> int:
             backend = AgentCoreBackend.for_role(cfg, 'fallback')
             fallback = LimitedBackend(backend, gate, budget, provider=provider_key(cfg, cfg.agent_core_fallback_profile), owner=run_id, instance=scheduled.name)
         levels = None if run['kind'] == 'ingest' else ('project',) if run['kind'] == 'profiles' else ('digest',)
+        if levels:
+            store.bootstrap_aggregate_tracking(levels)
         stats = ingest(cfg, store, embedder, llm, fallback,
                        limit=scheduled.sources_per_run if run['kind'] == 'ingest' else None,
                        refresh_aggregates=False if run['kind'] == 'ingest' else True,
@@ -193,8 +224,13 @@ def serve(config_path: Path, *, stop_event=None):
         signal.signal(signal.SIGINT, lambda *_: stop_event.set())
     active = {}
     modified = {s.name: s.settings.stat().st_mtime_ns for s in config.stores}
+    started = time.time()
+    last_heartbeat = 0
     with supervisor_lock(config):
         while not stop_event.is_set():
+            if time.time() - last_heartbeat >= 5:
+                queue.supervisor_heartbeat(os.getpid(), started)
+                last_heartbeat = time.time()
             for identifier, process in list(active.items()):
                 if process.poll() is not None:
                     active.pop(identifier)

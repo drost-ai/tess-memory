@@ -693,6 +693,21 @@ class MemoryStore:
 
     # ---------------- durable aggregate refresh work ----------------
 
+    def bootstrap_aggregate_tracking(self, levels: tuple[str, ...]) -> int:
+        """Schedule legacy scopes that predate the dirty queue, once per scope."""
+        added = 0
+        with self.write_transaction():
+            scopes = set()
+            if 'project' in levels:
+                scopes.update(('project', r[0]) for r in self.db.execute('SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL'))
+            if 'digest' in levels:
+                scopes.update(('digest', week) for r in self.db.execute('SELECT DISTINCT ended_at FROM sessions') if (week := week_start(r[0])))
+            for level, scope in scopes:
+                if self.db.execute('SELECT 1 FROM aggregate_refresh WHERE level=? AND scope=?', (level, scope)).fetchone() is None:
+                    self.mark_aggregate_dirty(level, scope)
+                    added += 1
+        return added
+
     def mark_aggregate_dirty(self, level: str, scope: str) -> None:
         """Call in the transaction that changed the aggregate's source sessions."""
         self.db.execute(

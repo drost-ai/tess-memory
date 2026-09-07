@@ -155,9 +155,11 @@ def _fmt_hit(h: dict) -> str:
     when = (h["ts"] or "")[:10]
     anchor = f" (session {h['session_id']}: {h['session_title']})" if h["session_id"] else ""
     score = f" | score {h['score']}" if h.get("score") is not None else ""
+    from .freshness import describe
+    freshness = '\n  ' + describe(h['freshness']) if h.get('freshness') else ''
     return (
         f"- [{h['level']}/{h['kind']} | {where} | {when}{score}]"
-        f"{anchor}\n  {h['content']}"
+        f"{anchor}\n  {h['content']}{freshness}"
     )
 
 
@@ -227,7 +229,9 @@ def search_memory(
         project=project, levels=(level,) if level else None,
         kinds=(kind,) if kind else None, after=after, before=before,
     ):
-        return "No matching memories found (requested scope is empty)."
+        from .freshness import project_coverage
+        coverage = project_coverage(store, project)
+        return "No matching memories found (requested scope is empty)." + ('\n' + coverage if coverage else '')
     embedder = _get_embedder()
     llm = _get_search_llm(force=mode == "agentic") if mode != "static" else None
     if llm is not None:
@@ -290,9 +294,13 @@ def get_project_context(
     project = to_slug(project)
     store = _get_store()
     parts: list[str] = []
+    from .freshness import describe, project_coverage, rollup_freshness, session_freshness
+    coverage = project_coverage(store, project)
+    if coverage:
+        parts.append('## Ingestion coverage\n' + coverage)
     profile = store.get_profile(project)
     if profile:
-        parts.append(f"## Project profile\n{profile['content']}")
+        parts.append(f"## Project profile\n{profile['content']}\n{describe(rollup_freshness(store, 'project', project))}")
     board = plan.render_board(store, project, max_items=12)
     if board:
         parts.append(
@@ -308,6 +316,7 @@ def get_project_context(
             lines.append(
                 f"- [{when}] {s['title']} (id {s['id']})\n"
                 f"  {s['summary']}\n  Outcome: {s['outcome']}"
+                f"\n  {describe(session_freshness(store, s['id'], CONFIG))}"
             )
         parts.append("## Recent sessions (newest first)\n" + "\n".join(lines))
     if not parts:
@@ -332,6 +341,8 @@ def get_session(
     if not s:
         return f"Unknown session id '{session_id}'."
     mems = store.memories_for_session(session_id)
+    from .freshness import describe, session_freshness
+    freshness = describe(session_freshness(store, session_id, CONFIG))
     mem_lines = "\n".join(
         f"- [{m['kind']} | importance {m['importance']:.1f}] {m['content']}" for m in mems
     ) or "(none extracted)"
@@ -342,7 +353,7 @@ def get_session(
     return (
         f"# {s['title']}\n"
         f"Project: {s['project']} | {(s['started_at'] or '')[:16]} → {(s['ended_at'] or '')[:16]}"
-        f" | branch: {s['git_branch'] or '-'}{parent}\n\n"
+        f" | branch: {s['git_branch'] or '-'}{parent}\n{freshness}\n\n"
         f"## Summary\n{s['summary']}\n\n"
         f"## Outcome\n{s['outcome']}\n\n"
         f"## Memories\n{mem_lines}"
@@ -621,8 +632,13 @@ def plan_get(
 
 @mcp.tool()
 def memory_status() -> str:
-    """Report ingestion statistics for the memory store (diagnostics)."""
-    return json.dumps(_get_store().counts(), indent=2)
+    """Report stored counts, source progress, failures and pending rollups.
+
+    Existing count fields remain at the top level. The ingestion section
+    distinguishes published source coverage from worker/supervisor liveness.
+    """
+    from .freshness import store_status
+    return json.dumps(store_status(_get_store(), CONFIG), indent=2)
 
 
 def run() -> None:

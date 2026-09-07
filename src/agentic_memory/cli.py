@@ -217,7 +217,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     from .store import MemoryStore
 
     store = MemoryStore(CONFIG.db_path)
-    print(json.dumps(store.counts(), indent=2))
+    from .freshness import store_status
+    print(json.dumps(store_status(store, CONFIG), indent=2))
     store.close()
     return 0
 
@@ -248,7 +249,7 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
 
 def cmd_scheduler(args: argparse.Namespace) -> int:
     from pathlib import Path
-    from .scheduler import serve, run_once, worker, stop_run, _gate
+    from .scheduler import serve, run_once, worker, stop_run, service_status
     from .scheduler_config import load_service
     from .scheduler_queue import WorkQueue
     path = Path(args.config).expanduser()
@@ -273,7 +274,7 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
     elif args.action == 'stop-run':
         print(json.dumps({'stopped': stop_run(config, args.run_id, force=args.force)}))
         return 0
-    print(json.dumps({**queue.status(), 'providers': _gate(config).status()}, indent=2))
+    print(json.dumps(service_status(config), indent=2))
     return 0
 
 

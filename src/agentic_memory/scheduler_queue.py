@@ -30,6 +30,9 @@ class WorkQueue:
                     id TEXT PRIMARY KEY, instance TEXT NOT NULL, kind TEXT NOT NULL, pid INTEGER,
                     started REAL NOT NULL, heartbeat REAL, finished REAL, outcome TEXT NOT NULL,
                     stats TEXT, error TEXT, force_retry INTEGER NOT NULL DEFAULT 0);
+                CREATE TABLE IF NOT EXISTS supervisor (
+                    id INTEGER PRIMARY KEY CHECK(id=1), pid INTEGER NOT NULL,
+                    started REAL NOT NULL, heartbeat REAL NOT NULL);
             ''')
             with db:
                 for store in config.stores:
@@ -132,6 +135,15 @@ class WorkQueue:
         finally:
             db.close()
 
+    def supervisor_heartbeat(self, pid, started):
+        db = self.connect()
+        try:
+            with db:
+                db.execute('INSERT INTO supervisor VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET pid=excluded.pid,started=excluded.started,heartbeat=excluded.heartbeat',
+                           (pid, started, time.time()))
+        finally:
+            db.close()
+
     def finish(self, identifier, *, outcome='success', stats=None, error=None, remaining=0, now=None):
         now = time.time() if now is None else now
         db = self.connect()
@@ -179,6 +191,11 @@ class WorkQueue:
                 data = dict(row)
                 data['last_stats'] = json.loads(data['last_stats']) if data['last_stats'] else None
                 jobs.append(data)
-            return {'jobs': jobs, 'recent_runs': [dict(r) for r in db.execute('SELECT id,instance,kind,started,finished,outcome,error FROM runs ORDER BY started DESC LIMIT 30')]}
+            supervisor = db.execute('SELECT pid,started,heartbeat FROM supervisor WHERE id=1').fetchone()
+            health = dict(supervisor) if supervisor else None
+            if health:
+                health['process_alive'] = process_alive(health['pid'])
+                health['heartbeat_age_seconds'] = max(0, time.time() - health['heartbeat'])
+            return {'supervisor': health, 'jobs': jobs, 'recent_runs': [dict(r) for r in db.execute('SELECT id,instance,kind,started,finished,outcome,error FROM runs ORDER BY started DESC LIMIT 30')]}
         finally:
             db.close()

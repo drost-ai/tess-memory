@@ -22,6 +22,7 @@ from .distill import _extract_json
 from .embed import Embedder
 from .llm import AgentCoreBackend
 from .store import MemoryStore
+from .freshness import session_freshness
 
 AGENT_SYSTEM = """\
 You are the retrieval agent inside a long-term memory system for AI coding
@@ -87,7 +88,7 @@ class SearchTrace:
     note: str = ""
 
 
-def _session_evidence(store: MemoryStore, session_id: str) -> dict | None:
+def _session_evidence(store: MemoryStore, session_id: str, cfg=None) -> dict | None:
     s = store.get_session(session_id)
     if not s:
         return None
@@ -108,6 +109,7 @@ def _session_evidence(store: MemoryStore, session_id: str) -> dict | None:
         "project": s["project"],
         "session_id": session_id,
         "session_title": s["title"],
+        "freshness": session_freshness(store, session_id, cfg),
     }
 
 
@@ -122,7 +124,8 @@ def _render_pool(pool: dict[str, dict], snippet: int = 450) -> str:
         text = " ".join(h["content"].split())
         if len(text) > snippet:
             text = text[:snippet] + "…"
-        lines.append(f"#{key} [{h['level']}/{h['kind']} | {where} | {when}{anchor}]\n  {text}")
+        freshness = h.get('freshness', {}).get('status', 'unverified')
+        lines.append(f"#{key} [{h['level']}/{h['kind']} | {where} | {when}{anchor} | freshness={freshness}]\n  {text}")
     return "\n".join(lines)
 
 
@@ -250,7 +253,7 @@ def agentic_search(
             for sid in sids:
                 if sid in trace.sessions or sid not in visible:
                     continue
-                ev = _session_evidence(store, sid)
+                ev = _session_evidence(store, sid, cfg)
                 if ev and (not project or ev["project"] == project):
                     pool[ev["id"]] = ev
                     trace.sessions.append(sid)

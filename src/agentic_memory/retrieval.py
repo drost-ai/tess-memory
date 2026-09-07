@@ -20,6 +20,7 @@ import numpy as np
 from .config import CONFIG
 from .embed import Embedder
 from .store import MemoryStore
+from .freshness import hit_freshness
 
 
 def _recency(ts: str | None, now: datetime, half_life_days: float) -> float:
@@ -135,6 +136,7 @@ def search(
                 "project": r["project"],
                 "session_id": r["session_id"],
                 "session_title": r["session_title"] if "session_title" in r.keys() else None,
+                "freshness": hit_freshness(store, r, CONFIG),
             }
         )
         if len(out) >= limit:
