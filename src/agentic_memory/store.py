@@ -17,10 +17,13 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
+
+from .time_utils import week_start
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files(
@@ -98,6 +101,14 @@ CREATE TABLE IF NOT EXISTS plan_events(
 );
 CREATE INDEX IF NOT EXISTS idx_plan_events_item ON plan_events(item_id);
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
+CREATE TABLE IF NOT EXISTS aggregate_refresh(
+    level TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1,
+    applied_revision INTEGER NOT NULL DEFAULT 0,
+    refreshed_at REAL,
+    PRIMARY KEY(level, scope)
+);
 """
 
 
@@ -130,6 +141,21 @@ class MemoryStore:
         self._migrate()
         self.lock = threading.RLock()  # serializes multi-statement write groups
         self._emb_cache: tuple[np.ndarray, np.ndarray] | None = None  # (ids, matrix)
+        self._emb_cache_data_version: int | None = None
+
+    @contextmanager
+    def write_transaction(self):
+        """Serialize a short write group locally and against other processes."""
+        with self.lock:
+            if not self.db.in_transaction:
+                self.db.execute("BEGIN IMMEDIATE")
+            try:
+                yield
+                self.db.commit()
+            except BaseException:
+                self.db.rollback()
+                self._emb_cache = None
+                raise
 
     def _migrate(self) -> None:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(sessions)")}
@@ -191,6 +217,10 @@ class MemoryStore:
             "SELECT * FROM sessions WHERE id=?", (session_id,)
         ).fetchone()
 
+    def update_session_source(self, session_id: str, source_path: str) -> None:
+        """Relocate source evidence without replacing distilled session state."""
+        self.db.execute("UPDATE sessions SET source_path=? WHERE id=?", (source_path, session_id))
+
     def session_for_file(self, path: str) -> sqlite3.Row | None:
         """Return the stored session tracked by one ingestion source file."""
         return self.db.execute(
@@ -207,12 +237,14 @@ class MemoryStore:
         This is deliberately metadata-only: memory ids, content, tags,
         timestamps, importance, and embedding rows/blobs are untouched. If the
         old project has no sessions left, its rolling profile is retired rather
-        than left behind as a phantom project.
+        than left behind as a phantom project. Both projects and the session's
+        end week are queued for later summary refresh in the same transaction.
+        commit=False leaves transaction ownership to the batch caller.
         """
         project = (project or "").strip()
         if not project:
             raise ValueError("project is required")
-        with self.lock:
+        with self.write_transaction() if commit else self.lock:
             session = self.get_session(session_id)
             if session is None:
                 raise ValueError(f"session '{session_id}' does not exist")
@@ -245,8 +277,12 @@ class MemoryStore:
                 )]
                 self._delete_memory_ids(ids)
                 retired_profiles = len(ids)
-            if commit:
-                self.db.commit()
+            for scope in (old_project, project):
+                if scope:
+                    self.mark_aggregate_dirty("project", scope)
+            week = week_start(session["ended_at"])
+            if week:
+                self.mark_aggregate_dirty("digest", week)
             return {
                 "session_id": session_id,
                 "old_project": old_project,
@@ -259,17 +295,11 @@ class MemoryStore:
         self, assignments: list[tuple[str, str]]
     ) -> list[dict]:
         """Atomically apply a batch of metadata-only project assignments."""
-        with self.lock:
-            try:
-                results = [
-                    self.reattribute_session_project(session_id, project, commit=False)
-                    for session_id, project in assignments
-                ]
-                self.db.commit()
-                return results
-            except Exception:
-                self.db.rollback()
-                raise
+        with self.write_transaction():
+            return [
+                self.reattribute_session_project(session_id, project, commit=False)
+                for session_id, project in assignments
+            ]
 
     def sessions_for_project(self, project: str, limit: int = 50) -> list[sqlite3.Row]:
         return self.db.execute(
@@ -481,19 +511,72 @@ class MemoryStore:
         row.plan_id = item_id
         self.add_memories([row])
 
+    def attach_plan_embedding(self, item_id: int, expected: MemoryRow,
+                              vector: np.ndarray, descriptor: str) -> bool:
+        """Attach an embedding only if the indexed plan text is still current.
+
+        The API call happens before this short transaction. A concurrent edit
+        can replace the mirror while it runs; an old response must never label
+        the new text with the old vector, even if SQLite reuses the row id.
+        """
+        with self.write_transaction():
+            row = self.db.execute(
+                "SELECT id, content, importance, ts, tags FROM memories WHERE plan_id=? AND level='plan'",
+                (item_id,),
+            ).fetchone()
+            if row is None or (row["content"], row["importance"], row["ts"], row["tags"]) != (
+                expected.content, expected.importance, expected.ts, json.dumps(expected.tags),
+            ):
+                return False
+            current = self.get_meta("embedder")
+            if current is not None and current != descriptor:
+                raise ValueError("plan embedding model differs from the memory store")
+            if current is None:
+                self.set_meta("embedder", descriptor)
+            self.db.execute("INSERT OR REPLACE INTO embeddings(memory_id, vector) VALUES(?,?)",
+                            (row["id"], vector.astype(np.float32).tobytes()))
+            self._emb_cache = None
+            return True
+
     # ---------------- search primitives ----------------
 
-    def fts_search(self, query: str, limit: int = 100) -> dict[int, float]:
-        """BM25 keyword search. Returns {memory_id: score} with higher = better."""
+    @staticmethod
+    def _memory_filters(project=None, levels=None, kinds=None, after=None, before=None):
+        clauses, args = [], []
+        if project:
+            clauses.append("m.project=?")
+            args.append(project)
+        for column, values in (("level", levels), ("kind", kinds)):
+            if values:
+                clauses.append(f"m.{column} IN ({','.join('?' for _ in values)})")
+                args.extend(values)
+        for op, value in ((">=", after), ("<=", before)):
+            if value:
+                clauses.append(f"m.ts {op} ?")
+                args.append(value)
+        return (" AND " + " AND ".join(clauses) if clauses else ""), args
+
+    def has_memories(self, project=None, levels=None, kinds=None, after=None, before=None) -> bool:
+        """Structural scope check; no embeddings, relevance inference, or model calls."""
+        where, args = self._memory_filters(project, levels, kinds, after, before)
+        return self.db.execute(
+            "SELECT 1 FROM memories m WHERE 1=1" + where + " LIMIT 1", args
+        ).fetchone() is not None
+
+    def fts_search(self, query: str, limit: int = 100, *, project=None,
+                   levels=None, kinds=None, after=None, before=None) -> dict[int, float]:
+        """BM25 matches with constraints applied BEFORE top-N. Higher is better."""
         tokens = [t.replace('"', "") for t in query.split() if t.strip('"')]
         if not tokens:
             return {}
         fts_query = " OR ".join(f'"{t}"' for t in tokens)
+        where, args = self._memory_filters(project, levels, kinds, after, before)
         try:
             rows = self.db.execute(
-                "SELECT rowid, rank FROM memories_fts WHERE memories_fts MATCH ? "
-                "ORDER BY rank LIMIT ?",
-                (fts_query, limit),
+                "SELECT m.id AS rowid, memories_fts.rank AS rank FROM memories_fts "
+                "JOIN memories m ON m.id=memories_fts.rowid WHERE memories_fts MATCH ?"
+                + where + " ORDER BY rank, m.id LIMIT ?",
+                (fts_query, *args, limit),
             ).fetchall()
         except sqlite3.OperationalError:
             return {}
@@ -501,17 +584,22 @@ class MemoryStore:
         return {r["rowid"]: -float(r["rank"]) for r in rows}
 
     def embedding_matrix(self) -> tuple[np.ndarray, np.ndarray]:
-        """All embeddings as (ids, matrix). Cached until the store mutates."""
-        if self._emb_cache is not None:
+        """Cache embeddings until either this connection or another writes."""
+        with self.lock:
+            version = self.db.execute("PRAGMA data_version").fetchone()[0]
+            if self._emb_cache is not None and self._emb_cache_data_version == version:
+                return self._emb_cache
+            rows = self.db.execute("SELECT memory_id, vector FROM embeddings").fetchall()
+            if not rows:
+                self._emb_cache = (np.empty(0, dtype=np.int64), np.empty((0, 1), dtype=np.float32))
+            else:
+                ids = np.array([r["memory_id"] for r in rows], dtype=np.int64)
+                mat = np.vstack([np.frombuffer(r["vector"], dtype=np.float32) for r in rows])
+                self._emb_cache = (ids, mat)
+            # Stamp the version from BEFORE the read. A concurrent commit
+            # during materialization will invalidate this cache next time.
+            self._emb_cache_data_version = version
             return self._emb_cache
-        rows = self.db.execute("SELECT memory_id, vector FROM embeddings").fetchall()
-        if not rows:
-            self._emb_cache = (np.empty(0, dtype=np.int64), np.empty((0, 1), dtype=np.float32))
-            return self._emb_cache
-        ids = np.array([r["memory_id"] for r in rows], dtype=np.int64)
-        mat = np.vstack([np.frombuffer(r["vector"], dtype=np.float32) for r in rows])
-        self._emb_cache = (ids, mat)
-        return self._emb_cache
 
     def filter_memory_ids(
         self,
@@ -524,24 +612,40 @@ class MemoryStore:
         """Return the id-set matching the filters, or None if no filters given."""
         if not any([project, levels, kinds, after, before]):
             return None
-        q = "SELECT id FROM memories WHERE 1=1"
-        args: list = []
-        if project:
-            q += " AND project=?"
-            args.append(project)
-        if levels:
-            q += f" AND level IN ({','.join('?' for _ in levels)})"
-            args.extend(levels)
-        if kinds:
-            q += f" AND kind IN ({','.join('?' for _ in kinds)})"
-            args.extend(kinds)
-        if after:
-            q += " AND ts >= ?"
-            args.append(after)
-        if before:
-            q += " AND ts <= ?"
-            args.append(before)
-        return {r["id"] for r in self.db.execute(q, args)}
+        where, args = self._memory_filters(project, levels, kinds, after, before)
+        return {r["id"] for r in self.db.execute("SELECT m.id FROM memories m WHERE 1=1" + where, args)}
+
+    # ---------------- durable aggregate refresh work ----------------
+
+    def mark_aggregate_dirty(self, level: str, scope: str) -> None:
+        """Call in the transaction that changed the aggregate's source sessions."""
+        self.db.execute(
+            "INSERT INTO aggregate_refresh(level, scope) VALUES(?,?) "
+            "ON CONFLICT(level, scope) DO UPDATE SET revision=revision+1",
+            (level, scope),
+        )
+
+    def pending_aggregates(self, now: float, interval: float = 0) -> list[sqlite3.Row]:
+        return self.db.execute(
+            "SELECT * FROM aggregate_refresh WHERE revision>applied_revision "
+            "AND (refreshed_at IS NULL OR refreshed_at<=?) ORDER BY level, scope",
+            (now - interval,),
+        ).fetchall()
+
+    def acknowledge_aggregate(self, level: str, scope: str, revision: int, now: float) -> None:
+        """Acknowledge only the version read; concurrent newer work remains dirty."""
+        self.db.execute(
+            "UPDATE aggregate_refresh SET applied_revision=?, refreshed_at=? "
+            "WHERE level=? AND scope=? AND applied_revision<?",
+            (revision, now, level, scope, revision),
+        )
+
+    def aggregate_is_current(self, level: str, scope: str, revision: int) -> bool:
+        """Check inside the replacement transaction after slow provider work."""
+        return self.db.execute(
+            "SELECT 1 FROM aggregate_refresh WHERE level=? AND scope=? "
+            "AND revision=? AND applied_revision<revision", (level, scope, revision)
+        ).fetchone() is not None
 
     # ---------------- meta / vector-space guard ----------------
 

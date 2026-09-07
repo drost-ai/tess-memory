@@ -80,10 +80,29 @@ def _default_stores() -> list[DataStore]:
     ]
 
 
+@dataclass(frozen=True)
+class CodexSettings:
+    """Options applied only to type='codex' sources, never existing parsers."""
+
+    tool_output_chars: int = 2_000
+    include_subagents: bool = False
+    batch_size: int = 4
+    max_record_bytes: int = 64 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        for name in ("tool_output_chars", "batch_size", "max_record_bytes"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"[codex] {name} must be a positive integer")
+        if not isinstance(self.include_subagents, bool):
+            raise ValueError("[codex] include_subagents must be a boolean")
+
+
 @dataclass
 class Config:
     # -- data stores ---------------------------------------------------------
     data_stores: list[DataStore] = field(default_factory=_default_stores)
+    codex: CodexSettings = field(default_factory=CodexSettings)
 
     # -- planning ------------------------------------------------------------
     # A persistent AI can bind all plan writes to one durable logical project.
@@ -104,14 +123,21 @@ class Config:
         default_factory=lambda: Path("~/.tess-memory/providers.yaml").expanduser()
     )
     agent_core_profile: str = "strong"
+    # Empty overrides preserve the selected profile's model/effort defaults.
+    agent_core_model: str = ""
+    agent_core_reasoning_effort: str = ""
     # Profile to retry with when the primary model refuses (safety classifiers).
     # Empty = no fallback; refused sessions degrade to extractive digests.
     agent_core_fallback_profile: str = ""
+    agent_core_fallback_model: str = ""
+    agent_core_fallback_reasoning_effort: str = ""
     llm_workers: int = 4
 
     # -- search agent (bounded agentic retrieval inside search_memory) -------
     search_agent: bool = True            # False = plain static hybrid search
     search_profile: str = ""             # provider profile; empty = llm profile
+    search_model: str = ""
+    search_reasoning_effort: str = ""
     search_max_rounds: int = 4           # LLM calls per search (last is forced finish)
     search_queries_per_round: int = 3    # max sub-queries the agent may fan out
     search_per_query_limit: int = 8      # static hits pulled per sub-query
@@ -129,12 +155,16 @@ class Config:
     segment_overlap: int = 7_500         # overlap between consecutive segments
     max_segments: int = 20               # hard cap on map calls per session
     segment_hard_cap: int = 600_000      # max grown segment size before even sampling
+    segment_workers: int = 1            # per-session map concurrency; shares llm_workers cap
+    distillation_cache: bool = False    # exact successful requests, private to this data_dir
     chunk_chars: int = 6_000             # window cap within an exchange-aligned chunk
     tool_result_snippet: int = 400       # tool-result truncation in rendered turns
     min_session_chars: int = 200         # skip sessions with less dialogue than this
     min_importance: float = 0.25         # drop distilled memories rated below this
     profile_session_limit: int = 30      # sessions fed into a project profile
     digest_session_limit: int = 40       # sessions fed into a weekly digest
+    quiet_seconds: float = 0.0          # defer recently modified sources; 0 preserves eager ingest
+    aggregate_refresh_seconds: float = 0.0  # minimum time since each successful aggregate refresh
 
     # -- retrieval -----------------------------------------------------------
     half_life_days: float = 30.0
@@ -188,6 +218,7 @@ def load_config(path: Path | None = None) -> Config:
         raw = {}
 
     cfg = Config()
+    cfg.codex = CodexSettings(**raw.get("codex", {}))
     planning = raw.get("planning", {})
     storage = raw.get("storage", {})
     llm = raw.get("llm", {})
@@ -234,6 +265,26 @@ def load_config(path: Path | None = None) -> Config:
 
     cfg.search_agent = bool(search.get("agent", cfg.search_agent))
     cfg.search_profile = search.get("profile", cfg.search_profile)
+    for section_name, section, fields in (
+        ("llm", llm, {
+            "model": "agent_core_model", "reasoning_effort": "agent_core_reasoning_effort",
+            "fallback_model": "agent_core_fallback_model",
+            "fallback_reasoning_effort": "agent_core_fallback_reasoning_effort",
+        }),
+        ("search", search, {"model": "search_model", "reasoning_effort": "search_reasoning_effort"}),
+    ):
+        for key, attribute in fields.items():
+            if key not in section:
+                continue
+            value = section[key]
+            if not isinstance(value, str):
+                raise ValueError(f"[{section_name}] {key} must be a string")
+            value = value.strip()
+            if "reasoning_effort" in key:
+                value = value.lower()
+                if value and value not in {"low", "medium", "high", "xhigh", "max"}:
+                    raise ValueError(f"[{section_name}] {key} must be low, medium, high, xhigh, or max")
+            setattr(cfg, attribute, value)
     for key in ("max_rounds", "queries_per_round", "per_query_limit", "evidence_limit"):
         if key in search:
             setattr(cfg, f"search_{key}", int(search[key]))
@@ -252,6 +303,21 @@ def load_config(path: Path | None = None) -> Config:
             setattr(cfg, key, int(ing[key]))
     if "min_importance" in ing:
         cfg.min_importance = float(ing["min_importance"])
+    for key in ("quiet_seconds", "aggregate_refresh_seconds"):
+        if key in ing:
+            value = ing[key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value < float("inf"):
+                raise ValueError(f"[ingest] {key} must be a finite nonnegative number")
+            setattr(cfg, key, float(value))
+    if "segment_workers" in ing:
+        value = ing["segment_workers"]
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise ValueError("[ingest] segment_workers must be a positive integer")
+        cfg.segment_workers = value
+    if "distillation_cache" in ing:
+        if not isinstance(ing["distillation_cache"], bool):
+            raise ValueError("[ingest] distillation_cache must be a boolean")
+        cfg.distillation_cache = ing["distillation_cache"]
 
     cfg.half_life_days = float(ret.get("half_life_days", cfg.half_life_days))
     cfg.w_semantic = float(weights.get("semantic", cfg.w_semantic))

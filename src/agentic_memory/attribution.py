@@ -35,7 +35,7 @@ class AttributionStats:
     changes: list[dict] = field(default_factory=list)
 
 
-def source_adapter(ds: DataStore) -> tuple[list[Discovered], Parser]:
+def source_adapter(ds: DataStore, *, codex_catalog=None) -> tuple[list[Discovered], Parser]:
     """Return native discovery results and parser for one configured store.
 
     Native discovery intentionally sees the source project before a fixed
@@ -51,9 +51,14 @@ def source_adapter(ds: DataStore) -> tuple[list[Discovered], Parser]:
             agent_core.discover_transcript_files(ds.path, ds.exclude, ds.project),
             agent_core.parse_transcript_file,
         )
+    if ds.type == "codex":
+        from .codex import CodexCatalog
+
+        catalog = codex_catalog or CodexCatalog([ds])
+        return catalog.discover(ds), catalog.parse
     raise ValueError(
         f"data_store '{ds.name}': unknown type '{ds.type}' "
-        "(implemented: 'claude-code', 'agent-core', 'transcript')"
+        "(implemented: 'claude-code', 'agent-core', 'transcript', 'codex')"
     )
 
 
@@ -68,9 +73,16 @@ def reconcile_project_attribution(
     safe migrations of already-paid-for distilled and embedded artifacts.
     """
     stats = AttributionStats()
+    codex_catalog = None
+    if any(ds.type == "codex" for ds in cfg.data_stores):
+        from .codex import CodexCatalog
+
+        codex_catalog = CodexCatalog(cfg.data_stores, cfg.codex)
+        if codex_catalog.errors:
+            raise ValueError(f"Codex discovery failed: {codex_catalog.errors}")
     assignments: list[tuple[str, str]] = []
     for ds in cfg.data_stores:
-        found, _ = source_adapter(ds)
+        found, _ = source_adapter(ds, codex_catalog=codex_catalog)
         for path, source_project, _parent in found:
             stats.scanned += 1
             session = store.session_for_file(str(path))

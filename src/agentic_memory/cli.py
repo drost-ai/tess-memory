@@ -9,35 +9,118 @@ import sys
 from .config import CONFIG
 
 
+def _positive_int(raw: str) -> int:
+    value = int(raw)
+    if value <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return value
+
+
+def _aggregate_flags(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--skip-aggregates", dest="refresh_aggregates", action="store_false",
+                       help="queue dirty aggregates for a later refresh")
+    group.add_argument("--refresh-aggregates", dest="refresh_aggregates", action="store_true",
+                       help="refresh pending aggregates regardless of cadence")
+    parser.set_defaults(refresh_aggregates=None)
+
+
 def cmd_ingest(args: argparse.Namespace) -> int:
     from .embed import make_embedder
     from .ingest import ingest
     from .llm import AgentCoreBackend
     from .store import MemoryStore
 
-    CONFIG.ensure_dirs()
-    store = MemoryStore(CONFIG.db_path)
-    embedder = make_embedder(CONFIG)
-    llm = None if args.no_llm else AgentCoreBackend(CONFIG)
+    cfg = CONFIG
+    if getattr(args, "codex_only", False):
+        from pathlib import Path
+        from .codex import load_dedicated_config
+
+        path = Path(args.settings).expanduser()
+        try:
+            cfg = load_dedicated_config(path)
+        except (OSError, ValueError, TypeError) as exc:
+            print(f"[codex] invalid dedicated settings: {exc}", file=sys.stderr)
+            return 2
+    cfg.ensure_dirs()
+    store = MemoryStore(cfg.db_path)
+    embedder = make_embedder(cfg)
+    llm = None if args.no_llm else AgentCoreBackend(cfg)
     fallback = None
-    if llm is not None and CONFIG.agent_core_fallback_profile:
+    if llm is not None and cfg.agent_core_fallback_profile:
         # probe=False: no API call unless a refusal actually needs it
-        fallback = AgentCoreBackend(
-            CONFIG, probe=False, profile=CONFIG.agent_core_fallback_profile
-        )
-    for ds in CONFIG.data_stores:
+        fallback = AgentCoreBackend.for_role(cfg, "fallback")
+    for ds in cfg.data_stores:
         print(f"[ingest] data_store {ds.name} ({ds.type}): {ds.path}", file=sys.stderr)
-    print(f"[ingest] db={CONFIG.db_path}", file=sys.stderr)
+    print(f"[ingest] db={cfg.db_path}", file=sys.stderr)
     print(f"[ingest] llm={'none (extractive-only)' if llm is None else llm.name}", file=sys.stderr)
     if fallback is not None:
         print(f"[ingest] refusal fallback={fallback.name}", file=sys.stderr)
-    stats = ingest(
-        CONFIG, store, embedder, llm, fallback_llm=fallback,
-        limit=args.limit, retry_extractive=args.retry_extractive,
-    )
-    print(json.dumps(vars(stats), indent=2))
-    store.close()
-    return 0
+    try:
+        stats = ingest(
+            cfg, store, embedder, llm, fallback_llm=fallback,
+            limit=args.limit, retry_extractive=args.retry_extractive,
+            session_ids=set(args.session_id) if getattr(args, "session_id", None) else None,
+            refresh_aggregates=getattr(args, "refresh_aggregates", None),
+            aggregates_only=getattr(args, "aggregates_only", False),
+        )
+    except ValueError as exc:
+        if not any(ds.type == "codex" for ds in cfg.data_stores):
+            raise
+        print(f"[codex] ingestion stopped: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        store.close()
+    counts = dict(vars(stats))
+    if not any(ds.type == "codex" for ds in cfg.data_stores):
+        counts.pop("codex_unchanged", None)
+    print(json.dumps(counts, indent=2))
+    return 1 if stats.errors else 0
+
+
+def cmd_inspect_codex(args: argparse.Namespace) -> int:
+    """Read and normalize locally; never construct a memory store or model."""
+    from dataclasses import replace
+    from pathlib import Path
+    from .codex import CodexCatalog, CodexParseError
+    from .config import DataStore
+
+    stores = ([DataStore(name=f"codex-{i}", path=Path(p).expanduser(), type="codex")
+               for i, p in enumerate(args.roots)] if args.roots else
+              [ds for ds in CONFIG.data_stores if ds.type == "codex"])
+    if not stores:
+        print("Provide Codex home paths, or configure type='codex' data stores.", file=sys.stderr)
+        return 2
+    options = CONFIG.codex
+    if args.tool_output_chars is not None:
+        options = replace(options, tool_output_chars=args.tool_output_chars)
+    catalog = CodexCatalog(stores, options)
+    selected = list(catalog.sources.values())
+    if args.session_id:
+        raw_id = args.session_id.removeprefix("codex:")
+        selected = [source for source in selected if source.session_id == raw_id]
+        if not selected:
+            catalog.errors[args.session_id] = "session was not discovered"
+    if args.limit is not None:
+        selected = selected[:args.limit]
+    output = {"discovered": len(catalog.sources), "subagents_skipped": catalog.skipped_subagents,
+              "warnings": catalog.warnings, "errors": dict(catalog.errors), "sessions": []}
+    for source in selected:
+        try:
+            st, report = catalog.inspect(source.path, min_chars=0)
+            output["sessions"].append({
+                "source": str(source.path), "session_id": "codex:" + source.session_id,
+                "project": st.project if st else source.store.resolve_project(source.project),
+                "usable": st is not None, "turns": len(st.turns) if st else 0,
+                "text_chars": sum(len(t.text) for t in st.turns) if st else 0,
+                "user_turns": st.n_user if st else 0,
+                "assistant_turns": st.n_assistant if st else 0,
+                "normalization": report.as_dict(),
+            })
+        except (OSError, CodexParseError) as exc:
+            output["errors"][str(source.path)] = str(exc)
+    print(json.dumps(output, indent=2))
+    return 1 if output["errors"] else 0
 
 
 def cmd_search(args: argparse.Namespace) -> int:
@@ -47,15 +130,19 @@ def cmd_search(args: argparse.Namespace) -> int:
 
     project = _to_slug(args.project) if args.project else None
     store = MemoryStore(CONFIG.db_path)
+    if (args.limit is not None and args.limit <= 0) or not store.has_memories(
+        project=project, levels=(args.level,) if args.level else None,
+    ):
+        print("no results (requested scope is empty)")
+        store.close()
+        return 0
     embedder = make_embedder(CONFIG)
     hits = None
     if CONFIG.search_agent and not args.static:
         from .llm import AgentCoreBackend
         from .search_agent import agentic_search
 
-        llm = AgentCoreBackend(
-            CONFIG, probe=False, profile=CONFIG.search_profile or None
-        )
+        llm = AgentCoreBackend.for_role(CONFIG, "search", probe=True)
         print(f"[search] retrieval agent: {llm.name}", file=sys.stderr)
         hits, trace = agentic_search(
             CONFIG, store, embedder, llm, args.query,
@@ -141,6 +228,23 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_codex_serve(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from .codex import load_dedicated_config
+
+    try:
+        cfg = load_dedicated_config(Path(args.settings))
+    except (OSError, ValueError, TypeError) as exc:
+        print(f"[codex] invalid dedicated settings: {exc}", file=sys.stderr)
+        return 2
+    from . import server, retrieval
+
+    server.CONFIG = cfg
+    retrieval.CONFIG = cfg
+    server.run()
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentic-memory")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -151,7 +255,28 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--retry-extractive", action="store_true",
                    help="re-distill sessions previously degraded to extractive "
                         "digests (e.g. past model refusals)")
+    _aggregate_flags(p)
     p.set_defaults(fn=cmd_ingest)
+
+    p = sub.add_parser("codex-ingest", help="Ingest Codex into an explicitly configured separate store")
+    p.add_argument("--settings", required=True, help="existing Codex-only settings.toml with an explicit data directory")
+    p.add_argument("--limit", type=_positive_int, default=None)
+    p.add_argument("--no-llm", action="store_true", help="skip distillation (embedding calls still run)")
+    p.add_argument("--retry-extractive", action="store_true")
+    p.add_argument("--session-id", action="append", help="ingest only this session; repeat to select a pilot batch")
+    _aggregate_flags(p)
+    p.set_defaults(fn=cmd_ingest, codex_only=True)
+
+    p = sub.add_parser("refresh-aggregates", help="Refresh pending profiles/digests without scanning transcripts")
+    p.set_defaults(fn=cmd_ingest, aggregates_only=True, refresh_aggregates=True,
+                   no_llm=False, limit=None, retry_extractive=False)
+
+    p = sub.add_parser("inspect-codex", help="Inspect cleaned Codex history without model calls or database writes")
+    p.add_argument("roots", nargs="*", help="Codex homes, or their sessions/archived_sessions directories")
+    p.add_argument("--session-id", help="inspect one session, with or without the codex: prefix")
+    p.add_argument("--limit", type=_positive_int, default=None)
+    p.add_argument("--tool-output-chars", type=_positive_int, default=None)
+    p.set_defaults(fn=cmd_inspect_codex)
 
     p = sub.add_parser(
         "reconcile-attribution",
@@ -187,6 +312,10 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("serve", help="Run the MCP server (stdio)")
     p.set_defaults(fn=cmd_serve)
+
+    p = sub.add_parser("codex-serve", help="Serve an explicitly configured, dedicated Codex memory store")
+    p.add_argument("--settings", required=True)
+    p.set_defaults(fn=cmd_codex_serve)
 
     args = parser.parse_args(argv)
     return args.fn(args)

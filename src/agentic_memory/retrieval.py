@@ -60,6 +60,10 @@ def search(
 ) -> list[dict]:
     limit = limit if limit is not None else CONFIG.default_limit
     candidates = candidates if candidates is not None else CONFIG.candidate_pool
+    if limit <= 0 or not store.has_memories(
+        project=project, levels=levels, kinds=kinds, after=after, before=before
+    ):
+        return []
     store.assert_embedder(embedder.descriptor)
     allowed = store.filter_memory_ids(
         project=project, levels=levels, kinds=kinds, after=after, before=before
@@ -67,22 +71,21 @@ def search(
 
     # Semantic signal
     ids, mat = store.embedding_matrix()
+    if allowed is not None and len(ids):
+        mask = np.array([i in allowed for i in ids])
+        ids, mat = ids[mask], mat[mask]
     sem: dict[int, float] = {}
     if len(ids):
         qv = embedder.embed_query(query)
         sims = mat @ qv
-        if allowed is not None:
-            mask = np.array([i in allowed for i in ids])
-            sims = np.where(mask, sims, -np.inf)
         top = np.argsort(-sims)[:candidates]
         for idx in top:
             if np.isfinite(sims[idx]):
                 sem[int(ids[idx])] = float(sims[idx])
 
     # Keyword signal
-    bm25 = store.fts_search(query, limit=candidates)
-    if allowed is not None:
-        bm25 = {k: v for k, v in bm25.items() if k in allowed}
+    bm25 = store.fts_search(query, limit=candidates, project=project,
+                            levels=levels, kinds=kinds, after=after, before=before)
 
     pool = set(sem) | set(bm25)
     if not pool:
@@ -102,7 +105,7 @@ def search(
             + CONFIG.w_recency * _recency(r["ts"], now, CONFIG.half_life_days)
         )
         scored.append((score, r))
-    scored.sort(key=lambda x: -x[0])
+    scored.sort(key=lambda x: (-x[0], x[1]["id"]))
 
     # Light diversity: cap results from the same session.
     out, per_session = [], {}

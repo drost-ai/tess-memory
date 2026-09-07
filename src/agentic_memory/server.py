@@ -80,10 +80,12 @@ search_memory for specifics (write SELF-CONTAINED queries — you have the
 conversation context, the search does not); get_session to drill into any
 session id a result mentions.
 
-search_memory runs a retrieval agent inside the server: it reformulates,
-fans out sub-queries, follows session links, and returns curated evidence.
-State the FULL information need in one call rather than firing keyword
-fragments; if something is missing, refine the request and call again.
+For routine/direct recall, use search_memory(mode='static'): one hybrid
+lookup with no retrieval LLM. Use mode='agentic' for multi-step historical
+research: the retrieval agent reformulates, fans out sub-queries, follows
+session links, and returns curated evidence. mode='auto' preserves the
+configured default. State the FULL information need in one call rather than
+firing keyword fragments; if something is missing, refine the request.
 """
 
 mcp = MCPServer("agentic-memory", instructions=INSTRUCTIONS)
@@ -93,28 +95,25 @@ _embedder: Embedder | None = None
 _search_llm: object = None  # None = not tried; False = unavailable
 
 
-def _get_search_llm():
+def _get_search_llm(force: bool = False):
     """Lazily construct the search-agent backend; False if unusable."""
     global _search_llm
+    if not force and not CONFIG.search_agent:
+        return None
     if _search_llm is None:
-        if not CONFIG.search_agent:
+        try:
+            from .llm import AgentCoreBackend
+
+            _search_llm = AgentCoreBackend.for_role(CONFIG, "search")
+        except Exception as e:  # noqa: BLE001 — degrade to static search
+            import sys
+
+            print(
+                f"[agentic-memory] search agent unavailable ({e}); "
+                "falling back to static retrieval",
+                file=sys.stderr,
+            )
             _search_llm = False
-        else:
-            try:
-                from .llm import AgentCoreBackend
-
-                _search_llm = AgentCoreBackend(
-                    CONFIG, probe=False, profile=CONFIG.search_profile or None
-                )
-            except Exception as e:  # noqa: BLE001 — degrade to static search
-                import sys
-
-                print(
-                    f"[agentic-memory] search agent unavailable ({e}); "
-                    "falling back to static retrieval",
-                    file=sys.stderr,
-                )
-                _search_llm = False
     return _search_llm or None
 
 
@@ -199,12 +198,21 @@ def search_memory(
         "Max evidence items returned (default: search.evidence_limit in "
         "settings.toml, 12)."
     ))] = None,
+    mode: Annotated[str, Field(description=(
+        "'static' runs one hybrid lookup without the retrieval LLM (routine recall); "
+        "'agentic' enables multi-step search; 'auto' follows [search] agent."
+    ))] = "auto",
 ) -> str:
-    """Agentic search over everything in past-session memory.
+    """Search past-session memory and authored plans.
+
+    Use mode='static' for routine/direct recall (one hybrid lookup, no
+    retrieval LLM), or mode='agentic' for multi-step historical research.
+    mode='auto' follows the configured default. Structurally empty scopes
+    return immediately without constructing embedding or LLM providers.
 
     Use it for: "have we solved this before", past decisions and their
     rationale, exact commands/flags/paths from earlier work, error messages
-    seen before, and the user's preferences. A retrieval agent inside the
+    seen before, and the user's preferences. In agentic mode, an agent inside the
     server reformulates the query, fans out sub-searches, follows session
     links across projects, and returns curated evidence (never a synthesized
     answer) — so state the FULL information need in one call instead of
@@ -212,8 +220,16 @@ def search_memory(
     get_session. If something is missing, refine the request and call again.
     """
     project = to_slug(project) if project else None
-    store, embedder = _get_store(), _get_embedder()
-    llm = _get_search_llm()
+    if mode not in {"auto", "static", "agentic"}:
+        raise ValueError("mode must be auto, static, or agentic")
+    store = _get_store()
+    if (limit is not None and limit <= 0) or not store.has_memories(
+        project=project, levels=(level,) if level else None,
+        kinds=(kind,) if kind else None, after=after, before=before,
+    ):
+        return "No matching memories found (requested scope is empty)."
+    embedder = _get_embedder()
+    llm = _get_search_llm(force=mode == "agentic") if mode != "static" else None
     if llm is not None:
         try:
             from .search_agent import agentic_search
@@ -303,7 +319,7 @@ def get_project_context(
 def get_session(
     session_id: Annotated[str, Field(description=(
         "Session id exactly as shown in search results or project context "
-        "(a UUID for main sessions, 'agent-...' for subagent tasks)."
+        "(a UUID, 'codex:<native-id>' for Codex, or 'agent-...' for subagent tasks)."
     ))],
 ) -> str:
     """Drill into one past session: full summary, outcome, and its memories.
@@ -321,7 +337,8 @@ def get_session(
     ) or "(none extracted)"
     parent = ""
     if "parent_session" in s.keys() and s["parent_session"]:
-        parent = f"\nSubagent task within session {s['parent_session']}."
+        label = "Parent history" if session_id.startswith("codex:") else "Subagent task within session"
+        parent = f"\n{label} {s['parent_session']}."
     return (
         f"# {s['title']}\n"
         f"Project: {s['project']} | {(s['started_at'] or '')[:16]} → {(s['ended_at'] or '')[:16]}"

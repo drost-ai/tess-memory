@@ -145,22 +145,27 @@ def index_importance(item) -> float:
     return max(0.3, min(0.9, imp))
 
 
-def _reindex(store: MemoryStore, embedder: Embedder, item) -> None:
+def _write_keyword_mirror(store: MemoryStore, item) -> MemoryRow:
     content = render_for_index(item)
     row = MemoryRow(
         level="plan", kind=item["kind"], content=content,
         importance=index_importance(item), project=item["project"],
         ts=item["updated_at"], tags=json.loads(item["tags"] or "[]"),
     )
+    store.replace_plan_mirror(item["id"], row)
+    return row
+
+
+def _embed_mirror(store: MemoryStore, embedder: Embedder, item, row: MemoryRow) -> None:
     try:
-        row.vector = embedder.embed_passages([content])[0]
+        vector = embedder.embed_passages([row.content])[0]
+        store.attach_plan_embedding(item["id"], row, vector, embedder.descriptor)
     except Exception as e:  # noqa: BLE001 — a failed embed must not block the write
         print(
             f"[plan] embedding failed for #{item['id']} ({e}); "
             "keyword-only until the next update",
             file=sys.stderr,
         )
-    store.replace_plan_mirror(item["id"], row)
 
 
 # ---------------- write operations ----------------
@@ -190,18 +195,19 @@ def add_item(
     priority = _validate_priority(priority)
     if parent_id is not None:
         parent_id = int(parent_id)
-        _validate_parent(store, project, parent_id)
     clean_tags = [str(t).lower() for t in (tags or [])][:8]
     now = _now()
-    with store.lock:
+    with store.write_transaction():
+        if parent_id is not None:
+            _validate_parent(store, project, parent_id)
         item_id = store.plan_insert(
             project=project, kind=kind, title=title, body=(body or "").strip(),
             parent_id=parent_id, priority=priority, tags=clean_tags, now=now,
         )
         store.plan_log(item_id, "created", f"created as {kind} '{title[:80]}'", now)
         item = store.plan_get(item_id)
-        _reindex(store, embedder, item)
-        store.commit()
+        row = _write_keyword_mirror(store, item)
+    _embed_mirror(store, embedder, item, row)
     return item
 
 
@@ -217,7 +223,24 @@ def update_item(
     parent_id=_UNSET,
     tags: list[str] | None = None,
 ):
-    """Apply edits/transitions to one item. Returns (item, change descriptions)."""
+    """Commit the edit and keyword index before requesting its embedding."""
+    with store.write_transaction():
+        item, changes = _update_item_fields(
+            store, item_id, status=status, title=title, body=body,
+            priority=priority, parent_id=parent_id, tags=tags,
+        )
+        if not changes:
+            return item, changes
+        row = _write_keyword_mirror(store, item)
+    _embed_mirror(store, embedder, item, row)
+    return item, changes
+
+
+def _update_item_fields(
+    store: MemoryStore, item_id: int, *, status: str | None, title: str | None,
+    body: str | None, priority, parent_id, tags: list[str] | None,
+):
+    """Read, validate and edit under the caller's cross-process transaction."""
     item = store.plan_get(int(item_id))
     if item is None:
         raise ValueError(f"no plan item #{item_id}")
@@ -263,14 +286,11 @@ def update_item(
     now = _now()
     if "status" in fields:
         fields["status_at"] = now  # when the item entered its current status
-    with store.lock:
-        store.plan_set(item_id, fields, now)
-        store.plan_log(
-            item_id, "status" if "status" in fields else "edit", "; ".join(changes), now
-        )
-        item = store.plan_get(item_id)
-        _reindex(store, embedder, item)
-        store.commit()
+    store.plan_set(item_id, fields, now)
+    store.plan_log(
+        item_id, "status" if "status" in fields else "edit", "; ".join(changes), now
+    )
+    item = store.plan_get(item_id)
     return item, changes
 
 

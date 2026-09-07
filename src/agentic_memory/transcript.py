@@ -36,6 +36,10 @@ class SessionTranscript:
     started_at: str | None = None
     ended_at: str | None = None
     turns: list[Turn] = field(default_factory=list)
+    # Codex turns are already structurally deduplicated and tool outputs are
+    # clipped by its parser. Defaults retain both legacy rendering policies.
+    source_type: str = ""
+    content_fingerprint: str | None = None
 
     @property
     def n_user(self) -> int:
@@ -223,7 +227,7 @@ def render_for_llm(st: SessionTranscript, max_chars: int, tool_result_snippet: i
             elided = 0
 
     for t in st.turns:
-        if t.role in ("user", "assistant", "tool_result"):
+        if st.source_type != "codex" and t.role in ("user", "assistant", "tool_result"):
             key = (t.role, re.sub(r"\d+", "#", t.text))
             if key in seen:
                 elided += 1
@@ -242,7 +246,8 @@ def render_for_llm(st: SessionTranscript, max_chars: int, tool_result_snippet: i
             lines.append(t.text)
         elif t.role == "tool_result":
             head = int(tool_result_snippet * 0.6)
-            clipped = _clip_middle(t.text, head, tool_result_snippet - head)
+            clipped = (t.text if st.source_type == "codex" else
+                       _clip_middle(t.text, head, tool_result_snippet - head))
             lines.append(f"[tool-result] {clipped}")
     flush_elided()
     rendered = "\n".join(lines)
@@ -264,10 +269,12 @@ CHUNK_TOOL_RESULT_TAIL = 250
 CHUNK_SPLIT_OVERLAP = 300
 
 
-def _render_turn_for_chunk(t: Turn) -> str:
+def _render_turn_for_chunk(t: Turn, *, preprocessed: bool = False) -> str:
     if t.role == "tool":
         return t.text  # already a compact "[tool: Name] detail" line
     if t.role == "tool_result":
+        if preprocessed:
+            return "[tool-result] " + t.text
         return "[tool-result] " + _clip_middle(
             t.text, CHUNK_TOOL_RESULT_HEAD, CHUNK_TOOL_RESULT_TAIL
         )
@@ -296,7 +303,7 @@ def chunk_session(st: SessionTranscript, chunk_chars: int) -> list[tuple[str, st
         buf: list[str] = []
         buf_len = 0
         for t in exchange:
-            piece = _render_turn_for_chunk(t)
+            piece = _render_turn_for_chunk(t, preprocessed=st.source_type == "codex")
             if buf and buf_len + len(piece) > chunk_chars:
                 chunks.append(("\n".join(buf), ts))
                 # carry a sliver of overlap into the next window of this exchange

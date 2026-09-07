@@ -58,6 +58,9 @@ Judgment guidance:
 - Redundant evidence is cost, not safety: drop near-duplicates at finish.
 - Stop when another round would not improve the evidence; 2-3 rounds is
   typical. Finish decisively.
+- If none of the candidates supports the request, finish with keep: [].
+  Similarity alone is not evidence. Prefer current decisions over explicitly
+  superseded history, and respect the live status of authored plan items.
 """
 
 ROUND_PROMPT = """\
@@ -156,6 +159,12 @@ def agentic_search(
     """
     cap = limit if limit is not None else cfg.search_evidence_limit
     trace = SearchTrace()
+    if cap <= 0 or not store.has_memories(
+        project=project, levels=(level,) if level else None,
+        kinds=(kind,) if kind else None, after=after, before=before,
+    ):
+        trace.note = "No memories in the requested scope."
+        return [], trace
 
     def run_static(q: str) -> list[dict]:
         return retrieval.search(
@@ -228,16 +237,21 @@ def agentic_search(
                 add_hits(run_static(q))
                 trace.queries.append(q)
         elif act == "get_session" and not last:
+            # A full session includes other levels/kinds/dates; it cannot
+            # honor these narrower filters. Keep the filtered evidence pool.
+            if level or kind or after or before:
+                return auto_select(), trace
             sids = action.get("session_ids") or []
             if isinstance(sids, str):
                 sids = [sids]
             sids = [str(s) for s in sids][: cfg.search_queries_per_round]
             expanded = False
+            visible = {h["session_id"] for h in pool.values() if h["session_id"]}
             for sid in sids:
-                if sid in trace.sessions:
+                if sid in trace.sessions or sid not in visible:
                     continue
                 ev = _session_evidence(store, sid)
-                if ev:
+                if ev and (not project or ev["project"] == project):
                     pool[ev["id"]] = ev
                     trace.sessions.append(sid)
                     expanded = True
@@ -245,8 +259,13 @@ def agentic_search(
                 return auto_select(), trace
         elif act == "finish":
             trace.note = str(action.get("note") or "").strip()
+            selection = action.get("keep")
+            if not isinstance(selection, list):
+                return auto_select(), trace
+            if not selection:
+                return [], trace
             keep, seen = [], set()
-            for k in action.get("keep") or []:
+            for k in selection:
                 key = str(k).lstrip("#").strip()
                 if key in pool and key not in seen:
                     keep.append(pool[key])

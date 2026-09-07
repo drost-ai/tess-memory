@@ -8,9 +8,15 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import date
+from pathlib import Path
+from typing import Callable
 
+from .checkpoints import DistillationCheckpoints
 from .llm import AgentCoreBackend
 
 MEMORY_KINDS = ("decision", "fact", "preference", "solution", "problem", "task_state")
@@ -282,15 +288,115 @@ def _digest_from(data: dict, min_importance: float = 0.25) -> SessionDigest:
     )
 
 
+class DistillationPool:
+    """One LLM-call budget shared by all session coordinators and providers.
+
+    Coordinators run in a separate executor. Only leaf requests run here, so
+    waiting for map results or a reducer cannot deadlock a saturated pool.
+    """
+
+    def __init__(self, primary, fallback=None, *, workers: int,
+                 cache_path: Path | None = None, log: Callable[[str], None] = lambda _: None):
+        self.backends = [b for b in (primary, fallback) if b is not None]
+        self.cache = DistillationCheckpoints(cache_path) if cache_path else None
+        self.executor = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="memory-llm")
+        self.log = log
+        self._lock = threading.Lock()
+        self._cooldown: dict[str, float] = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.executor.shutdown(wait=True, cancel_futures=True)
+
+    def session(self, namespace: str) -> SessionCalls:
+        return SessionCalls(self, namespace)
+
+    def cooling_down(self, identity: str) -> bool:
+        with self._lock:
+            return time.monotonic() < self._cooldown.get(identity, 0)
+
+    def rate_limited(self, identity: str) -> None:
+        # Requests already in flight may also fail; new requests use fallback
+        # for a minute instead of all immediately hammering the same provider.
+        with self._lock:
+            self._cooldown[identity] = time.monotonic() + 60
+
+
+class SessionCalls:
+    def __init__(self, pool: DistillationPool, namespace: str):
+        self.pool = pool
+        self.namespace = namespace
+        self._fallback_used = threading.Event()
+
+    @property
+    def fallback_used(self) -> bool:
+        return self._fallback_used.is_set()
+
+    @staticmethod
+    def _validate(data: dict, phase: str) -> None:
+        if not isinstance(data.get("summary"), str) or not data["summary"].strip():
+            raise ValueError(f"{phase} returned no usable summary")
+        if not isinstance(data.get("memories", []), list):
+            raise ValueError(f"{phase} memories must be a list")
+        if phase.startswith("segment "):
+            _parse_memories(data)
+        else:
+            _digest_from(data)
+
+    def submit(self, system: str, prompt: str, phase: str):
+        return self.pool.executor.submit(self._run, system, prompt, phase)
+
+    def _run(self, system: str, prompt: str, phase: str) -> dict:
+        pool = self.pool
+        choices = []
+        for index, backend in enumerate(pool.backends):
+            identity = getattr(backend, "cache_identity", backend.name)
+            key = DistillationCheckpoints.key(self.namespace, identity, system, prompt)
+            choices.append((index, backend, identity, key))
+            data = pool.cache.get(key) if pool.cache else None
+            if data is not None:
+                try:
+                    self._validate(data, phase)
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                if index:
+                    self._fallback_used.set()
+                pool.log(f"[distill] {self.namespace}: {phase} reused ({backend.name})")
+                return data
+        last_error = None
+        for index, backend, identity, key in choices:
+            if index == 0 and len(choices) > 1 and pool.cooling_down(identity):
+                continue
+            started = time.monotonic()
+            pool.log(f"[distill] {self.namespace}: {phase} started ({backend.name})")
+            try:
+                data = _call_json(backend, system, prompt)
+                self._validate(data, phase)
+            except Exception as exc:
+                last_error = exc
+                if re.search(r"rate[ _-]?limit|\b429\b", str(exc), re.I):
+                    pool.rate_limited(identity)
+                pool.log(f"[distill] {self.namespace}: {phase} failed ({backend.name}): {exc}")
+                continue
+            if pool.cache:
+                pool.cache.put(key, data)
+            if index:
+                self._fallback_used.set()
+            pool.log(f"[distill] {self.namespace}: {phase} completed in {time.monotonic() - started:.1f}s ({backend.name})")
+            return data
+        raise RuntimeError(f"{self.namespace}: {phase} failed on all configured providers") from last_error
+
+
 def distill_session(
     llm: AgentCoreBackend, project: str, date: str, transcript_text: str,
     min_importance: float = 0.25,
+    *, calls: SessionCalls | None = None,
 ) -> SessionDigest:
-    data = _call_json(
-        llm,
-        SESSION_SYSTEM,
-        SESSION_PROMPT.format(project=project, date=date, transcript=transcript_text),
-    )
+    prompt = SESSION_PROMPT.format(project=project, date=date, transcript=transcript_text)
+    data = (calls.submit(SESSION_SYSTEM, prompt, "session").result() if calls else
+            _call_json(llm, SESSION_SYSTEM, prompt))
     return _digest_from(data, min_importance)
 
 
@@ -331,6 +437,7 @@ def distill_session_segmented(
     max_segments: int,
     hard_cap: int = 600_000,
     min_importance: float = 0.25,
+    *, calls: SessionCalls | None = None, workers: int = 1,
 ) -> SessionDigest:
     """Map-reduce distillation for sessions too large for one pass."""
     segments, partial = segment_text(
@@ -342,17 +449,40 @@ def distill_session_segmented(
         if partial
         else ""
     )
+    def prompt(i):
+        return SEGMENT_PROMPT.format(
+            idx=i + 1, total=len(segments), project=project, date=date,
+            coverage_note=coverage_note, segment=segments[i],
+        )
+
+    results: list[dict | None] = [None] * len(segments)
+    if calls is None:
+        for i in range(len(segments)):
+            results[i] = _call_json(llm, SESSION_SYSTEM, prompt(i))
+    else:
+        calls.pool.log(f"[distill] {calls.namespace}: {len(segments)} segments, "
+                       f"{min(workers, len(segments))} in flight per session, partial_coverage={partial}")
+        pending = {}
+        next_index = 0
+        try:
+            while next_index < len(segments) or pending:
+                while next_index < len(segments) and len(pending) < max(1, workers):
+                    i = next_index
+                    pending[calls.submit(SESSION_SYSTEM, prompt(i), f"segment {i + 1}/{len(segments)}")] = i
+                    next_index += 1
+                done, _ = wait(pending, return_when=FIRST_COMPLETED)
+                for future in done:
+                    results[pending.pop(future)] = future.result()
+        finally:
+            # Save already-running successes, cancel queued siblings, and do
+            # not run the reducer or certify a partially completed session.
+            for future in pending:
+                future.cancel()
+            wait(pending)
+
     summaries: list[str] = []
     candidates: list[dict] = []
-    for i, seg in enumerate(segments, 1):
-        data = _call_json(
-            llm,
-            SESSION_SYSTEM,
-            SEGMENT_PROMPT.format(
-                idx=i, total=len(segments), project=project, date=date,
-                coverage_note=coverage_note, segment=seg,
-            ),
-        )
+    for i, data in enumerate(results, 1):
         summaries.append(f"[segment {i}/{len(segments)}] {(data.get('summary') or '').strip()}")
         for m in _parse_memories(data, min_importance):
             candidate = {"content": m.content, "kind": m.kind,
@@ -360,15 +490,13 @@ def distill_session_segmented(
             if m.date:
                 candidate["date"] = m.date
             candidates.append(candidate)
-    data = _call_json(
-        llm,
-        SESSION_SYSTEM,
-        REDUCE_PROMPT.format(
-            project=project, date=date, total=len(segments),
-            summaries="\n".join(summaries),
-            candidates=json.dumps(candidates, ensure_ascii=False),
-        ),
+    reduce_prompt = REDUCE_PROMPT.format(
+        project=project, date=date, total=len(segments),
+        summaries="\n".join(summaries),
+        candidates=json.dumps(candidates, ensure_ascii=False),
     )
+    data = (calls.submit(SESSION_SYSTEM, reduce_prompt, "reduce").result() if calls else
+            _call_json(llm, SESSION_SYSTEM, reduce_prompt))
     return _digest_from(data, min_importance)
 
 

@@ -6,15 +6,18 @@ turn through the same seams its own headless runner uses — resolve_config →
 resolve_session → bootstrap_runtime → run_agent_prompt — with a real system prompt,
 tools disabled, and no session persistence.
 
-Provider, model, and credentials are governed entirely by the runtime's own
-configuration: when the Tess settings file exists, its provider profile is
-selected and that profile's `defaultModel` rules; otherwise agent-core's
-defaults apply. This package never chooses a model.
+Provider transport and credentials come from the runtime's own configuration:
+when the Tess settings file exists, its provider profile is selected.
+Optional model/effort overrides belong to this memory instance;
+otherwise the provider profile's defaults apply. Shared profiles are never
+modified by this package.
 """
 
 from __future__ import annotations
 
 import atexit
+import copy
+import hashlib
 import shutil
 import sys
 import tempfile
@@ -29,7 +32,25 @@ class RefusalError(RuntimeError):
 class AgentCoreBackend:
     name = "agent-core"
 
-    def __init__(self, cfg: Config, probe: bool = True, profile: str | None = None) -> None:
+    @classmethod
+    def for_role(cls, cfg: Config, role: str, *, probe: bool = False):
+        """Keep retrieval and fallback overrides independent of distillation."""
+        if role == "search":
+            return cls(cfg, probe=probe, profile=cfg.search_profile or None,
+                       model=cfg.search_model or None,
+                       reasoning_effort=cfg.search_reasoning_effort or None)
+        if role == "fallback":
+            if not cfg.agent_core_fallback_profile:
+                raise ValueError("No fallback provider profile is configured")
+            return cls(cfg, probe=probe, profile=cfg.agent_core_fallback_profile,
+                       model=cfg.agent_core_fallback_model or None,
+                       reasoning_effort=cfg.agent_core_fallback_reasoning_effort or None)
+        raise ValueError(f"Unknown backend role: {role}")
+
+    def __init__(self, cfg: Config, probe: bool = True, profile: str | None = None,
+                 *, model: str | None = None, reasoning_effort: str | None = None) -> None:
+        self._model = model or (cfg.agent_core_model if profile is None else "")
+        self._reasoning_effort = reasoning_effort or (cfg.agent_core_reasoning_effort if profile is None else "")
         root = cfg.agent_core_path
         if not (root / "agent_core").is_dir():
             raise RuntimeError(f"agent-core-python not found at {root}")
@@ -60,6 +81,8 @@ class AgentCoreBackend:
         self._settings_path = (
             str(cfg.agent_core_settings) if cfg.agent_core_settings.is_file() else None
         )
+        if not self._settings_path and (self._model or self._reasoning_effort):
+            raise RuntimeError("Explicit model/effort overrides require an existing provider settings file")
         self._profile = (profile or cfg.agent_core_profile) if self._settings_path else None
         if self._profile:
             import json
@@ -71,6 +94,15 @@ class AgentCoreBackend:
                     f"profile '{self._profile}' not found in {self._settings_path}"
                 )
             self.name = f"agent-core:{self._profile}"
+        if self._model:
+            self.name += f":{self._model}"
+        if self._reasoning_effort:
+            self.name += f"[{self._reasoning_effort}]"
+        # Include resolved-profile inputs in checkpoint identity, even when a
+        # profile keeps its name while its model, endpoint or effort changes.
+        # Credentials never appear in the cache: only this one-way digest does.
+        settings_bytes = cfg.agent_core_settings.read_bytes() if self._settings_path else b""
+        self.cache_identity = hashlib.sha256(self.name.encode() + b"\0" + settings_bytes).hexdigest()
         if probe:
             self._probe()
 
@@ -84,13 +116,18 @@ class AgentCoreBackend:
             "outputFormat": "json",
         }
         if self._profile:
-            # Profile mode: merge the Tess settings file and select the profile;
-            # the profile's defaultModel governs.
+            # Reuse profile transport/auth; explicit per-instance overrides
+            # select the model and effort without rewriting the settings file.
             options["settings"] = self._settings_path
             options["provider"] = self._profile
         else:
             options["provider"] = "anthropic"
+        if self._model:
+            options["model"] = self._model
+        if self._reasoning_effort:
+            options["effort"] = self._reasoning_effort
         config = await self._resolve_config(options, cwd)
+        config = self._apply_reasoning_override(config)
         session = await self._resolve_session({}, config, {"cwd": cwd, "originalCwd": cwd})
         runtime = await self._bootstrap_runtime(
             {"session": session, "config": config, "cwd": cwd}
@@ -162,6 +199,31 @@ class AgentCoreBackend:
                 f"agent-core turn failed: {result.get('error') or text[:200] or result.get('stopReason')}"
             )
         return text
+
+    def _apply_reasoning_override(self, config: dict) -> dict:
+        """Preserve explicit effort on compatible Chat Completions backends.
+
+        agent-core currently omits reasoning_effort on non-OpenAI hosts and
+        normalizes non-GPT model effort. Its requestOptions escape hatch lets
+        this instance send the explicitly requested native value. Calls with
+        no override (including existing integrations) are unchanged.
+        """
+        if not self._reasoning_effort or config.get("provider") != "openai" or config.get("openaiApiMode") != "chat_completions":
+            return config
+        profile = copy.deepcopy(config.get("providerProfile") or {})
+        request_options = profile.setdefault("requestOptions", {})
+        request_options["reasoning_effort"] = self._reasoning_effort
+        extra = request_options.get("extra_body")
+        if isinstance(extra, dict):
+            extra.pop("reasoning_effort", None)
+        if str(config.get("model", "")).startswith("deepseek-v4-"):
+            request_options["thinking"] = {"type": "enabled"}
+            if isinstance(extra, dict):
+                extra.pop("thinking", None)
+        profiles = dict(config.get("providerProfiles") or {})
+        if profile.get("name"):
+            profiles[profile["name"]] = profile
+        return {**config, "providerProfile": profile, "providerProfiles": profiles}
 
     def _probe(self) -> None:
         # Fail fast and loud at construction: without this, a broken runtime
