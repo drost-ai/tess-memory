@@ -7,9 +7,8 @@ Memory levels (timescales, finest → coarsest):
     digest   one summary per ISO week
     project  one rolling profile per project
 
-Vectors are stored as float32 blobs and searched brute-force with numpy — at
-this corpus size (tens of thousands of rows) that is faster than maintaining
-an index, and it keeps the store dependency-free.
+Vectors are stored as float32 blobs. Retrieval uses exact scoped cosine search
+with bounded caching/batches; the whole-matrix reader remains for compatibility.
 """
 
 from __future__ import annotations
@@ -123,6 +122,33 @@ CREATE TABLE IF NOT EXISTS ingest_sources(
     attempts INTEGER NOT NULL DEFAULT 0,
     retry_at REAL NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS vector_scope_versions(scope TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+CREATE TRIGGER IF NOT EXISTS vector_scope_ai AFTER INSERT ON embeddings BEGIN
+    INSERT INTO vector_scope_versions VALUES('G',1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+    INSERT INTO vector_scope_versions SELECT 'P:'||COALESCE(project,''),1 FROM memories WHERE id=new.memory_id
+        ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS vector_scope_au AFTER UPDATE ON embeddings BEGIN
+    INSERT INTO vector_scope_versions VALUES('G',1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+    INSERT INTO vector_scope_versions SELECT 'P:'||COALESCE(project,''),1 FROM memories WHERE id=old.memory_id OR id=new.memory_id
+        ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS vector_scope_ad AFTER DELETE ON embeddings BEGIN
+    INSERT INTO vector_scope_versions VALUES('G',1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+    INSERT INTO vector_scope_versions SELECT 'P:'||COALESCE(project,''),1 FROM memories WHERE id=old.memory_id
+        ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS vector_scope_md BEFORE DELETE ON memories WHEN EXISTS(SELECT 1 FROM embeddings WHERE memory_id=old.id) BEGIN
+    INSERT INTO vector_scope_versions VALUES('G',1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+    INSERT INTO vector_scope_versions VALUES('P:'||COALESCE(old.project,''),1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+END;
+CREATE TRIGGER IF NOT EXISTS vector_scope_mu AFTER UPDATE OF project,level,kind,ts ON memories
+WHEN EXISTS(SELECT 1 FROM embeddings WHERE memory_id=new.id)
+ AND (old.project IS NOT new.project OR old.level IS NOT new.level OR old.kind IS NOT new.kind OR old.ts IS NOT new.ts) BEGIN
+    INSERT INTO vector_scope_versions VALUES('G',1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+    INSERT INTO vector_scope_versions VALUES('P:'||COALESCE(old.project,''),1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+    INSERT INTO vector_scope_versions VALUES('P:'||COALESCE(new.project,''),1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
+END;
 """
 
 
@@ -165,6 +191,20 @@ class MemoryStore:
         self.lock = threading.RLock()  # serializes multi-statement write groups
         self._emb_cache: tuple[np.ndarray, np.ndarray] | None = None  # (ids, matrix)
         self._emb_cache_data_version: int | None = None
+        self._scoped_vectors = None
+
+    @contextmanager
+    def read_snapshot(self):
+        """Keep vector/filter/FTS reads consistent; never commit a caller's write."""
+        with self.lock:
+            owns = not self.db.in_transaction
+            if owns:
+                self.db.execute('BEGIN')
+            try:
+                yield owns
+            finally:
+                if owns:
+                    self.db.rollback()  # read-only snapshot
 
     @contextmanager
     def write_transaction(self):
@@ -676,6 +716,18 @@ class MemoryStore:
             # during materialization will invalidate this cache next time.
             self._emb_cache_data_version = version
             return self._emb_cache
+
+    def has_vectors(self, project=None, levels=None, kinds=None, after=None, before=None):
+        where, args = self._memory_filters(project, levels, kinds, after, before)
+        if not where:
+            return self.db.execute('SELECT 1 FROM embeddings LIMIT 1').fetchone() is not None
+        return self.db.execute('SELECT 1 FROM memories m JOIN embeddings e ON e.memory_id=m.id WHERE 1=1' + where + ' LIMIT 1', args).fetchone() is not None
+
+    def semantic_candidates(self, vector, **kwargs):
+        from .vector_search import ScopedVectorSearch
+        if self._scoped_vectors is None:
+            self._scoped_vectors = ScopedVectorSearch()
+        return self._scoped_vectors.search(self, vector, **kwargs)
 
     def filter_memory_ids(
         self,

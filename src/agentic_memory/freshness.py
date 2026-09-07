@@ -155,4 +155,6 @@ def store_status(store, cfg=None):
                            'legacy_sessions_without_prefix_verification': legacy,
                            'pending_aggregates': pending, 'problems': problems,
                            'note': 'Counts describe recorded source states. Worker/supervisor heartbeats do not certify source freshness; individual session checks compare current file metadata.'}
+    if getattr(store, '_scoped_vectors', None) is not None:
+        result['retrieval_index'] = store._scoped_vectors.status()
     return result

@@ -15,8 +15,6 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
-import numpy as np
-
 from .config import CONFIG
 from .embed import Embedder
 from .store import MemoryStore
@@ -65,24 +63,29 @@ def search(
         project=project, levels=levels, kinds=kinds, after=after, before=before
     ):
         return []
-    store.assert_embedder(embedder.descriptor)
-    allowed = store.filter_memory_ids(
-        project=project, levels=levels, kinds=kinds, after=after, before=before
-    )
+    filters = dict(project=project, levels=levels, kinds=kinds, after=after, before=before)
+    with store.lock:
+        store.assert_embedder(embedder.descriptor)
+        needs_vector = store.has_vectors(**filters)
+    # Network work stays outside the SQLite snapshot and its local lock.
+    qv = embedder.embed_query(query) if needs_vector else None
+    while True:
+        with store.read_snapshot() as cacheable:
+            if store.get_meta("embedder") != embedder.descriptor:
+                raise RuntimeError("embedding space changed while preparing the query")
+            if qv is None and store.has_vectors(**filters):
+                needs_vector = True
+            else:
+                return _search_snapshot(store, query, qv, filters, limit, candidates, expand_chunks, cacheable)
+        if needs_vector:
+            qv = embedder.embed_query(query)
 
-    # Semantic signal
-    ids, mat = store.embedding_matrix()
-    if allowed is not None and len(ids):
-        mask = np.array([i in allowed for i in ids])
-        ids, mat = ids[mask], mat[mask]
-    sem: dict[int, float] = {}
-    if len(ids):
-        qv = embedder.embed_query(query)
-        sims = mat @ qv
-        top = np.argsort(-sims)[:candidates]
-        for idx in top:
-            if np.isfinite(sims[idx]):
-                sem[int(ids[idx])] = float(sims[idx])
+
+def _search_snapshot(store, query, qv, filters, limit, candidates, expand_chunks, cacheable):
+    project, levels, kinds = filters['project'], filters['levels'], filters['kinds']
+    after, before = filters['after'], filters['before']
+    sem = store.semantic_candidates(qv, limit=candidates, **filters, cacheable=cacheable,
+                                    cache_bytes=CONFIG.vector_cache_bytes, batch_rows=CONFIG.vector_batch_rows) if qv is not None else {}
 
     # Keyword signal
     bm25 = store.fts_search(query, limit=candidates, project=project,

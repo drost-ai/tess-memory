@@ -182,6 +182,8 @@ class Config:
     per_session_cap: int = 3             # diversity: max results per session
     default_limit: int = 8               # results when the caller doesn't say
     chunk_neighbor_chars: int = 1_000    # context added around an expanded chunk hit
+    vector_cache_bytes: int = 64 * 1024 * 1024
+    vector_batch_rows: int = 512
 
     @property
     def db_path(self) -> Path:
@@ -345,6 +347,12 @@ def load_config(path: Path | None = None) -> Config:
     for key in ("candidate_pool", "per_session_cap", "default_limit", "chunk_neighbor_chars"):
         if key in ret:
             setattr(cfg, key, int(ret[key]))
+    for key, minimum in (('vector_cache_bytes', 0), ('vector_batch_rows', 1)):
+        if key in ret:
+            value = ret[key]
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f'[retrieval] {key} must be an integer >= {minimum}')
+            setattr(cfg, key, value)
 
     # ---- environment overrides (highest precedence) ----
     if os.environ.get("AGENTIC_MEMORY_SOURCE"):
