@@ -18,6 +18,7 @@ from __future__ import annotations
 import atexit
 import copy
 import hashlib
+import json
 import shutil
 import sys
 import tempfile
@@ -84,11 +85,11 @@ class AgentCoreBackend:
         if not self._settings_path and (self._model or self._reasoning_effort):
             raise RuntimeError("Explicit model/effort overrides require an existing provider settings file")
         self._profile = (profile or cfg.agent_core_profile) if self._settings_path else None
+        settings_document = {}
         if self._profile:
-            import json
-
             with open(self._settings_path) as fh:
-                profiles = json.load(fh).get("providerProfiles") or {}
+                settings_document = json.load(fh)
+                profiles = settings_document.get("providerProfiles") or {}
             if self._profile not in profiles:
                 raise RuntimeError(
                     f"profile '{self._profile}' not found in {self._settings_path}"
@@ -98,11 +99,26 @@ class AgentCoreBackend:
             self.name += f":{self._model}"
         if self._reasoning_effort:
             self.name += f"[{self._reasoning_effort}]"
-        # Include resolved-profile inputs in checkpoint identity, even when a
-        # profile keeps its name while its model, endpoint or effort changes.
-        # Credentials never appear in the cache: only this one-way digest does.
-        settings_bytes = cfg.agent_core_settings.read_bytes() if self._settings_path else b""
-        self.cache_identity = hashlib.sha256(self.name.encode() + b"\0" + settings_bytes).hexdigest()
+        # Identity follows this profile's semantics. Credential rotation or a
+        # change to another runtime's profile must not redistill every session.
+        def semantic(value):
+            if isinstance(value, dict):
+                excluded = {'auth', 'headers', 'httpheaders', 'authorization', 'apikey', 'api_key',
+                            'accesstoken', 'refreshtoken', 'token', 'password', 'credentials'}
+                return {k: semantic(v) for k, v in value.items() if k.lower() not in excluded}
+            if isinstance(value, list):
+                return [semantic(v) for v in value]
+            return value
+        selected = semantic((settings_document.get('providerProfiles') or {}).get(self._profile, {}))
+        if self._model:
+            selected['defaultModel'] = self._model
+        if self._reasoning_effort:
+            for key in ('reasoningEffort', 'defaultEffort', 'effort'):
+                if key in selected:
+                    selected[key] = self._reasoning_effort
+        globals_used = {k: settings_document[k] for k in ('maxTokens', 'thinkingBudget') if k in settings_document}
+        self.cache_identity = hashlib.sha256(json.dumps([2, self.name, selected, globals_used],
+                                                        sort_keys=True).encode()).hexdigest()
         if probe:
             self._probe()
 

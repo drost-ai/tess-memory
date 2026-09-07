@@ -159,6 +159,18 @@ class ModelSelectionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "reasoning_effort"):
             load_config(path)
 
+    def test_cache_identity_ignores_credential_rotation_and_unrelated_profiles(self):
+        original = AgentCoreBackend(self.cfg, probe=False).cache_identity
+        updated = copy.deepcopy(self.profiles)
+        updated['legacy']['defaultModel'] = 'a-new-unrelated-model'
+        updated['codex']['auth'] = {'envVar': 'ROTATED_CREDENTIAL'}
+        updated['codex']['defaultModel'] = 'new-default-overridden-by-explicit-pin'
+        updated['codex']['reasoningEffort'] = 'low'
+        self.settings.write_text(json.dumps({'providerProfiles': updated, 'env': {'ROTATED_CREDENTIAL': 'synthetic-key'}}))
+        self.assertEqual(AgentCoreBackend(self.cfg, probe=False).cache_identity, original)
+        self.cfg.agent_core_model = 'different-explicit-model'
+        self.assertNotEqual(AgentCoreBackend(self.cfg, probe=False).cache_identity, original)
+
 
 if __name__ == "__main__":
     unittest.main()

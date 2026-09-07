@@ -109,6 +109,19 @@ CREATE TABLE IF NOT EXISTS aggregate_refresh(
     refreshed_at REAL,
     PRIMARY KEY(level, scope)
 );
+CREATE TABLE IF NOT EXISTS ingest_sources(
+    path TEXT PRIMARY KEY,
+    session_id TEXT,
+    project TEXT,
+    source_type TEXT NOT NULL,
+    observed_signature TEXT,
+    status TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT '{}',
+    observed_at REAL,
+    indexed_at REAL,
+    last_error TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0
+);
 """
 
 
@@ -207,6 +220,53 @@ class MemoryStore:
             "VALUES(?,?,?,?,?)",
             (path, mtime, size, session_id, status),
         )
+
+    def source_progress(self, path: str):
+        return self.db.execute("SELECT * FROM ingest_sources WHERE path=?", (path,)).fetchone()
+
+    def record_source(self, *, path: str, session_id: str | None, project: str, source_type: str,
+                      signature: str | None, status: str, state: dict, now: float,
+                      indexed: bool = False, error: str | None = None) -> None:
+        self.db.execute("""INSERT INTO ingest_sources
+            (path,session_id,project,source_type,observed_signature,status,state,observed_at,indexed_at,last_error,attempts)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET
+            session_id=COALESCE(excluded.session_id,ingest_sources.session_id), project=excluded.project,
+            source_type=excluded.source_type,observed_signature=excluded.observed_signature,status=excluded.status,
+            state=excluded.state,observed_at=excluded.observed_at,
+            indexed_at=COALESCE(excluded.indexed_at,ingest_sources.indexed_at),last_error=excluded.last_error,
+            attempts=CASE WHEN excluded.last_error IS NULL THEN 0 ELSE ingest_sources.attempts+1 END""",
+            (path, session_id, project, source_type, signature, status, json.dumps(state), now,
+             now if indexed else None, error, 1 if error else 0))
+
+    def session_rows_with_vectors(self, session_id: str):
+        return self.db.execute("SELECT m.*,e.vector FROM memories m LEFT JOIN embeddings e ON e.memory_id=m.id WHERE m.session_id=? ORDER BY m.id",
+                               (session_id,)).fetchall()
+
+    def replace_session_rows(self, session_id: str, rows: list[MemoryRow]) -> None:
+        """Preserve matching IDs/vectors; caller owns the publication transaction."""
+        from collections import defaultdict, deque
+        def identity(row):
+            # Session/atomic timestamps may advance with the session; raw
+            # chunks retain their source-event timestamps and occurrences.
+            return (row['level'], row['kind'], row['content'], row['tags'],
+                    row['ts'] if row['level'] == 'chunk' else None)
+        available = defaultdict(deque)
+        for old in self.session_rows_with_vectors(session_id):
+            available[identity(old)].append(old)
+        additions = []
+        for row in rows:
+            key = (row.level, row.kind, row.content, json.dumps(row.tags), row.ts if row.level == 'chunk' else None)
+            if available[key]:
+                old = available[key].popleft()
+                self.db.execute("UPDATE memories SET project=?,importance=?,ts=? WHERE id=?",
+                                (row.project, row.importance, row.ts, old['id']))
+                if old['vector'] is None and row.vector is not None:
+                    self.db.execute("INSERT INTO embeddings VALUES (?,?)", (old['id'], row.vector.astype(np.float32).tobytes()))
+                    self._emb_cache = None
+            else:
+                additions.append(row)
+        self._delete_memory_ids([row['id'] for group in available.values() for row in group])
+        self.add_memories(additions)
 
     # ---------------- sessions ----------------
 

@@ -288,6 +288,10 @@ def _digest_from(data: dict, min_importance: float = 0.25) -> SessionDigest:
     )
 
 
+class CallBudgetExceeded(RuntimeError):
+    pass
+
+
 class DistillationPool:
     """One LLM-call budget shared by all session coordinators and providers.
 
@@ -296,13 +300,32 @@ class DistillationPool:
     """
 
     def __init__(self, primary, fallback=None, *, workers: int,
-                 cache_path: Path | None = None, log: Callable[[str], None] = lambda _: None):
+                 cache_path: Path | None = None, log: Callable[[str], None] = lambda _: None,
+                 max_calls: int = 0):
         self.backends = [b for b in (primary, fallback) if b is not None]
         self.cache = DistillationCheckpoints(cache_path) if cache_path else None
         self.executor = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="memory-llm")
         self.log = log
         self._lock = threading.Lock()
         self._cooldown: dict[str, float] = {}
+        self.max_calls = max_calls
+        self.calls = 0
+        self.cache_hits = 0
+        self.active_calls = 0
+        self.peak_calls = 0
+
+    def complete(self, backend, *, system, prompt):
+        with self._lock:
+            if self.max_calls and self.calls >= self.max_calls:
+                raise CallBudgetExceeded("model-call budget reached; validated checkpoints remain available")
+            self.calls += 1
+            self.active_calls += 1
+            self.peak_calls = max(self.peak_calls, self.active_calls)
+        try:
+            return backend.complete(system=system, prompt=prompt)
+        finally:
+            with self._lock:
+                self.active_calls -= 1
 
     def __enter__(self):
         return self
@@ -329,6 +352,8 @@ class SessionCalls:
         self.pool = pool
         self.namespace = namespace
         self._fallback_used = threading.Event()
+        self.keys: set[str] = set()
+        self._lock = threading.Lock()
 
     @property
     def fallback_used(self) -> bool:
@@ -363,6 +388,10 @@ class SessionCalls:
                     continue
                 if index:
                     self._fallback_used.set()
+                with self._lock:
+                    self.keys.add(key)
+                with pool._lock:
+                    pool.cache_hits += 1
                 pool.log(f"[distill] {self.namespace}: {phase} reused ({backend.name})")
                 return data
         last_error = None
@@ -371,9 +400,15 @@ class SessionCalls:
                 continue
             started = time.monotonic()
             pool.log(f"[distill] {self.namespace}: {phase} started ({backend.name})")
+            class CountedBackend:
+                name = backend.name
+                def complete(self, *, system, prompt):
+                    return pool.complete(backend, system=system, prompt=prompt)
             try:
-                data = _call_json(backend, system, prompt)
+                data = _call_json(CountedBackend(), system, prompt)
                 self._validate(data, phase)
+            except CallBudgetExceeded:
+                raise
             except Exception as exc:
                 last_error = exc
                 if re.search(r"rate[ _-]?limit|\b429\b", str(exc), re.I):
@@ -382,6 +417,8 @@ class SessionCalls:
                 continue
             if pool.cache:
                 pool.cache.put(key, data)
+            with self._lock:
+                self.keys.add(key)
             if index:
                 self._fallback_used.set()
             pool.log(f"[distill] {self.namespace}: {phase} completed in {time.monotonic() - started:.1f}s ({backend.name})")

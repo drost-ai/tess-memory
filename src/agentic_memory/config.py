@@ -157,6 +157,10 @@ class Config:
     segment_hard_cap: int = 600_000      # max grown segment size before even sampling
     segment_workers: int = 1            # per-session map concurrency; shares llm_workers cap
     distillation_cache: bool = False    # exact successful requests, private to this data_dir
+    incremental_ingestion: bool = False  # verified prefixes + stable completed-message units
+    incremental_reduce_fanout: int = 8
+    cache_retention_days: int = 30
+    max_model_calls_per_run: int = 0    # 0 = unlimited; checkpoints resume a budgeted run
     chunk_chars: int = 6_000             # window cap within an exchange-aligned chunk
     tool_result_snippet: int = 400       # tool-result truncation in rendered turns
     min_session_chars: int = 200         # skip sessions with less dialogue than this
@@ -318,6 +322,18 @@ def load_config(path: Path | None = None) -> Config:
         if not isinstance(ing["distillation_cache"], bool):
             raise ValueError("[ingest] distillation_cache must be a boolean")
         cfg.distillation_cache = ing["distillation_cache"]
+    if "incremental" in ing:
+        if not isinstance(ing["incremental"], bool):
+            raise ValueError("[ingest] incremental must be a boolean")
+        cfg.incremental_ingestion = ing["incremental"]
+    for key, minimum in (("incremental_reduce_fanout", 2), ("cache_retention_days", 1), ("max_model_calls_per_run", 0)):
+        if key in ing:
+            value = ing[key]
+            if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
+                raise ValueError(f"[ingest] {key} must be an integer >= {minimum}")
+            setattr(cfg, key, value)
+    if cfg.incremental_ingestion and not (cfg.segment_chars > 0 and 0 <= cfg.segment_overlap < cfg.segment_chars):
+        raise ValueError("incremental segments require 0 <= segment_overlap < segment_chars")
 
     cfg.half_life_days = float(ret.get("half_life_days", cfg.half_life_days))
     cfg.w_semantic = float(weights.get("semantic", cfg.w_semantic))

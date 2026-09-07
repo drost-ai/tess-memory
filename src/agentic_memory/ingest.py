@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import re
 import sys
+import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, as_completed, wait
 from contextlib import ExitStack
@@ -22,6 +23,7 @@ from pathlib import Path
 from .attribution import source_adapter
 from .config import Config
 from .distill import (
+    CallBudgetExceeded,
     DistillationPool,
     SessionDigest,
     distill_profile,
@@ -57,10 +59,19 @@ class IngestStats:
     input_tokens: int | None = None
     output_tokens: int | None = None
     cost_usd: float | None = None
+    parsed_records: int = 0
+    model_calls: int = 0
+    request_cache_hits: int = 0
+    embedded_passages: int = 0
+    budget_deferred: int = 0
+
+
+_LOG_LOCK = threading.Lock()
 
 
 def _log(msg: str) -> None:
-    print(msg, file=sys.stderr, flush=True)
+    with _LOG_LOCK:
+        print(msg, file=sys.stderr, flush=True)
 
 
 # A bracketed harness preamble at the start of a user message: either a paired
@@ -146,10 +157,17 @@ def ingest(
 ) -> IngestStats:
     """Use a process lock only when the requested sources include Codex."""
     with ExitStack() as stack:
+        from .locks import ingestion_lock as store_ingestion_lock
+        stack.enter_context(store_ingestion_lock(cfg.data_dir))
         if any(ds.type == "codex" for ds in cfg.data_stores):
             from .codex import ingestion_lock
 
             stack.enter_context(ingestion_lock(cfg.data_dir))
+        if cfg.incremental_ingestion and not aggregates_only:
+            from .incremental import ingest_incremental
+            return ingest_incremental(cfg, store, embedder, llm, fallback_llm, limit=limit,
+                                      retry_extractive=retry_extractive, session_ids=session_ids,
+                                      refresh_aggregates=refresh_aggregates)
         calls_pool = None
         if llm is not None and (cfg.segment_workers > 1 or cfg.distillation_cache):
             calls_pool = stack.enter_context(DistillationPool(
@@ -506,6 +524,8 @@ def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval
             if sessions:
                 try:
                     text = generate(llm)
+                except CallBudgetExceeded:
+                    raise
                 except Exception:
                     if fallback_llm is None:
                         raise
@@ -531,6 +551,9 @@ def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval
                 stats.profiles += 1
             else:
                 stats.digests += 1
+        except CallBudgetExceeded:
+            stats.budget_deferred += 1
+            break
         except Exception as exc:  # keep old aggregate and durable dirty job
             stats.errors += 1
             _log(f"[ingest] {level} refresh failed for {scope}: {exc}")

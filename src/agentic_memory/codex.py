@@ -10,13 +10,14 @@ not a parser switch: one rollout can contain several generations of records.
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import re
 import sqlite3
 import tomllib
 from collections import Counter, OrderedDict, defaultdict
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
 from typing import Iterator
 
@@ -164,6 +165,7 @@ class Source:
     cwd: str | None
     project: str
     subagent: bool
+    metadata_revision: tuple | None = None
 
     @property
     def parent_id(self) -> str | None:
@@ -207,6 +209,8 @@ class Normalized:
     events: list[Event]
     report: ParseReport
     copied_metadata: bool = False
+    boundaries: list[dict] = field(default_factory=list)
+    revisions: list = field(default_factory=list)
 
 
 @dataclass
@@ -215,6 +219,8 @@ class Resolved:
     history: list[Event]
     report: ParseReport
     parent_id: str | None
+    boundaries: list[dict] = field(default_factory=list)
+    revisions: list = field(default_factory=list)
 
 
 def _strip_images(value, report: ParseReport):
@@ -368,6 +374,33 @@ class _Normalizer:
         self.turn_id: str | None = None
         self.copied_metadata = False
         self.calls: dict[str, str] = {}
+        self.boundaries: list[dict] = []
+        self.explicit_turns = False
+        self.active_turn = False
+
+    def dump_state(self) -> dict:
+        return {"events": [asdict(e) for e in self.events], "mirrors": [asdict(e) for e in self.mirrors],
+                "snapshots": [[k, asdict(e)] for k, e in self.snapshots.items()],
+                "report": self.report.as_dict(), "identities": self.identities,
+                "exact": [list(x) for x in self.exact], "turn_id": self.turn_id,
+                "copied_metadata": self.copied_metadata, "calls": self.calls,
+                "boundaries": self.boundaries, "explicit_turns": self.explicit_turns,
+                "active_turn": self.active_turn}
+
+    def restore_state(self, state: dict) -> None:
+        self.events = [Event(**e) for e in state.get("events", [])]
+        self.mirrors = [Event(**e) for e in state.get("mirrors", [])]
+        self.snapshots = OrderedDict((k, Event(**e)) for k, e in state.get("snapshots", []))
+        self.report = ParseReport(**state.get("report", {}))
+        self.report.unknown = Counter(self.report.unknown)
+        self.identities = state.get("identities", {})
+        self.exact = {tuple(x) for x in state.get("exact", [])}
+        self.turn_id = state.get("turn_id")
+        self.copied_metadata = state.get("copied_metadata", False)
+        self.calls = state.get("calls", {})
+        self.boundaries = state.get("boundaries", [])
+        self.explicit_turns = state.get("explicit_turns", False)
+        self.active_turn = state.get("active_turn", False)
 
     def emit(self, role: str, text: str, record: dict, position: int, offset: int,
              identity: str | None = None, channel: str = "source") -> None:
@@ -482,7 +515,42 @@ class _Normalizer:
         else:
             self.report.unknown[f"ui item:{kind}"] += 1
 
-    def consume(self, record: dict, position: int, offset: int) -> None:
+    def consume(self, record: dict, position: int, offset: int, end_offset: int = 0) -> None:
+        before = len(self.events) + len(self.mirrors) + len(self.snapshots)
+        self._consume(record, position, offset)
+        after = len(self.events) + len(self.mirrors) + len(self.snapshots)
+        p = record.get("payload", record)
+        if not isinstance(p, dict):
+            return
+        kind = p.get("type")
+        boundary = None
+        if record.get("type") == "event_msg" and kind == "task_started":
+            self.explicit_turns = True
+            self.active_turn = True
+        elif record.get("type") == "event_msg" and kind in ("task_complete", "turn_aborted"):
+            self.explicit_turns = True
+            self.active_turn = False
+            boundary = "turn_complete" if kind == "task_complete" else "turn_aborted"
+        elif ((kind == "message" and p.get("role") == "user") or
+              (record.get("type") == "event_msg" and kind == "user_message")):
+            if after > before:
+                self.active_turn = True
+        elif not self.explicit_turns and (kind == "message" and p.get("role") == "assistant"
+                                          and p.get("phase") in (None, "final")):
+            if after > before:
+                self.active_turn = False
+                boundary = "assistant_message"
+        elif not self.explicit_turns and record.get("type") == "event_msg" and kind == "agent_message":
+            if p.get("phase") in (None, "final"):
+                self.active_turn = False
+                boundary = "assistant_message"
+        if (boundary is None and not self.active_turn and self.boundaries
+                and len(self.events) + len(self.mirrors) + len(self.snapshots) > before):
+            boundary = "persisted_metadata"
+        if boundary:
+            self.boundaries.append({"position": position, "offset": end_offset, "kind": boundary})
+
+    def _consume(self, record: dict, position: int, offset: int) -> None:
         self.report.records += 1
         kind = record.get("type")
         if kind in {"session_meta", "response_item", "event_msg", "turn_context", "compacted"} and not isinstance(record.get("payload"), dict):
@@ -574,6 +642,14 @@ class _Normalizer:
             self.report.unknown[f"record:{kind}"] += 1
 
     def finish(self) -> Normalized:
+        # Finishing reconciles/sorts a view. Reader state must retain original
+        # source indices so later append identities can update the right item.
+        view = copy.copy(self)
+        view.events = list(self.events)
+        view.report = copy.deepcopy(self.report)
+        return view._finish_view()
+
+    def _finish_view(self) -> Normalized:
         by_content: dict[str, list[Event]] = defaultdict(list)
         by_id = {e.identity: e for e in self.events if e.identity}
         for event in self.events:
@@ -611,14 +687,15 @@ class _Normalizer:
         if self.report.unknown:
             kinds = ", ".join(sorted(self.report.unknown))
             raise CodexParseError(f"{self.source.path}: unsupported history records: {kinds}")
-        return Normalized(self.source, self.events, self.report, self.copied_metadata)
+        return Normalized(self.source, self.events, self.report, self.copied_metadata, self.boundaries)
 
 
 class CodexCatalog:
     """One index over explicitly configured roots, including parent lookups."""
 
-    def __init__(self, stores: list[DataStore], options: CodexSettings | None = None):
+    def __init__(self, stores: list[DataStore], options: CodexSettings | None = None, *, journal=None):
         self.options = options or CodexSettings()
+        self.journal = journal
         self.sources: dict[Path, Source] = {}
         self.by_id: dict[str, Source] = {}
         self.errors: dict[str, str] = {}
@@ -698,11 +775,59 @@ class CodexCatalog:
 
     def _read(self, source: Source, end_byte: int | None = None, end_ordinal: int | None = None) -> Normalized:
         stat = source.path.stat()
-        key = (source.path, stat.st_size, stat.st_mtime_ns, end_byte, end_ordinal)
+        key = (source.path, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, end_byte, end_ordinal)
+        meta_revision = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
+        if self.journal is not None and source.metadata_revision != meta_revision:
+            meta, cwd = _metadata(source.path, self.options)
+            if str(meta.get('id') or meta.get('session_id')) != source.session_id:
+                raise CodexParseError('source session identity changed; rediscover before ingestion')
+            source.metadata, source.cwd = meta, cwd
+            source.project = to_slug(cwd) if cwd else UNATTRIBUTED_PROJECT
+            source.metadata_revision = meta_revision
         if key in self._cache:
             self._cache.move_to_end(key)
-            return self._cache[key]
+            cached = self._cache[key]
+            return replace(cached, revisions=[replace(r, parsed_records=0) for r in cached.revisions])
         normalizer = _Normalizer(source, self.options)
+        if self.journal is not None:
+            policy = "codex-reader-v1:" + _digest(json.dumps(vars(self.options), sort_keys=True))
+            holder = []
+            def consume(state, record, position, offset, end):
+                if not holder:
+                    normalizer.restore_state(state)
+                    holder.append(normalizer)
+                normalizer.consume(record, position, offset, end)
+            def after(state, position, end, digest):
+                if holder and normalizer.boundaries and normalizer.boundaries[-1]["position"] == position:
+                    normalizer.boundaries[-1]["digest"] = digest
+            def validate(state):
+                if not holder:
+                    normalizer.restore_state(state)
+                normalizer.finish()
+                state.clear()
+                state.update(normalizer.dump_state())
+            if source.path.suffix == ".json":
+                def decode(record):
+                    if not isinstance(record.get("session"), dict) or not isinstance(record.get("items"), list):
+                        raise CodexParseError("expected a Codex {session, items} snapshot")
+                    normalizer.consume({"type": "session_meta", "payload": record["session"]}, 0, 0)
+                    for i, item in enumerate(record["items"], 1):
+                        normalizer.consume(item, i, 0)
+                    normalizer.finish()
+                    return normalizer.dump_state()
+                state, revision = self.journal.read_snapshot(source.path, policy, decode, self.options.max_record_bytes)
+            else:
+                state, revision = self.journal.read_jsonl(
+                    source.path, policy, initial=normalizer.dump_state, consume=consume,
+                    validate=validate, after_record=after, max_record_bytes=self.options.max_record_bytes,
+                    end_byte=end_byte, end_ordinal=end_ordinal)
+            normalizer.restore_state(state)
+            result = normalizer.finish()
+            result.revisions = [revision]
+            self._cache[key] = result
+            while len(self._cache) > 4:
+                self._cache.popitem(last=False)
+            return result
         for record, position, offset in _records(source.path, self.options.max_record_bytes,
                                                  end_byte=end_byte, end_ordinal=end_ordinal):
             try:
@@ -728,6 +853,7 @@ class CodexCatalog:
         parent_id = source.parent_id
         base = source.metadata.get("history_base")
         inherited: list[Event] = []
+        revisions = list(normalized.revisions)
         if parent_id:
             parent = self.by_id.get(parent_id)
             if parent is None:
@@ -742,9 +868,11 @@ class CodexCatalog:
                             raise CodexParseError(f"{source.path}: invalid shared-history boundary {key}")
                     if base.get("end_byte_offset") is None and base.get("end_ordinal_exclusive") is None:
                         raise CodexParseError(f"{source.path}: shared history has no recorded boundary")
-                inherited = self._resolve(parent, (*chain, source.session_id),
-                                          base.get("end_byte_offset") if base else None,
-                                          base.get("end_ordinal_exclusive") if base else None).history
+                parent_view = self._resolve(parent, (*chain, source.session_id),
+                                            base.get("end_byte_offset") if base else None,
+                                            base.get("end_ordinal_exclusive") if base else None)
+                inherited = parent_view.history
+                revisions.extend(parent_view.revisions)
                 ids = {e.identity for e in inherited if e.identity}
                 drop: set[int] = {i for i, e in enumerate(local) if e.identity and e.identity in ids}
                 dropped_ids = {local[i].identity for i in drop}
@@ -780,19 +908,21 @@ class CodexCatalog:
                 local = [event for i, event in enumerate(local) if i not in drop]
         elif base:
             raise CodexParseError(f"{source.path}: unsupported shared-history reference")
-        return Resolved(local, inherited + local, report, parent_id)
+        return Resolved(local, inherited + local, report, parent_id, normalized.boundaries, revisions)
 
-    def inspect(self, path: Path, project: str | None = None, min_chars: int = 200) -> tuple[SessionTranscript | None, ParseReport]:
+    def inspect(self, path: Path, project: str | None = None, min_chars: int = 200,
+                *, upto_position: int | None = None) -> tuple[SessionTranscript | None, ParseReport]:
         source = self.sources.get(path.resolve())
         if source is None:
             raise CodexParseError(f"{path}: not a discovered source inside configured roots")
         resolved = self._resolve(source)
-        local = resolved.local
+        local = resolved.local if upto_position is None else [e for e in resolved.local if e.position <= upto_position]
         # A fork can continue the parent's outstanding task without another
         # human message. Supply one explicitly labelled task for orientation.
         context: Event | None = None
         if local and not any(e.role == "user" for e in local) and resolved.parent_id:
-            context = next((e for e in reversed(resolved.history[:-len(local)]) if e.role == "user"), None)
+            inherited_history = resolved.history[:-len(resolved.local)] if resolved.local else resolved.history
+            context = next((e for e in reversed(inherited_history) if e.role == "user"), None)
         st = SessionTranscript(
             memory_session_id(source.session_id), project or source.store.resolve_project(source.project),
             str(source.path), parent_session=memory_session_id(resolved.parent_id) if resolved.parent_id else None,

@@ -45,7 +45,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     cfg.ensure_dirs()
     store = MemoryStore(cfg.db_path)
     embedder = make_embedder(cfg)
-    llm = None if args.no_llm else AgentCoreBackend(cfg)
+    llm = None if args.no_llm else AgentCoreBackend(cfg, probe=not cfg.incremental_ingestion)
     fallback = None
     if llm is not None and cfg.agent_core_fallback_profile:
         # probe=False: no API call unless a refusal actually needs it
