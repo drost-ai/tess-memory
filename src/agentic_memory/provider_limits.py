@@ -1,0 +1,231 @@
+"""Cross-process provider admission, shared cooldowns and call receipts."""
+from __future__ import annotations
+
+from contextlib import contextmanager
+import json
+import os
+from pathlib import Path
+import re
+import sqlite3
+import threading
+import time
+from urllib.parse import urlparse
+import uuid
+
+from .distill import CallBudgetExceeded
+
+
+def process_alive(pid: int | None) -> bool:
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def provider_key(cfg, profile_name: str) -> str:
+    with cfg.agent_core_settings.open() as handle:
+        profile = (json.load(handle).get('providerProfiles') or {}).get(profile_name, {})
+    mode = str(profile.get('apiMode', '')).lower()
+    host = (urlparse(profile.get('baseUrl') or '').hostname or '').lower()
+    kind = str(profile.get('kind', '')).lower()
+    if mode == 'codex' or profile_name == 'codex':
+        return 'codex'
+    if 'fireworks' in host or profile_name.startswith('fireworks'):
+        return 'fireworks'
+    if 'deepseek' in host or profile_name.startswith('deepseek'):
+        return 'deepseek'
+    if kind.startswith('anthropic') or profile_name.startswith('anthropic'):
+        return 'anthropic'
+    return host or profile_name
+
+
+class ProviderGate:
+    def __init__(self, path: Path, *, model_limit: int = 16, embedding_limit: int = 4,
+                 provider_limits: dict[str, int] | None = None, poll_seconds: float = 0.2):
+        if model_limit < 1 or embedding_limit < 1 or any(v < 1 for v in (provider_limits or {}).values()):
+            raise ValueError('provider concurrency limits must be positive')
+        self.path = path
+        self.limits = {'model': model_limit, 'embedding': embedding_limit}
+        self.provider_limits = provider_limits or {}
+        self.poll_seconds = poll_seconds
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch(mode=0o600, exist_ok=True)
+        db = self.connect()
+        try:
+            db.execute('PRAGMA journal_mode=WAL')
+            db.executescript('''
+                CREATE TABLE IF NOT EXISTS call_waiters (
+                    ticket INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT UNIQUE NOT NULL,
+                    owner TEXT NOT NULL, pid INTEGER NOT NULL, instance TEXT NOT NULL,
+                    provider TEXT NOT NULL, kind TEXT NOT NULL, created REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS call_leases (
+                    id TEXT PRIMARY KEY, owner TEXT NOT NULL, pid INTEGER NOT NULL,
+                    instance TEXT NOT NULL, provider TEXT NOT NULL, kind TEXT NOT NULL,
+                    started REAL NOT NULL, heartbeat REAL NOT NULL);
+                CREATE TABLE IF NOT EXISTS provider_cooldowns (
+                    provider TEXT PRIMARY KEY, until REAL NOT NULL, failures INTEGER NOT NULL);
+                CREATE TABLE IF NOT EXISTS call_receipts (
+                    id TEXT PRIMARY KEY, instance TEXT NOT NULL, provider TEXT NOT NULL,
+                    kind TEXT NOT NULL, started REAL NOT NULL, ended REAL, outcome TEXT);
+            ''')
+            db.commit()
+        finally:
+            db.close()
+
+    def connect(self):
+        db = sqlite3.connect(self.path, timeout=10)
+        db.row_factory = sqlite3.Row
+        return db
+
+    def release_owner(self, owner: str):
+        db = self.connect()
+        try:
+            with db:
+                db.execute("UPDATE call_receipts SET ended=?,outcome='worker_lost' WHERE id IN (SELECT id FROM call_leases WHERE owner=?)", (time.time(), owner))
+                db.execute('DELETE FROM call_leases WHERE owner=?', (owner,))
+                db.execute('DELETE FROM call_waiters WHERE owner=?', (owner,))
+        finally:
+            db.close()
+
+    def reap_dead(self):
+        db = self.connect()
+        try:
+            owners = db.execute('SELECT owner,pid FROM call_leases UNION SELECT owner,pid FROM call_waiters').fetchall()
+        finally:
+            db.close()
+        for row in owners:
+            if not process_alive(row['pid']):
+                self.release_owner(row['owner'])
+
+    def cooldown(self, provider: str, seconds: float | None = None):
+        db = self.connect()
+        try:
+            with db:
+                db.execute('BEGIN IMMEDIATE')
+                old = db.execute('SELECT failures FROM provider_cooldowns WHERE provider=?', (provider,)).fetchone()
+                failures = min(6, old['failures'] + 1 if old else 1)
+                delay = seconds if seconds is not None else min(300, 10 * 2 ** (failures - 1))
+                db.execute('INSERT INTO provider_cooldowns VALUES(?,?,?) ON CONFLICT(provider) DO UPDATE SET until=MAX(until,excluded.until),failures=excluded.failures',
+                           (provider, time.time() + delay, failures))
+        finally:
+            db.close()
+
+    @contextmanager
+    def acquire(self, provider: str, kind: str, *, owner: str, instance: str):
+        if kind not in self.limits:
+            raise ValueError('unknown provider operation kind')
+        self.reap_dead()
+        identifier = uuid.uuid4().hex
+        db = self.connect()
+        try:
+            with db:
+                db.execute('INSERT INTO call_waiters(id,owner,pid,instance,provider,kind,created) VALUES(?,?,?,?,?,?,?)',
+                           (identifier, owner, os.getpid(), instance, provider, kind, time.time()))
+            last_reap = time.monotonic()
+            while True:
+                if time.monotonic() - last_reap >= 1:
+                    self.reap_dead()
+                    last_reap = time.monotonic()
+                admitted = False
+                with db:
+                    db.execute('BEGIN IMMEDIATE')
+                    counts = dict(db.execute('SELECT kind,COUNT(*) FROM call_leases GROUP BY kind'))
+                    providers = dict(db.execute('SELECT provider,COUNT(*) FROM call_leases GROUP BY provider'))
+                    cooldowns = dict(db.execute('SELECT provider,until FROM provider_cooldowns'))
+                    # FIFO among eligible requests. A cooling or saturated
+                    # provider cannot prevent other providers from progressing.
+                    for row in db.execute('SELECT * FROM call_waiters ORDER BY ticket'):
+                        eligible = (counts.get(row['kind'], 0) < self.limits[row['kind']]
+                                    and providers.get(row['provider'], 0) < self.provider_limits.get(row['provider'], self.limits[row['kind']])
+                                    and cooldowns.get(row['provider'], 0) <= time.time())
+                        if not eligible:
+                            continue
+                        if row['id'] == identifier:
+                            now = time.time()
+                            db.execute('INSERT INTO call_leases VALUES(?,?,?,?,?,?,?,?)',
+                                       (identifier, owner, os.getpid(), instance, provider, kind, now, now))
+                            db.execute('INSERT INTO call_receipts VALUES(?,?,?,?,?,?,?)',
+                                       (identifier, instance, provider, kind, now, None, 'running'))
+                            db.execute('DELETE FROM call_waiters WHERE id=?', (identifier,))
+                            admitted = True
+                        break
+                if admitted:
+                    break
+                time.sleep(self.poll_seconds)
+            stop = threading.Event()
+            def heartbeat():
+                while not stop.wait(5):
+                    connection = self.connect()
+                    try:
+                        with connection:
+                            connection.execute('UPDATE call_leases SET heartbeat=? WHERE id=?', (time.time(), identifier))
+                    except sqlite3.Error:
+                        pass
+                    finally:
+                        connection.close()
+            thread = threading.Thread(target=heartbeat, daemon=True)
+            thread.start()
+            outcome = 'success'
+            try:
+                yield
+            except BaseException as exc:
+                outcome = type(exc).__name__
+                if re.search(r'rate[ _-]?limit|\b429\b', str(exc), re.I):
+                    self.cooldown(provider)
+                raise
+            finally:
+                stop.set()
+                thread.join(timeout=1)
+                with db:
+                    db.execute('DELETE FROM call_leases WHERE id=?', (identifier,))
+                    db.execute('UPDATE call_receipts SET ended=?,outcome=? WHERE id=?',
+                               (time.time(), outcome, identifier))
+                    if outcome == 'success':
+                        db.execute('DELETE FROM provider_cooldowns WHERE provider=? AND until<=?', (provider, time.time()))
+        finally:
+            with db:
+                db.execute('DELETE FROM call_waiters WHERE id=?', (identifier,))
+            db.close()
+
+    def status(self):
+        db = self.connect()
+        try:
+            return {'active': [dict(r) for r in db.execute('SELECT instance,provider,kind,COUNT(*) AS calls,MIN(started) AS oldest_started FROM call_leases GROUP BY instance,provider,kind')],
+                    'waiting': [dict(r) for r in db.execute('SELECT instance,provider,kind,COUNT(*) AS calls FROM call_waiters GROUP BY instance,provider,kind')],
+                    'cooldowns': [dict(r) for r in db.execute('SELECT * FROM provider_cooldowns WHERE until>?', (time.time(),))],
+                    'completed': [dict(r) for r in db.execute('SELECT instance,provider,kind,outcome,COUNT(*) AS calls FROM call_receipts WHERE ended IS NOT NULL GROUP BY instance,provider,kind,outcome')]}
+        finally:
+            db.close()
+
+
+class ModelBudget:
+    def __init__(self, maximum: int):
+        self.maximum, self.calls = maximum, 0
+        self.lock = threading.Lock()
+    def take(self):
+        with self.lock:
+            if self.maximum and self.calls >= self.maximum:
+                raise CallBudgetExceeded('worker model-call budget reached')
+            self.calls += 1
+
+
+class LimitedBackend:
+    def __init__(self, backend, gate, budget, *, provider, owner, instance):
+        self.backend, self.gate, self.budget = backend, gate, budget
+        self.provider, self.owner, self.instance = provider, owner, instance
+        self.name = backend.name
+        self.cache_identity = getattr(backend, 'cache_identity', backend.name)
+    def complete(self, **kwargs):
+        verify = getattr(self.backend, 'verify_profile', lambda: None)
+        verify()
+        self.budget.take()
+        with self.gate.acquire(self.provider, 'model', owner=self.owner, instance=self.instance):
+            verify()
+            result = self.backend.complete(**kwargs)
+            verify()
+            return result

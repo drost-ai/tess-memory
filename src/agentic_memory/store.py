@@ -120,7 +120,8 @@ CREATE TABLE IF NOT EXISTS ingest_sources(
     observed_at REAL,
     indexed_at REAL,
     last_error TEXT,
-    attempts INTEGER NOT NULL DEFAULT 0
+    attempts INTEGER NOT NULL DEFAULT 0,
+    retry_at REAL NOT NULL DEFAULT 0
 );
 """
 
@@ -198,6 +199,9 @@ class MemoryStore:
         # Status vocabulary migration (the first plan release used open/done).
         self.db.execute("UPDATE plan_items SET status='planned' WHERE status='open'")
         self.db.execute("UPDATE plan_items SET status='complete' WHERE status='done'")
+        source_columns = {r['name'] for r in self.db.execute('PRAGMA table_info(ingest_sources)')}
+        if 'retry_at' not in source_columns:
+            self.db.execute('ALTER TABLE ingest_sources ADD COLUMN retry_at REAL NOT NULL DEFAULT 0')
         self.db.commit()
 
     # ---------------- file tracking ----------------
@@ -227,16 +231,19 @@ class MemoryStore:
     def record_source(self, *, path: str, session_id: str | None, project: str, source_type: str,
                       signature: str | None, status: str, state: dict, now: float,
                       indexed: bool = False, error: str | None = None) -> None:
+        old = self.source_progress(path)
+        attempts = (old['attempts'] + 1 if old and old['status'] == 'error' else 1) if status == 'error' else 0
+        retry_at = now + min(1800, 30 * 2 ** min(attempts - 1, 6)) if attempts else 0
         self.db.execute("""INSERT INTO ingest_sources
-            (path,session_id,project,source_type,observed_signature,status,state,observed_at,indexed_at,last_error,attempts)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET
+            (path,session_id,project,source_type,observed_signature,status,state,observed_at,indexed_at,last_error,attempts,retry_at)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(path) DO UPDATE SET
             session_id=COALESCE(excluded.session_id,ingest_sources.session_id), project=excluded.project,
             source_type=excluded.source_type,observed_signature=excluded.observed_signature,status=excluded.status,
             state=excluded.state,observed_at=excluded.observed_at,
             indexed_at=COALESCE(excluded.indexed_at,ingest_sources.indexed_at),last_error=excluded.last_error,
-            attempts=CASE WHEN excluded.last_error IS NULL THEN 0 ELSE ingest_sources.attempts+1 END""",
+            attempts=excluded.attempts,retry_at=excluded.retry_at""",
             (path, session_id, project, source_type, signature, status, json.dumps(state), now,
-             now if indexed else None, error, 1 if error else 0))
+             now if indexed else None, error, attempts, retry_at))
 
     def session_rows_with_vectors(self, session_id: str):
         return self.db.execute("SELECT m.*,e.vector FROM memories m LEFT JOIN embeddings e ON e.memory_id=m.id WHERE m.session_id=? ORDER BY m.id",

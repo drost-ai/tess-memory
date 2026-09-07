@@ -109,18 +109,26 @@ class AgentCoreBackend:
             if isinstance(value, list):
                 return [semantic(v) for v in value]
             return value
-        selected = semantic((settings_document.get('providerProfiles') or {}).get(self._profile, {}))
-        if self._model:
-            selected['defaultModel'] = self._model
-        if self._reasoning_effort:
-            for key in ('reasoningEffort', 'defaultEffort', 'effort'):
-                if key in selected:
-                    selected[key] = self._reasoning_effort
-        globals_used = {k: settings_document[k] for k in ('maxTokens', 'thinkingBudget') if k in settings_document}
-        self.cache_identity = hashlib.sha256(json.dumps([2, self.name, selected, globals_used],
-                                                        sort_keys=True).encode()).hexdigest()
+        def identity(document):
+            selected = semantic((document.get('providerProfiles') or {}).get(self._profile, {}))
+            if self._model:
+                selected['defaultModel'] = self._model
+            if self._reasoning_effort:
+                for key in ('reasoningEffort', 'defaultEffort', 'effort'):
+                    if key in selected:
+                        selected[key] = self._reasoning_effort
+            globals_used = {k: document[k] for k in ('maxTokens', 'thinkingBudget') if k in document}
+            return hashlib.sha256(json.dumps([2, self.name, selected, globals_used], sort_keys=True).encode()).hexdigest()
+        self._cache_identity_for = identity
+        self.cache_identity = identity(settings_document)
         if probe:
             self._probe()
+
+    def verify_profile(self):
+        if self._settings_path:
+            with open(self._settings_path) as handle:
+                if self._cache_identity_for(json.load(handle)) != self.cache_identity:
+                    raise RuntimeError('provider settings changed during memory work; retry with fresh configuration')
 
     async def _run_turn(self, *, system: str, prompt: str) -> dict:
         cwd = self._workdir

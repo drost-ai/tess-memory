@@ -161,6 +161,8 @@ class Config:
     incremental_reduce_fanout: int = 8
     cache_retention_days: int = 30
     max_model_calls_per_run: int = 0    # 0 = unlimited; checkpoints resume a budgeted run
+    ingestion_hold_texts: list[str] = field(default_factory=list)  # operator-supplied export holds; never logged
+    source_retry_backoff: bool = False  # scheduled workers opt in; explicit manual retries remain immediate
     chunk_chars: int = 6_000             # window cap within an exchange-aligned chunk
     tool_result_snippet: int = 400       # tool-result truncation in rendered turns
     min_session_chars: int = 200         # skip sessions with less dialogue than this

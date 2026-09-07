@@ -322,7 +322,11 @@ class DistillationPool:
             self.active_calls += 1
             self.peak_calls = max(self.peak_calls, self.active_calls)
         try:
-            return backend.complete(system=system, prompt=prompt)
+            verify = getattr(backend, 'verify_profile', lambda: None)
+            verify()
+            result = backend.complete(system=system, prompt=prompt)
+            verify()
+            return result
         finally:
             with self._lock:
                 self.active_calls -= 1

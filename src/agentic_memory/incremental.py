@@ -107,6 +107,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
     reader = CompletedSourceReader(cfg)
     cache = DistillationCheckpoints(cfg.data_dir / 'distillation-cache.db')
     policy = pipeline_policy(cfg, embedder, llm, fallback_llm)
+    hold_signature = content_key(cfg.ingestion_hold_texts)
     found = []
     from .audit import source_members
     for ds in cfg.data_stores:
@@ -163,6 +164,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             max_calls=cfg.max_model_calls_per_run) if llm else None
     futures = {}
     attempted = 0
+    visited = 0
     iterator = iter(found)
     exhausted = False
     seen_sessions = {}
@@ -175,6 +177,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         break
                     try:
                         _, ds, path, project, parent = next(iterator)
+                        visited += 1
                     except StopIteration:
                         exhausted = True
                         break
@@ -182,6 +185,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                     state = json.loads(progress['state']) if progress else {}
                     tracked = store.session_for_file(str(path))
                     known_id = progress['session_id'] if progress and progress['session_id'] else tracked['id'] if tracked else None
+                    signature = None
                     try:
                         signature = content_key([source_signature(path, ds, cfg, catalog=reader.catalog if ds.type == 'codex' else None), policy])
                         if known_id:
@@ -192,7 +196,15 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 continue
                             seen_sessions[known_id] = str(path)
                         old_status = store.file_status(str(path))
+                        if (cfg.source_retry_backoff and progress and progress['status'] == 'error' and progress['observed_signature'] == signature
+                                and progress['retry_at'] > time.time() and not retry_extractive):
+                            stats.retries_deferred += 1
+                            continue
                         if retry_extractive and old_status != 'extractive':
+                            stats.unchanged += 1
+                            continue
+                        if (progress and progress['status'] == 'held' and progress['observed_signature'] == signature
+                                and state.get('hold_signature') == hold_signature):
                             stats.unchanged += 1
                             continue
                         if (progress and progress['observed_signature'] == signature
@@ -202,10 +214,16 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 seen_sessions.setdefault(progress['session_id'], str(path))
                             stats.unchanged += 1
                             continue
+                        attempted += 1
                         snapshot = reader.read(ds, path, project, parent)
                         stats.parsed_records += snapshot.parsed_records
                         signature = content_key([snapshot.observed_signature, policy])
                         st = snapshot.transcript
+                        if st and any(pattern in turn.text for pattern in cfg.ingestion_hold_texts for turn in st.turns):
+                            state['hold_signature'] = hold_signature
+                            record(ds, path, project, signature, 'held', state, st.session_id,
+                                   error='source content matches an operator export hold')
+                            continue
                         if st is None:
                             prior = store.session_for_file(str(path))
                             if not snapshot.pending_tail and prior is not None:
@@ -263,13 +281,12 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             adopt(ds, path, project, signature, state, st, old, snapshot.pending_tail, known_status)
                             stats.unchanged += 1
                             continue
-                        attempted += 1
                         record(ds, path, project, signature, 'processing', state, st.session_id)
                         future = coordinators.submit(work, snapshot, seed, pool)
                         futures[future] = (ds, path, project, parent, snapshot, old, previous, state, seed, signature)
                     except Exception as exc:
                         stats.errors += 1
-                        record(ds, path, project, None, 'error', state, error=str(exc)[:500])
+                        record(ds, path, project, signature, 'error', state, error=str(exc)[:500])
                         _log(f"[incremental] source failed: {path.name}: {exc}")
                 if not futures:
                     continue
@@ -366,6 +383,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
         with store.write_transaction():
             store.set_meta('incremental:last_cache_prune', str(now))
     stats.aggregates_pending = len(store.pending_aggregates(float('inf')))
+    stats.source_reads = attempted
+    stats.sources_remaining = max(0, stats.scanned - visited)
     stats.duration_seconds = round(time.monotonic() - started, 3)
     store.commit()
     return stats

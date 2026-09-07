@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from agentic_memory.source_journal import SourceChanged, SourceJournal, SourceReadError
 
@@ -115,6 +116,18 @@ class SourceJournalTests(unittest.TestCase):
         with self.assertRaises(SourceReadError):
             self.journal.read_snapshot(path, "v1", lambda value: value)
         self.assertFalse(first.verify())
+
+    def test_prefix_verification_does_not_require_a_growing_file_to_go_quiet(self):
+        from agentic_memory.source_journal import prefix_digest
+        self.write([1])
+        _, revision = self.read()
+        self.append(2)
+        def growing(path, length):
+            digest = prefix_digest(path, length)
+            self.append(3)
+            return digest
+        with mock.patch('agentic_memory.source_journal.prefix_digest', side_effect=growing):
+            self.assertTrue(revision.verify())
 
 
 if __name__ == "__main__":

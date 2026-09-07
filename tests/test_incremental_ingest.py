@@ -219,6 +219,35 @@ class IncrementalIngestTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 load_config(p)
 
+    def test_scheduled_source_backoff_does_not_block_changed_input(self):
+        self.cfg.source_retry_backoff = True
+        self.backend.fail = True
+        self.assertEqual(self.run_ingest().errors, 1)
+        calls = len(self.backend.calls)
+        self.assertEqual(self.run_ingest().retries_deferred, 1)
+        self.assertEqual(len(self.backend.calls), calls)
+        self.backend.fail = False
+        self.add_unit()
+        self.assertEqual(self.run_ingest().distilled, 1)
+
+    def test_source_limit_reports_remaining_work_without_reprocessing_indexed_sources(self):
+        write_rollout(self.home, 'two')
+        write_rollout(self.home, 'three')
+        for remaining in (2, 1, 0):
+            stats = self.run_ingest(limit=1)
+            self.assertEqual((stats.distilled, stats.source_reads, stats.sources_remaining), (1, 1, remaining))
+        self.assertEqual(self.run_ingest().model_calls, 0)
+
+    def test_operator_export_hold_prevents_model_and_embedding_calls_until_released(self):
+        self.cfg.ingestion_hold_texts = ['Remember the durable workspace decision.']
+        stats = self.run_ingest()
+        self.assertEqual((stats.model_calls, stats.embedded_passages), (0, 0))
+        self.assertFalse(self.backend.calls)
+        self.assertFalse(self.embedder.calls)
+        self.assertEqual(self.store.source_progress(str(self.path))['status'], 'held')
+        self.cfg.ingestion_hold_texts = []
+        self.assertEqual(self.run_ingest().distilled, 1)
+
     def test_reduction_tree_append_only_rebuilds_the_rightmost_path(self):
         self.cfg.incremental_reduce_fanout = 2
         for i in range(15):

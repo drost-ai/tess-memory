@@ -45,6 +45,7 @@ class SourceRevision:
     partial_record: bool = False
     records: int = 0
     parsed_records: int = 0
+    is_snapshot: bool = False
 
     def unchanged(self) -> bool:
         try:
@@ -64,9 +65,10 @@ class SourceRevision:
                 return True
             actual = prefix_digest(path, self.offset).hexdigest()
             after = path.stat()
+            stable = (before.st_mtime_ns == after.st_mtime_ns and before.st_ctime_ns == after.st_ctime_ns)
+            growing = not self.is_snapshot and after.st_size > before.st_size
             return (actual == self.digest and (after.st_dev, after.st_ino) == (self.device, self.inode)
-                    and after.st_size >= self.offset and before.st_mtime_ns == after.st_mtime_ns
-                    and before.st_ctime_ns == after.st_ctime_ns)
+                    and after.st_size >= self.offset and (stable or growing))
         except (OSError, SourceChanged):
             return False
 
@@ -192,6 +194,8 @@ class SourceJournal:
         path = path.resolve()
         key = hashlib.sha256(json.dumps([str(path), policy, "snapshot"]).encode()).hexdigest()
         old = self._load(key)
+        if old:
+            old[0].is_snapshot = True
         if old and old[0].unchanged():
             old[0].parsed_records = 0
             return old[1], old[0]
@@ -208,7 +212,7 @@ class SourceJournal:
             raise SourceReadError("snapshot must be an object")
         state = decode(record)
         revision = SourceRevision(str(path), info.st_dev, info.st_ino, len(raw), hashlib.sha256(raw).hexdigest(),
-                                  info.st_size, info.st_mtime_ns, info.st_ctime_ns, False, 1, 1)
+                                  info.st_size, info.st_mtime_ns, info.st_ctime_ns, False, 1, 1, True)
         if not revision.verify():
             raise SourceChanged("snapshot changed while parsing")
         self._save(key, revision, state)

@@ -16,6 +16,7 @@ descriptor and refuses to mix (switch provider => re-ingest).
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 
 import numpy as np
 
@@ -104,16 +105,23 @@ class OpenAICompatEmbedder(Embedder):
         last_err: Exception | None = None
         for attempt in range(3):
             try:
-                r = httpx.post(
-                    self._url,
-                    headers={"Authorization": f"Bearer {self._key}"},
-                    json={"model": self._model, "input": inputs, "dimensions": self._dims},
-                    timeout=180,
-                )
-                r.raise_for_status()
-                vecs = np.array(
-                    [d["embedding"] for d in r.json()["data"]], dtype=np.float32
-                )
+                guard = getattr(self, 'request_guard', nullcontext)
+                with guard():
+                    r = httpx.post(
+                        self._url,
+                        headers={"Authorization": f"Bearer {self._key}"},
+                        json={"model": self._model, "input": inputs, "dimensions": self._dims},
+                        timeout=180,
+                    )
+                    r.raise_for_status()
+                data = r.json()["data"]
+                if all(isinstance(d, dict) and 'index' in d for d in data):
+                    if sorted(d['index'] for d in data) != list(range(len(inputs))):
+                        raise ValueError('embedding response indices do not match inputs')
+                    data = sorted(data, key=lambda d: d['index'])
+                vecs = np.array([d["embedding"] for d in data], dtype=np.float32)
+                if vecs.shape != (len(inputs), self._dims) or not np.isfinite(vecs).all():
+                    raise ValueError('embedding response has invalid dimensions or values')
                 norms = np.linalg.norm(vecs, axis=1, keepdims=True)
                 return vecs / np.clip(norms, 1e-9, None)
             except Exception as e:  # noqa: BLE001 — retry transient network/5xx

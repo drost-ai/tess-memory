@@ -64,6 +64,9 @@ class IngestStats:
     request_cache_hits: int = 0
     embedded_passages: int = 0
     budget_deferred: int = 0
+    source_reads: int = 0
+    sources_remaining: int = 0
+    retries_deferred: int = 0
 
 
 _LOG_LOCK = threading.Lock()
@@ -154,6 +157,7 @@ def ingest(
     session_ids: set[str] | None = None,
     refresh_aggregates: bool | None = None,
     aggregates_only: bool = False,
+    aggregate_levels: tuple[str, ...] | None = None,
 ) -> IngestStats:
     """Use a process lock only when the requested sources include Codex."""
     with ExitStack() as stack:
@@ -175,7 +179,7 @@ def ingest(
                 cache_path=cfg.data_dir / "distillation-cache.db" if cfg.distillation_cache else None,
             ))
         return _ingest(cfg, store, embedder, llm, fallback_llm, limit, retry_extractive,
-                       session_ids, refresh_aggregates, aggregates_only, calls_pool)
+                       session_ids, refresh_aggregates, aggregates_only, calls_pool, aggregate_levels)
 
 
 def _ingest(
@@ -190,6 +194,7 @@ def _ingest(
     refresh_aggregates: bool | None = None,
     aggregates_only: bool = False,
     calls_pool: DistillationPool | None = None,
+    aggregate_levels: tuple[str, ...] | None = None,
 ) -> IngestStats:
     """llm=None means extractive-only ingestion (no distillation calls).
 
@@ -483,14 +488,14 @@ def _ingest(
     # ---- 4. durable aggregate refresh ----
     if use_llm and refresh_aggregates is not False:
         interval = 0 if refresh_aggregates is True else cfg.aggregate_refresh_seconds
-        _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval)
+        _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval, levels=aggregate_levels)
     stats.aggregates_pending = len(store.pending_aggregates(float("inf")))
     stats.duration_seconds = round(time.monotonic() - started, 3)
     store.commit()
     return stats
 
 
-def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval):
+def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval, *, levels=None):
     """Slow model/embedding calls outside transactions; acknowledge only success.
 
     A source change during generation invalidates the result and leaves dirty
@@ -498,6 +503,8 @@ def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval
     """
     for job in store.pending_aggregates(time.time(), interval):
         level, scope, revision = job["level"], job["scope"], job["revision"]
+        if levels is not None and level not in levels:
+            continue
         try:
             if level == "project":
                 sessions = store.sessions_for_project(scope, limit=cfg.profile_session_limit)

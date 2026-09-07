@@ -63,6 +63,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             session_ids=set(args.session_id) if getattr(args, "session_id", None) else None,
             refresh_aggregates=getattr(args, "refresh_aggregates", None),
             aggregates_only=getattr(args, "aggregates_only", False),
+            aggregate_levels=tuple(args.aggregate_levels) if getattr(args, 'aggregate_levels', None) else None,
         )
     except ValueError as exc:
         if not any(ds.type == "codex" for ds in cfg.data_stores):
@@ -245,6 +246,37 @@ def cmd_evaluate(args: argparse.Namespace) -> int:
     return 0 if result["passed"] == result["cases"] else 1
 
 
+def cmd_scheduler(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from .scheduler import serve, run_once, worker, stop_run, _gate
+    from .scheduler_config import load_service
+    from .scheduler_queue import WorkQueue
+    path = Path(args.config).expanduser()
+    if args.action in ('install', 'start', 'stop', 'restart'):
+        from .scheduler_install import install, service_control
+        result = install(path, label=args.label, start=not args.no_start) if args.action == 'install' else service_control(args.action, label=args.label)
+        print(json.dumps(result, indent=2))
+        return 0
+    if args.action == 'serve':
+        serve(path)
+        return 0
+    if args.action == 'worker':
+        return worker(path, args.run_id)
+    if args.action == 'run':
+        return run_once(path, args.instance, args.kind)
+    config = load_service(path)
+    queue = WorkQueue(config)
+    if args.action in ('enable', 'disable'):
+        queue.set_enabled(args.instance, args.action == 'enable')
+    elif args.action == 'retry':
+        queue.request(args.instance, args.kind)
+    elif args.action == 'stop-run':
+        print(json.dumps({'stopped': stop_run(config, args.run_id, force=args.force)}))
+        return 0
+    print(json.dumps({**queue.status(), 'providers': _gate(config).status()}, indent=2))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .server import run
 
@@ -292,6 +324,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_ingest, codex_only=True)
 
     p = sub.add_parser("refresh-aggregates", help="Refresh pending profiles/digests without scanning transcripts")
+    p.add_argument('--aggregate-levels', nargs='+', choices=['project', 'digest'])
     p.set_defaults(fn=cmd_ingest, aggregates_only=True, refresh_aggregates=True,
                    no_llm=False, limit=None, retry_extractive=False)
 
@@ -351,6 +384,33 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("codex-serve", help="Serve an explicitly configured, dedicated Codex memory store")
     p.add_argument("--settings", required=True)
     p.set_defaults(fn=cmd_codex_serve)
+
+    p = sub.add_parser('scheduler', help='Manage persistent ingestion and aggregate queues')
+    p.add_argument('--config', required=True)
+    commands = p.add_subparsers(dest='action', required=True)
+    for action in ('serve', 'status'):
+        commands.add_parser(action).set_defaults(fn=cmd_scheduler)
+    for action in ('install', 'start', 'stop', 'restart'):
+        command = commands.add_parser(action)
+        command.add_argument('--label', default='com.agentic-memory.scheduler')
+        if action == 'install':
+            command.add_argument('--no-start', action='store_true')
+        command.set_defaults(fn=cmd_scheduler)
+    for action in ('enable', 'disable', 'retry', 'run'):
+        command = commands.add_parser(action)
+        command.add_argument('--instance', required=True)
+        if action in ('retry', 'run'):
+            command.add_argument('--kind', choices=['ingest', 'profiles', 'digests'], default='ingest')
+        command.set_defaults(fn=cmd_scheduler)
+    command = commands.add_parser('stop-run')
+    command.add_argument('--run-id', required=True)
+    command.add_argument('--force', action='store_true')
+    command.set_defaults(fn=cmd_scheduler)
+
+    p = sub.add_parser('scheduler-worker', help=argparse.SUPPRESS)
+    p.add_argument('--config', required=True)
+    p.add_argument('--run-id', required=True)
+    p.set_defaults(fn=cmd_scheduler, action='worker')
 
     args = parser.parse_args(argv)
     return args.fn(args)
