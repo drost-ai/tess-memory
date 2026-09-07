@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 
 from .scheduler import ROOT
 from .scheduler_config import load_service
@@ -54,10 +55,25 @@ def service_control(action, *, label=DEFAULT_LABEL):
     loaded = subprocess.run(['/bin/launchctl', 'print', target], capture_output=True).returncode == 0
     if action in ('stop', 'restart') and loaded:
         subprocess.run(['/bin/launchctl', 'bootout', target], check=True)
+        for attempt in range(40):
+            if subprocess.run(['/bin/launchctl', 'print', target], capture_output=True).returncode != 0:
+                break
+            if attempt == 39:
+                raise RuntimeError('launchd has not finished unloading the owned scheduler')
+            time.sleep(0.25)
         loaded = False
     if action in ('start', 'restart') and not loaded:
-        subprocess.run(['/bin/launchctl', 'bootstrap', domain, str(path)], check=True)
-        loaded = True
+        # bootout can return while launchd is still tearing down the old job.
+        # Retry the owned agent briefly; error 5 here does not imply root is
+        # required, and repeated start must not create duplicate supervisors.
+        for attempt in range(10):
+            result = subprocess.run(['/bin/launchctl', 'bootstrap', domain, str(path)], capture_output=True, text=True)
+            if result.returncode == 0 or subprocess.run(['/bin/launchctl', 'print', target], capture_output=True).returncode == 0:
+                loaded = True
+                break
+            if attempt == 9:
+                raise RuntimeError(f'launchd bootstrap failed after teardown retries (exit {result.returncode})')
+            time.sleep(min(1, 0.2 * (attempt + 1)))
     return {'label': label, 'loaded': loaded, 'plist': str(path)}
 
 

@@ -252,6 +252,8 @@ def search_memory(
             )
             if trace.note:
                 header += f"\n[agent note: {trace.note}]"
+            if trace.fallback_used:
+                header += '\n[selection fallback: results were not confirmed by a valid final model selection]'
             if not hits:
                 return f"{header}\nNo matching memories found."
             return header + "\n" + "\n".join(_fmt_hit(h) for h in hits)

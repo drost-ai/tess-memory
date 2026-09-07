@@ -151,6 +151,19 @@ class RetrievalEvaluationTests(unittest.TestCase):
                 self.assertEqual(len(hits), 1)
                 self.assertEqual(trace.sessions, [])
 
+    def test_invalid_session_reference_gets_bounded_feedback_before_valid_finish(self):
+        wanted = self.add('Atlas cache migration decision')
+        llm = mock.Mock()
+        llm.complete.side_effect = [json.dumps({'action': 'get_session', 'session_ids': ['invented']}),
+                                    json.dumps({'action': 'finish', 'keep': [wanted]})]
+        with mock.patch('agentic_memory.search_agent._session_evidence', side_effect=AssertionError('must not expand invented id')):
+            hits, trace = agentic_search(self.cfg, self.store, self.embedder, llm, 'cache', project='atlas')
+        self.assertEqual([h['id'] for h in hits], [wanted])
+        self.assertEqual(trace.invalid_actions, 1)
+        self.assertFalse(trace.fallback_used)
+        self.assertTrue(trace.model_finished)
+        self.assertIn('PREVIOUS ACTION FEEDBACK', llm.complete.call_args.kwargs['prompt'])
+
     def test_mcp_empty_scope_does_not_construct_providers(self):
         self.add("Unrelated corpus", project="elsewhere")
         with mock.patch.object(server, "_get_store", return_value=self.store), \

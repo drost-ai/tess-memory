@@ -278,6 +278,24 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_evaluate_public(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from .config import load_config
+    from .public_evaluation import evaluate_public
+    result = evaluate_public(load_config(Path(args.settings).expanduser()), Path(args.cases), workers=args.workers, limit=args.limit)
+    Path(args.output).write_text(json.dumps(result, indent=2) + '\n')
+    print(json.dumps({k: v for k, v in result.items() if k != 'results'}, indent=2))
+    return 0 if result['passed'] == result['cases'] else 1
+
+
+def cmd_observe(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from .observation import observe
+    report = observe(Path(args.config), Path(args.output), seconds=args.seconds, interval=args.interval)
+    print(json.dumps({k: v for k, v in report.items() if k != 'latest'}, indent=2))
+    return 0 if report['passed'] else 1
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .server import run
 
@@ -381,6 +399,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--keyword", action="store_true", help="offline keyword-only baseline; no embeddings or LLM calls")
     p.add_argument("--output", help="metrics report path (query/transcript text is omitted)")
     p.set_defaults(fn=cmd_evaluate)
+
+    p = sub.add_parser('evaluate-public', help='Send labelled public synthetic evidence fixtures to the configured retrieval model')
+    p.add_argument('--settings', required=True)
+    p.add_argument('--cases', required=True)
+    p.add_argument('--output', required=True)
+    p.add_argument('--workers', type=_positive_int, default=4)
+    p.add_argument('--limit', type=_positive_int)
+    p.set_defaults(fn=cmd_evaluate_public)
+
+    p = sub.add_parser('observe', help='Record local rollout health without model calls')
+    p.add_argument('--config', required=True)
+    p.add_argument('--output', required=True)
+    p.add_argument('--seconds', type=_positive_int, default=86400)
+    p.add_argument('--interval', type=_positive_int, default=60)
+    p.set_defaults(fn=cmd_observe)
 
     p = sub.add_parser("codex-serve", help="Serve an explicitly configured, dedicated Codex memory store")
     p.add_argument("--settings", required=True)

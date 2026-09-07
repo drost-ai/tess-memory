@@ -11,7 +11,7 @@ from unittest import mock
 from agentic_memory.scheduler_config import ServiceConfig, ScheduledStore, load_service
 from agentic_memory.scheduler_queue import WorkQueue
 from agentic_memory.scheduler import worker
-from agentic_memory.scheduler_install import build_plist, owned_plist
+from agentic_memory.scheduler_install import build_plist, owned_plist, service_control
 from test_codex import RecordingEmbedder, write_rollout
 
 
@@ -77,6 +77,16 @@ class SchedulerQueueTests(unittest.TestCase):
         self.queue.finish(run['id'], outcome='partial', remaining=5, now=100)
         row = next(r for r in self.queue.status()['jobs'] if r['instance'] == 'a' and r['kind'] == 'ingest')
         self.assertEqual((row['attempts'], row['due']), (0, 115))
+
+    def test_sleep_wake_clock_jump_coalesces_due_work_without_duplicate_jobs(self):
+        # The service may be suspended for hours. It owes one current pass per
+        # job kind, not one duplicate job for every missed five-minute tick.
+        wake = 10**10
+        one = self.queue.claim(now=wake)
+        two = self.queue.claim(now=wake)
+        self.assertNotEqual(one['instance'], two['instance'])
+        self.assertIsNone(self.queue.claim(now=wake))
+        self.assertEqual(len(self.queue.status()['jobs']), 6)
 
 
 class SchedulerWorkerTests(unittest.TestCase):
@@ -168,6 +178,26 @@ create_agent_runtime_bindings = is_task_supervisor_gateway = unused
             path.write_bytes(plistlib.dumps({'ProgramArguments': ['/bin/true']}))
             with self.assertRaisesRegex(ValueError, 'not owned'):
                 owned_plist(path)
+
+    def test_launchd_restart_retries_transient_teardown_race(self):
+        from types import SimpleNamespace
+        calls = []
+        bootstraps = 0
+        def command(args, **kwargs):
+            nonlocal bootstraps
+            calls.append(args[1])
+            if args[1] == 'bootstrap':
+                bootstraps += 1
+                return SimpleNamespace(returncode=5 if bootstraps == 1 else 0)
+            if args[1] == 'print':
+                return SimpleNamespace(returncode=0 if len(calls) == 1 else 113)
+            return SimpleNamespace(returncode=0)
+        with mock.patch('agentic_memory.scheduler_install.sys.platform', 'darwin'), \
+             mock.patch('agentic_memory.scheduler_install.owned_plist', return_value={'Label': 'com.agentic-memory.test'}), \
+             mock.patch('agentic_memory.scheduler_install.subprocess.run', side_effect=command), \
+             mock.patch('agentic_memory.scheduler_install.time.sleep'):
+            self.assertTrue(service_control('restart', label='com.agentic-memory.test')['loaded'])
+        self.assertEqual(bootstraps, 2)
 
 
 if __name__ == '__main__':

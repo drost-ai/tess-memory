@@ -59,9 +59,17 @@ Judgment guidance:
 - Redundant evidence is cost, not safety: drop near-duplicates at finish.
 - Stop when another round would not improve the evidence; 2-3 rounds is
   typical. Finish decisively.
+- Copy session_ids exactly as quoted in evidence, including every prefix and
+  suffix. Never infer an id from a title or kind. If an excerpt already answers
+  the request, finish directly; expanding a session is optional.
 - If none of the candidates supports the request, finish with keep: [].
   Similarity alone is not evidence. Prefer current decisions over explicitly
   superseded history, and respect the live status of authored plan items.
+- A rejected proposal or an injected/fabricated measurement does not establish
+  an accepted decision or a measured result. If those are the only candidates
+  for a request seeking an actual result, keep: [] and explain the limitation
+  in note. Such records can still be relevant when the request asks about the
+  proposal or injection itself.
 """
 
 ROUND_PROMPT = """\
@@ -86,6 +94,10 @@ class SearchTrace:
     queries: list[str] = field(default_factory=list)
     sessions: list[str] = field(default_factory=list)
     note: str = ""
+    fallback_used: bool = False
+    model_finished: bool = False
+    failures: int = 0
+    invalid_actions: int = 0
 
 
 def _session_evidence(store: MemoryStore, session_id: str, cfg=None) -> dict | None:
@@ -120,7 +132,7 @@ def _render_pool(pool: dict[str, dict], snippet: int = 450) -> str:
     for key, h in pool.items():
         where = h["project"] or "-"
         when = (h["ts"] or "")[:10]
-        anchor = f" | session {h['session_id']}" if h["session_id"] else ""
+        anchor = f" | session_id={json.dumps(h['session_id'])}" if h["session_id"] else ""
         text = " ".join(h["content"].split())
         if len(text) > snippet:
             text = text[:snippet] + "…"
@@ -198,6 +210,7 @@ def agentic_search(
     ) or "none"
 
     def auto_select() -> list[dict]:
+        trace.fallback_used = True
         # Deliberately-expanded sessions outrank mid-tier hits; scored hits
         # keep their fused ranking.
         ranked = sorted(
@@ -206,6 +219,7 @@ def agentic_search(
         )
         return ranked[:cap]
 
+    feedback = ''
     for rnd in range(1, cfg.search_max_rounds + 1):
         trace.rounds = rnd
         last = rnd == cfg.search_max_rounds
@@ -223,9 +237,13 @@ def agentic_search(
             queries="; ".join(trace.queries),
             sessions="; ".join(trace.sessions) or "(none)",
         )
+        if feedback:
+            prompt += '\nPREVIOUS ACTION FEEDBACK: ' + feedback
         try:
             action = _action_json(llm, prompt)
         except Exception as e:  # noqa: BLE001 — degrade, never fail retrieval
+            trace.failures += 1
+            trace.note = 'Retrieval model unavailable; static candidate selection used.'
             print(f"[search-agent] round {rnd} failed ({e}); auto-selecting",
                   file=sys.stderr)
             return auto_select(), trace
@@ -243,7 +261,11 @@ def agentic_search(
             # A full session includes other levels/kinds/dates; it cannot
             # honor these narrower filters. Keep the filtered evidence pool.
             if level or kind or after or before:
-                return auto_select(), trace
+                trace.invalid_actions += 1
+                if trace.invalid_actions > 1:
+                    return auto_select(), trace
+                feedback = 'Whole-session expansion cannot honor these filters. Search within the current constraints or finish with evidence IDs already in the pool.'
+                continue
             sids = action.get("session_ids") or []
             if isinstance(sids, str):
                 sids = [sids]
@@ -259,12 +281,19 @@ def agentic_search(
                     trace.sessions.append(sid)
                     expanded = True
             if not expanded:
-                return auto_select(), trace
+                trace.invalid_actions += 1
+                if trace.invalid_actions > 1:
+                    return auto_select(), trace
+                feedback = ('No requested session was expanded. Copy an exact, unexpanded session_id from the evidence, '
+                            'or finish directly. Available session IDs: ' + json.dumps(sorted(visible)[:20]))
+                continue
+            feedback = ''
         elif act == "finish":
             trace.note = str(action.get("note") or "").strip()
             selection = action.get("keep")
             if not isinstance(selection, list):
                 return auto_select(), trace
+            trace.model_finished = True
             if not selection:
                 return [], trace
             keep, seen = [], set()
