@@ -39,9 +39,9 @@ def digest_data(digest) -> dict:
     return result
 
 
-def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units: int = 0):
+def stable_map_prompts(cfg, snapshot, *, seed_units: int = 0):
+    """Generate exact map inputs, also usable for cache-only migration."""
     st = snapshot.transcript
-    pieces = []
     previous_context = ""
     start = 0
     for index, end in enumerate(snapshot.unit_ends):
@@ -54,12 +54,17 @@ def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units:
             step = cfg.segment_chars - cfg.segment_overlap
             for offset in range(0, len(text), step):
                 piece = text[offset:offset + cfg.segment_chars]
-                pieces.append(STABLE_MAP_PROMPT.format(project=st.project,
-                                                       boundary=snapshot.unit_kinds[index], segment=piece))
+                yield STABLE_MAP_PROMPT.format(project=st.project,
+                                              boundary=snapshot.unit_kinds[index], segment=piece)
                 if offset + cfg.segment_chars >= len(text):
                     break
         previous_context = rendered[-cfg.segment_overlap:] if cfg.segment_overlap else ""
         start = end
+
+
+def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units: int = 0):
+    st = snapshot.transcript
+    pieces = list(stable_map_prompts(cfg, snapshot, seed_units=seed_units))
     if not pieces and seed:
         return _digest_from(seed, cfg.min_importance)
     results = [None] * len(pieces)

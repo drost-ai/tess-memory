@@ -11,6 +11,7 @@ import re
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -301,16 +302,22 @@ class DistillationPool:
 
     def __init__(self, primary, fallback=None, *, workers: int,
                  cache_path: Path | None = None, log: Callable[[str], None] = lambda _: None,
-                 max_calls: int = 0):
+                 max_calls: int = 0, share_requests: bool = False):
+        if share_requests and cache_path is None:
+            raise ValueError('shared requests require a store-local checkpoint database')
         self.backends = [b for b in (primary, fallback) if b is not None]
         self.cache = DistillationCheckpoints(cache_path) if cache_path else None
         self.executor = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="memory-llm")
         self.log = log
         self._lock = threading.Lock()
+        self.share_requests = share_requests
+        self._request_locks = {}
         self._cooldown: dict[str, float] = {}
         self.max_calls = max_calls
         self.calls = 0
         self.cache_hits = 0
+        self.shared_cache_hits = 0
+        self.cache_promotions = 0
         self.active_calls = 0
         self.peak_calls = 0
 
@@ -339,6 +346,24 @@ class DistillationPool:
 
     def session(self, namespace: str) -> SessionCalls:
         return SessionCalls(self, namespace)
+
+    @contextmanager
+    def shared_request(self, system: str, prompt: str):
+        # A store has one ingestion owner. Inside its pool, identical requests
+        # wait for one another and then re-check the durable cache. No SQLite
+        # transaction or pool-wide lock is held across provider work.
+        key = DistillationCheckpoints.shared_key('', system, prompt)
+        with self._lock:
+            entry = self._request_locks.setdefault(key, [threading.Lock(), 0])
+            entry[1] += 1
+        try:
+            with entry[0]:
+                yield
+        finally:
+            with self._lock:
+                entry[1] -= 1
+                if not entry[1]:
+                    del self._request_locks[key]
 
     def cooling_down(self, identity: str) -> bool:
         with self._lock:
@@ -378,28 +403,64 @@ class SessionCalls:
         return self.pool.executor.submit(self._run, system, prompt, phase)
 
     def _run(self, system: str, prompt: str, phase: str) -> dict:
+        if self.pool.share_requests:
+            with self.pool.shared_request(system, prompt):
+                return self._run_once(system, prompt, phase)
+        return self._run_once(system, prompt, phase)
+
+    def _choices(self, system, prompt):
+        return [(index, backend, getattr(backend, 'cache_identity', backend.name),
+                 DistillationCheckpoints.key(self.namespace, getattr(backend, 'cache_identity', backend.name), system, prompt),
+                 DistillationCheckpoints.shared_key(getattr(backend, 'cache_identity', backend.name), system, prompt))
+                for index, backend in enumerate(self.pool.backends)]
+
+    def cached_result(self, system: str, prompt: str, phase: str) -> dict | None:
+        """Read/promote validated checkpoints only; never invoke a provider."""
         pool = self.pool
-        choices = []
-        for index, backend in enumerate(pool.backends):
-            identity = getattr(backend, "cache_identity", backend.name)
-            key = DistillationCheckpoints.key(self.namespace, identity, system, prompt)
-            choices.append((index, backend, identity, key))
-            data = pool.cache.get(key) if pool.cache else None
-            if data is not None:
+        if pool.cache is None:
+            return None
+        choices = self._choices(system, prompt)
+        # Own paid outputs, including fallback outputs, take precedence over
+        # shared results. This preserves existing reduction checkpoints even
+        # when two earlier sessions got different valid answers to one input.
+        for shared in ((False, True) if pool.share_requests else (False,)):
+            for index, backend, identity, key, common in choices:
+                data = pool.cache.get(common if shared else key)
+                if data is None:
+                    continue
                 try:
                     self._validate(data, phase)
                 except (ValueError, TypeError, AttributeError):
                     continue
+                promoted = False
+                if pool.share_requests:
+                    if shared:
+                        # Keep the old reader format usable after rollback.
+                        pool.cache.put(key, data)
+                    else:
+                        promoted = pool.cache.put_if_absent(common, data)
                 if index:
                     self._fallback_used.set()
                 with self._lock:
                     self.keys.add(key)
+                    if pool.share_requests:
+                        self.keys.add(common)
                 with pool._lock:
                     pool.cache_hits += 1
+                    pool.shared_cache_hits += int(shared)
+                    pool.cache_promotions += int(promoted)
                 pool.log(f"[distill] {self.namespace}: {phase} reused ({backend.name})")
                 return data
+        return None
+
+    def _run_once(self, system: str, prompt: str, phase: str) -> dict:
+        pool = self.pool
+        cached = self.cached_result(system, prompt, phase)
+        if cached is not None:
+            return cached
+        choices = self._choices(system, prompt)
         last_error = None
-        for index, backend, identity, key in choices:
+        for index, backend, identity, key, common in choices:
             if index == 0 and len(choices) > 1 and pool.cooling_down(identity):
                 continue
             started = time.monotonic()
@@ -421,8 +482,12 @@ class SessionCalls:
                 continue
             if pool.cache:
                 pool.cache.put(key, data)
+                if pool.share_requests:
+                    pool.cache.put(common, data)
             with self._lock:
                 self.keys.add(key)
+                if pool.share_requests:
+                    self.keys.add(common)
             if index:
                 self._fallback_used.set()
             pool.log(f"[distill] {self.namespace}: {phase} completed in {time.monotonic() - started:.1f}s ({backend.name})")

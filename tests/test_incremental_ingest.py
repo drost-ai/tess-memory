@@ -81,6 +81,61 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual((result.unchanged, result.model_calls, result.embedded_passages), (1, 0, 0))
         self.assertEqual(before, (len(self.backend.calls), len(self.embedder.calls)))
 
+    def test_identical_sessions_share_model_work_but_keep_separate_provenance(self):
+        other = write_rollout(self.home, 'two')
+        result = self.run_ingest()
+        self.assertEqual(result.distilled, 2)
+        self.assertEqual(result.model_calls, 2)  # one shared map and one reduction
+        self.assertGreaterEqual(result.shared_cache_hits, 2)
+        first = self.store.get_session('codex:one')
+        second = self.store.get_session('codex:two')
+        self.assertEqual(first['source_path'], str(self.path))
+        self.assertEqual(second['source_path'], str(other))
+        a = {r['id'] for r in self.store.session_rows_with_vectors(first['id'])}
+        b = {r['id'] for r in self.store.session_rows_with_vectors(second['id'])}
+        self.assertTrue(a and b and a.isdisjoint(b))
+        self.assertEqual(self.run_ingest().model_calls, 0)
+        self.add_unit()
+        result = self.run_ingest()
+        self.assertEqual(result.model_calls, 2)
+        self.assertEqual(second, self.store.get_session('codex:two'))
+
+    def test_cache_warming_preserves_memory_and_promotes_existing_requests_only(self):
+        from agentic_memory.distill import SESSION_SYSTEM
+        from agentic_memory.readers import CompletedSourceReader
+        from agentic_memory.stable_distill import stable_map_prompts
+        from agentic_memory.warm_checkpoints import warm_incremental_checkpoints
+        other = write_rollout(self.home, 'two')
+        reader = CompletedSourceReader(self.cfg)
+        snapshot = reader.read(self.cfg.data_stores[0], self.path, 'p')
+        prompt = next(stable_map_prompts(self.cfg, snapshot))
+        cache = DistillationCheckpoints(self.cfg.data_dir/'distillation-cache.db')
+        old_key = cache.key('incremental/codex/codex:one', self.backend.cache_identity, SESSION_SYSTEM, prompt)
+        cache.put(old_key, {'summary': 'Previously paid answer', 'memories': []})
+        for path, sid in ((self.path, 'one'), (other, 'two')):
+            self.store.record_source(path=str(path), session_id='codex:'+sid, project='p', source_type='codex',
+                                     signature=None, status='budget_pending', state={}, now=1)
+        self.store.commit()
+        before = self.paid_rows()
+        progress = [tuple(r) for r in self.store.db.execute('SELECT * FROM ingest_sources')]
+        self.backend.hook = lambda: self.fail('cache warming invoked a model')
+        result = warm_incremental_checkpoints(self.cfg, self.backend)
+        self.assertEqual((result['sessions'], result['cached_requests'], result['model_calls']), (2, 2, 0))
+        self.assertEqual(result['shared_hits'], 1)
+        self.assertEqual(self.backend.calls, [])
+        self.assertEqual(self.embedder.calls, [])
+        self.assertEqual(self.paid_rows(), before)
+        self.assertEqual([tuple(r) for r in self.store.db.execute('SELECT * FROM ingest_sources')], progress)
+        new_key = cache.key('incremental/codex/codex:two', self.backend.cache_identity, SESSION_SYSTEM, prompt)
+        self.assertEqual(cache.get(old_key), cache.get(new_key))
+
+    def test_cache_warming_refuses_to_overlap_an_ingestion_owner(self):
+        from agentic_memory.locks import ingestion_lock, IngestionBusy
+        from agentic_memory.warm_checkpoints import warm_incremental_checkpoints
+        with ingestion_lock(self.cfg.data_dir):
+            with self.assertRaises(IngestionBusy):
+                warm_incremental_checkpoints(self.cfg, self.backend)
+
     def test_pending_tail_does_not_trigger_model_or_claim_whole_file_processed(self):
         self.run_ingest()
         before = len(self.backend.calls)

@@ -161,7 +161,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
 
     pool = DistillationPool(llm, fallback_llm, workers=cfg.llm_workers,
                             cache_path=cfg.data_dir / 'distillation-cache.db', log=_log,
-                            max_calls=cfg.max_model_calls_per_run) if llm else None
+                            max_calls=cfg.max_model_calls_per_run, share_requests=True) if llm else None
     futures = {}
     attempted = 0
     visited = 0
@@ -366,6 +366,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             pool.__exit__()
             stats.model_calls = pool.calls
             stats.request_cache_hits = pool.cache_hits
+            stats.shared_cache_hits = pool.shared_cache_hits
+            stats.cache_promotions = pool.cache_promotions
     if llm is not None and refresh_aggregates is not False:
         interval = 0 if refresh_aggregates is True else cfg.aggregate_refresh_seconds
         class Counted:

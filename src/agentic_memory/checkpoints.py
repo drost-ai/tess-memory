@@ -1,7 +1,9 @@
 """Private, per-store checkpoints for successfully validated model requests.
 
-This is exact-request reuse, not an append-aware transcript/event cache. The
-namespace, provider identity, system prompt and full prompt all enter the key.
+This is exact-request reuse, not an append-aware transcript/event cache. Legacy
+keys include the session namespace; optional shared keys omit that bookkeeping
+field while retaining provider identity, system instructions and the full prompt.
+Every key remains inside this memory store's own checkpoint database.
 Connections are short-lived so worker threads never share the memory database
 connection or keep a write transaction open during provider work.
 """
@@ -46,6 +48,13 @@ class DistillationCheckpoints:
         request = json.dumps([1, namespace, provider, system, prompt], ensure_ascii=False)
         return hashlib.sha256(request.encode()).hexdigest()
 
+    @staticmethod
+    def shared_key(provider: str, system: str, prompt: str) -> str:
+        # Version 2 omits only the bookkeeping namespace. The complete model
+        # input and provider identity still match, inside this store's cache.
+        request = json.dumps([2, provider, system, prompt], ensure_ascii=False)
+        return hashlib.sha256(request.encode()).hexdigest()
+
     def get(self, key: str) -> dict | None:
         db = self._connect()
         try:
@@ -70,12 +79,36 @@ class DistillationCheckpoints:
         finally:
             db.close()
 
+    def put_if_absent(self, key: str, result: dict) -> bool:
+        """Publish a shared copy without replacing another validated result."""
+        db = self._connect()
+        try:
+            if db.execute('SELECT 1 FROM checkpoints WHERE key=?', (key,)).fetchone():
+                return False
+            with db:
+                added = db.execute('INSERT OR IGNORE INTO checkpoints(key,result) VALUES (?,?)',
+                                   (key, json.dumps(result, ensure_ascii=False))).rowcount
+                if added:
+                    db.execute('INSERT OR REPLACE INTO checkpoint_access VALUES (?,?)', (key, time.time()))
+            return bool(added)
+        finally:
+            db.close()
+
     def pin(self, namespace: str, keys: set[str]) -> None:
         db = self._connect()
         try:
             with db:
                 db.execute("DELETE FROM pins WHERE namespace=?", (namespace,))
                 db.executemany("INSERT INTO pins VALUES (?,?)", [(namespace, k) for k in keys])
+        finally:
+            db.close()
+
+    def add_pins(self, namespace: str, keys: set[str]) -> None:
+        """Cache warming must not retire existing reduction checkpoints."""
+        db = self._connect()
+        try:
+            with db:
+                db.executemany('INSERT OR IGNORE INTO pins VALUES (?,?)', [(namespace, key) for key in keys])
         finally:
             db.close()
 

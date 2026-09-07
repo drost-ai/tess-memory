@@ -62,6 +62,8 @@ class IngestStats:
     parsed_records: int = 0
     model_calls: int = 0
     request_cache_hits: int = 0
+    shared_cache_hits: int = 0
+    cache_promotions: int = 0
     embedded_passages: int = 0
     budget_deferred: int = 0
     source_reads: int = 0
