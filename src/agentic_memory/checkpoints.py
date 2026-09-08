@@ -55,6 +55,12 @@ class DistillationCheckpoints:
         request = json.dumps([2, provider, system, prompt], ensure_ascii=False)
         return hashlib.sha256(request.encode()).hexdigest()
 
+    @staticmethod
+    def batch_unit_key(provider: str, system: str, prompt: str) -> str:
+        from .map_batch import PROTOCOL
+        request = json.dumps([3, 'batch-unit', PROTOCOL, provider, system, prompt], ensure_ascii=False)
+        return hashlib.sha256(request.encode()).hexdigest()
+
     def get(self, key: str) -> dict | None:
         db = self._connect()
         try:

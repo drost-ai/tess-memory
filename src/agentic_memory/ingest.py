@@ -65,6 +65,8 @@ class IngestStats:
     shared_cache_hits: int = 0
     cache_promotions: int = 0
     checkpointed_requests: int = 0  # new validated provider results retained this pass
+    batch_requests: int = 0
+    batched_units: int = 0
     embedded_passages: int = 0
     budget_deferred: int = 0
     source_reads: int = 0

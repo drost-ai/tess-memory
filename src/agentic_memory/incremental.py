@@ -391,6 +391,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             stats.shared_cache_hits = pool.shared_cache_hits
             stats.cache_promotions = pool.cache_promotions
             stats.checkpointed_requests = getattr(pool, 'checkpointed_requests', 0)
+            stats.batch_requests = pool.batch_requests
+            stats.batched_units = pool.batched_units
     if llm is not None and refresh_aggregates is not False:
         interval = 0 if refresh_aggregates is True else cfg.aggregate_refresh_seconds
         class Counted:

@@ -161,6 +161,9 @@ class Config:
     incremental_reduce_fanout: int = 8
     cache_retention_days: int = 30
     max_model_calls_per_run: int = 0    # 0 = unlimited; checkpoints resume a budgeted run
+    incremental_batch_chars: int = 0  # opt in per store; 0 keeps single-unit requests
+    incremental_batch_items: int = 8
+    incremental_batch_unit_chars: int = 12000
     ingestion_hold_texts: list[str] = field(default_factory=list)  # operator-supplied export holds; never logged
     source_retry_backoff: bool = False  # scheduled workers opt in; explicit manual retries remain immediate
     chunk_chars: int = 6_000             # window cap within an exchange-aligned chunk
@@ -330,7 +333,8 @@ def load_config(path: Path | None = None) -> Config:
         if not isinstance(ing["incremental"], bool):
             raise ValueError("[ingest] incremental must be a boolean")
         cfg.incremental_ingestion = ing["incremental"]
-    for key, minimum in (("incremental_reduce_fanout", 2), ("cache_retention_days", 1), ("max_model_calls_per_run", 0)):
+    for key, minimum in (("incremental_reduce_fanout", 2), ("cache_retention_days", 1), ("max_model_calls_per_run", 0),
+                         ('incremental_batch_chars', 0), ('incremental_batch_items', 2), ('incremental_batch_unit_chars', 1)):
         if key in ing:
             value = ing[key]
             if isinstance(value, bool) or not isinstance(value, int) or value < minimum:

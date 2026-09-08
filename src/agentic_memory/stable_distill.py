@@ -7,6 +7,7 @@ import json
 
 from .distill import SESSION_SYSTEM, REDUCE_PROMPT, _digest_from, _parse_memories
 from .transcript import render_for_llm
+from .map_batch import MapItem, batch_prompt
 
 STABLE_MAP_PROMPT = """A completed persisted-message unit from a coding session in project {project}
 follows. Its boundary was classified as {boundary}. An assistant-message or
@@ -41,6 +42,11 @@ def digest_data(digest) -> dict:
 
 def stable_map_prompts(cfg, snapshot, *, seed_units: int = 0):
     """Generate exact map inputs, also usable for cache-only migration."""
+    for item in stable_map_items(cfg, snapshot, seed_units=seed_units):
+        yield item.prompt
+
+
+def stable_map_items(cfg, snapshot, *, seed_units: int = 0):
     st = snapshot.transcript
     previous_context = ""
     start = 0
@@ -54,12 +60,31 @@ def stable_map_prompts(cfg, snapshot, *, seed_units: int = 0):
             step = cfg.segment_chars - cfg.segment_overlap
             for offset in range(0, len(text), step):
                 piece = text[offset:offset + cfg.segment_chars]
-                yield STABLE_MAP_PROMPT.format(project=st.project,
-                                              boundary=snapshot.unit_kinds[index], segment=piece)
+                prompt = STABLE_MAP_PROMPT.format(project=st.project,
+                                                 boundary=snapshot.unit_kinds[index], segment=piece)
+                yield MapItem(prompt, st.project, snapshot.unit_kinds[index], index, piece,
+                              rendered if len(text) <= cfg.segment_chars else None, previous_context)
                 if offset + cfg.segment_chars >= len(text):
                     break
         previous_context = rendered[-cfg.segment_overlap:] if cfg.segment_overlap else ""
         start = end
+
+
+def map_groups(cfg, items):
+    group = []
+    for item in items:
+        small = item.body is not None and len(item.prompt) <= cfg.incremental_batch_unit_chars
+        if not small or (group and (len(group) >= cfg.incremental_batch_items or
+                                   len(SESSION_SYSTEM) + len(batch_prompt(group + [item])) > cfg.incremental_batch_chars)):
+            if group:
+                yield group
+                group = []
+        if small:
+            group.append(item)
+        else:
+            yield [item]
+    if group:
+        yield group
 
 
 def _ordered_requests(pieces, submit, workers):
@@ -84,11 +109,16 @@ def _ordered_requests(pieces, submit, workers):
 
 def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units: int = 0):
     st = snapshot.transcript
-    pieces = list(stable_map_prompts(cfg, snapshot, seed_units=seed_units))
+    pieces = list(stable_map_items(cfg, snapshot, seed_units=seed_units))
     if not pieces and seed:
         return _digest_from(seed, cfg.min_importance)
     workers = max(1, min(cfg.segment_workers, cfg.llm_workers))
-    results = _ordered_requests(pieces, lambda prompt: calls.submit(SESSION_SYSTEM, prompt, 'segment stable'), workers)
+    if cfg.incremental_batch_chars and calls.pool.share_requests:
+        groups = list(map_groups(cfg, pieces))
+        grouped = _ordered_requests(groups, calls.submit_batch, workers)
+        results = [result for group in grouped for result in group]
+    else:
+        results = _ordered_requests(pieces, lambda item: calls.submit(SESSION_SYSTEM, item.prompt, 'segment stable'), workers)
     nodes = ([seed] if seed else []) + results
     if not nodes:
         raise ValueError("no eligible message units to distill")

@@ -11,7 +11,7 @@ import re
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -319,6 +319,8 @@ class DistillationPool:
         self.shared_cache_hits = 0
         self.cache_promotions = 0
         self.checkpointed_requests = 0
+        self.batched_units = 0
+        self.batch_requests = 0
         self.active_calls = 0
         self.peak_calls = 0
 
@@ -393,6 +395,15 @@ class SessionCalls:
 
     @staticmethod
     def _validate(data: dict, phase: str) -> None:
+        if phase == 'segment batch':
+            results = data.get('results')
+            if not isinstance(results, list) or not results:
+                raise ValueError('batch returned no per-unit results')
+            for row in results:
+                if not isinstance(row, dict) or not isinstance(row.get('id'), str):
+                    raise ValueError('batch result has no unit id')
+                SessionCalls._validate(row, 'segment stable')
+            return
         if not isinstance(data.get("summary"), str) or not data["summary"].strip():
             raise ValueError(f"{phase} returned no usable summary")
         if not isinstance(data.get("memories", []), list):
@@ -417,7 +428,7 @@ class SessionCalls:
                  DistillationCheckpoints.shared_key(getattr(backend, 'cache_identity', backend.name), system, prompt))
                 for index, backend in enumerate(self.pool.backends)]
 
-    def cached_result(self, system: str, prompt: str, phase: str) -> dict | None:
+    def cached_result(self, system: str, prompt: str, phase: str, *, validate=None, info=None) -> dict | None:
         """Read/promote validated checkpoints only; never invoke a provider."""
         pool = self.pool
         if pool.cache is None:
@@ -433,6 +444,8 @@ class SessionCalls:
                     continue
                 try:
                     self._validate(data, phase)
+                    if validate:
+                        validate(data)
                 except (ValueError, TypeError, AttributeError):
                     continue
                 promoted = False
@@ -453,12 +466,34 @@ class SessionCalls:
                     pool.shared_cache_hits += int(shared)
                     pool.cache_promotions += int(promoted)
                 pool.log(f"[distill] {self.namespace}: {phase} reused ({backend.name})")
+                if info is not None:
+                    info.update(provider=identity, request_key=common if pool.share_requests else key, reused=True)
+                return data
+        if phase == 'segment stable' and pool.share_requests:
+            for index, backend, identity, _, _ in choices:
+                key = DistillationCheckpoints.batch_unit_key(identity, system, prompt)
+                envelope = pool.cache.get(key)
+                if not envelope or not isinstance(envelope.get('data'), dict) or not isinstance(envelope.get('request_key'), str):
+                    continue
+                data = envelope['data']
+                try:
+                    self._validate(data, phase)
+                except (ValueError, TypeError, AttributeError):
+                    continue
+                with self._lock:
+                    self.keys.update((key, envelope['request_key']))
+                if index:
+                    self._fallback_used.set()
+                with pool._lock:
+                    pool.cache_hits += 1
+                    pool.shared_cache_hits += 1
+                pool.log(f'[distill] {self.namespace}: segment stable reused from batch ({backend.name})')
                 return data
         return None
 
-    def _run_once(self, system: str, prompt: str, phase: str) -> dict:
+    def _run_once(self, system: str, prompt: str, phase: str, *, validate=None, info=None) -> dict:
         pool = self.pool
-        cached = self.cached_result(system, prompt, phase)
+        cached = self.cached_result(system, prompt, phase, validate=validate, info=info)
         if cached is not None:
             return cached
         choices = self._choices(system, prompt)
@@ -480,6 +515,8 @@ class SessionCalls:
             try:
                 data = _call_json(CountedBackend(), system, prompt)
                 self._validate(data, phase)
+                if validate:
+                    validate(data)
             except CallBudgetExceeded:
                 raise
             except Exception as exc:
@@ -501,8 +538,56 @@ class SessionCalls:
             if index:
                 self._fallback_used.set()
             pool.log(f"[distill] {self.namespace}: {phase} completed in {time.monotonic() - started:.1f}s ({backend.name})")
+            if info is not None:
+                info.update(provider=identity, request_key=common if pool.share_requests else key, reused=False)
             return data
         raise RuntimeError(f"{self.namespace}: {phase} failed on all configured providers") from last_error
+
+    def submit_batch(self, items):
+        return self.pool.executor.submit(self._run_batch, items)
+
+    def _run_batch(self, items):
+        from .map_batch import batch_prompt
+        pool = self.pool
+        unique = {item.identifier: item for item in items}
+        results = {}
+        # Overlapping fork batches lock their individual inputs in one order.
+        # The owner executes directly, so waiting batches cannot starve it of
+        # an executor slot needed to make the provider request.
+        with ExitStack() as stack:
+            for key in sorted(unique):
+                stack.enter_context(pool.shared_request(SESSION_SYSTEM, unique[key].prompt))
+            missing = []
+            for key, item in unique.items():
+                cached = self.cached_result(SESSION_SYSTEM, item.prompt, 'segment stable')
+                if cached is not None:
+                    results[key] = cached
+                else:
+                    missing.append(item)
+            if len(missing) == 1:
+                item = missing[0]
+                results[item.identifier] = self._run_once(SESSION_SYSTEM, item.prompt, 'segment stable')
+            elif missing:
+                expected = {item.identifier for item in missing}
+                def validate(data):
+                    ids = [row['id'] for row in data['results']]
+                    if len(ids) != len(expected) or set(ids) != expected:
+                        raise ValueError('batch output does not match the requested unit ids')
+                info = {}
+                data = self._run_once(SESSION_SYSTEM, batch_prompt(missing), 'segment batch', validate=validate, info=info)
+                for row in data['results']:
+                    results[row['id']] = {k: v for k, v in row.items() if k != 'id'}
+                for item in missing:
+                    key = DistillationCheckpoints.batch_unit_key(info['provider'], SESSION_SYSTEM, item.prompt)
+                    pool.cache.put_if_absent(key, {'data': results[item.identifier], 'request_key': info['request_key']})
+                    with self._lock:
+                        self.keys.update((key, info['request_key']))
+                if not info['reused']:
+                    with pool._lock:
+                        pool.batched_units += len(missing)
+                        pool.batch_requests += 1
+                pool.log(f'[distill] {self.namespace}: batch resolved {len(missing)} units in one request')
+        return [results[item.identifier] for item in items]
 
 
 def distill_session(
