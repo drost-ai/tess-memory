@@ -177,7 +177,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             while futures or not exhausted:
                 while not exhausted and len(futures) < max(1, cfg.codex.batch_size):
                     try:
-                        (_, ds, path, project, parent), advance_cursor = next(iterator)
+                        (modified_ns, ds, path, project, parent), advance_cursor = next(iterator)
                     except StopIteration:
                         exhausted = True
                         break
@@ -214,6 +214,21 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 seen_sessions.setdefault(progress['session_id'], str(path))
                             stats.unchanged += 1
                             continue
+                        quiet_until = modified_ns / 1_000_000_000 + cfg.quiet_seconds
+                        if fair_scan and cfg.quiet_seconds and time.time() < quiet_until:
+                            # Automatic discovery stays frequent, but a source
+                            # that is still advancing cannot spend model calls.
+                            # quiet_pending is intentionally absent from the
+                            # scheduler's fast historical-backlog states.
+                            state.update(quiet_until=quiet_until,
+                                         observed_modified_at=modified_ns / 1_000_000_000)
+                            record(ds, path, project, signature, 'quiet_pending', state, known_id,
+                                   error='source is still inside the configured quiet window')
+                            stats.deferred_active += 1
+                            stats.quiet_deferred += 1
+                            continue
+                        state.pop('quiet_until', None)
+                        state.pop('observed_modified_at', None)
                         if limit is not None and attempted >= limit:
                             # Finish the cheap metadata checks even after the
                             # read budget is spent. A rotated scan's suffix can

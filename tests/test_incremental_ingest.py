@@ -371,6 +371,81 @@ class IncrementalIngestTests(unittest.TestCase):
             self.assertEqual((stats.distilled, stats.source_reads, stats.sources_remaining), (1, 1, remaining))
         self.assertEqual(self.run_ingest().model_calls, 0)
 
+    def test_automatic_poll_records_hot_source_without_calls_until_quiet(self):
+        self.cfg.quiet_seconds = 900
+        modified = self.path.stat().st_mtime
+        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 1):
+            first = self.run_ingest(limit=1)
+        self.assertEqual((first.quiet_deferred, first.model_calls, first.embedded_passages,
+                          first.source_reads, first.sources_remaining), (1, 0, 0, 0, 0))
+        progress = self.store.source_progress(str(self.path))
+        self.assertEqual(progress['status'], 'quiet_pending')
+        self.assertAlmostEqual(json.loads(progress['state'])['quiet_until'], modified + 900, places=3)
+        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 601):
+            second = self.run_ingest(limit=1)
+        self.assertEqual((second.quiet_deferred, second.model_calls), (1, 0))
+        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 901):
+            last = self.run_ingest(limit=1)
+        self.assertEqual((last.distilled, last.model_calls, last.quiet_deferred), (1, 2, 0))
+        self.assertEqual(self.store.source_progress(str(self.path))['status'], 'indexed')
+
+    def test_active_indexed_source_keeps_paid_rows_until_quiet_then_ingests_suffix(self):
+        self.run_ingest()
+        before = self.paid_rows()
+        counts = len(self.backend.calls), len(self.embedder.calls)
+        self.add_unit()
+        modified = self.path.stat().st_mtime
+        self.cfg.quiet_seconds = 900
+        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 1):
+            deferred = self.run_ingest(limit=1)
+        self.assertEqual((deferred.quiet_deferred, deferred.model_calls), (1, 0))
+        self.assertEqual(before, self.paid_rows())
+        self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
+        self.assertEqual(self.store.source_progress(str(self.path))['status'], 'quiet_pending')
+        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 901):
+            completed = self.run_ingest(limit=1)
+        self.assertEqual((completed.distilled, completed.model_calls), (1, 2))
+
+    def test_explicit_targeted_ingest_bypasses_automatic_quiet_window(self):
+        self.cfg.quiet_seconds = 900
+        result = self.run_ingest(limit=1, session_ids={'one'})
+        self.assertEqual((result.distilled, result.quiet_deferred), (1, 0))
+
+    def test_new_activity_restarts_quiet_deadline(self):
+        self.cfg.quiet_seconds = 900
+        first_modified = self.path.stat().st_mtime
+        with mock.patch('agentic_memory.incremental.time.time', return_value=first_modified + 1):
+            self.run_ingest(limit=1)
+        self.add_unit()
+        second_modified = self.path.stat().st_mtime
+        self.assertGreaterEqual(second_modified, first_modified)
+        with mock.patch('agentic_memory.incremental.time.time', return_value=second_modified + 1):
+            result = self.run_ingest(limit=1)
+        self.assertEqual((result.quiet_deferred, result.model_calls), (1, 0))
+        state = json.loads(self.store.source_progress(str(self.path))['state'])
+        self.assertAlmostEqual(state['quiet_until'], second_modified + 900, places=3)
+
+    def test_agent_core_body_mtime_drives_automatic_quiet_window(self):
+        home = self.root / 'tess-quiet'
+        home.mkdir()
+        meta = home / 'native.json'
+        meta.write_text(json.dumps({'id': 'native', 'cwd': '/work/tess'}))
+        body = home / 'native' / 'full-transcript-with-tools.jsonl'
+        body.parent.mkdir()
+        body.write_text('')
+        for i, (role, content) in enumerate([('user', 'First task'), ('assistant', 'First answer')]):
+            append(body, {'type': 'message', 'message_index': i, 'role': role, 'content': content})
+        self.cfg.data_stores = [DataStore('tess', home, type='agent-core', project='fixed-project')]
+        self.cfg.min_session_chars = 0
+        self.cfg.quiet_seconds = 900
+        metadata_mtime = meta.stat().st_mtime
+        modified = body.stat().st_mtime
+        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 1):
+            result = self.run_ingest(limit=1)
+        self.assertEqual((result.quiet_deferred, result.model_calls, result.source_reads), (1, 0, 0))
+        self.assertEqual(meta.stat().st_mtime, metadata_mtime)
+        self.assertEqual(self.store.source_progress(str(meta))['status'], 'quiet_pending')
+
     def test_operator_export_hold_prevents_model_and_embedding_calls_until_released(self):
         self.cfg.ingestion_hold_texts = ['Remember the durable workspace decision.']
         stats = self.run_ingest()

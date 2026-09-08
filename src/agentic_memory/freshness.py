@@ -76,6 +76,7 @@ def session_freshness(store, session_id, cfg=None):
             'indexed_through': state.get('indexed_through_at') or session['ended_at'],
             'indexed_units': len(state.get('indexed_units') or []),
             'pending_units': state.get('pending_units', 0), 'pending_tail': state.get('pending_tail', False),
+            'quiet_until': state.get('quiet_until'),
             'source_changed': changed, 'source_available': available,
             'boundary_kinds': dict(Counter(kinds)),
             'coverage': 'eligible persisted prefix; task completion is not inferred',
@@ -115,6 +116,8 @@ def describe(freshness):
         text += f"; {freshness['pending_units']} eligible units still pending"
     if freshness.get('pending_tail'):
         text += '; unfinished source tail remains'
+    if freshness.get('status') == 'quiet_pending' and freshness.get('quiet_until'):
+        text += '; model work deferred until source is quiet'
     if freshness.get('source_changed') and freshness.get('status') != 'source_changed':
         text += '; source changed since observation'
     if freshness.get('status') == 'legacy_unverified':
@@ -166,8 +169,14 @@ def store_status(store, cfg=None):
     if tracked:
         columns = {r['name'] for r in store.db.execute('PRAGMA table_info(ingest_sources)')}
         retry = 'retry_at' if 'retry_at' in columns else '0 AS retry_at'
-        for row in store.db.execute("SELECT path,session_id,project,status,observed_at,indexed_at,last_error," + retry + " FROM ingest_sources WHERE status NOT IN ('indexed','trivial','shadowed') ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'held' THEN 1 ELSE 2 END, observed_at DESC LIMIT 20"):
+        for row in store.db.execute("SELECT path,session_id,project,status,state,observed_at,indexed_at,last_error," + retry + " FROM ingest_sources WHERE status NOT IN ('indexed','trivial','shadowed') ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'held' THEN 1 ELSE 2 END, observed_at DESC LIMIT 20"):
             problem = dict(row)
+            try:
+                state = json.loads(problem.pop('state') or '{}')
+            except (ValueError, TypeError):
+                state = {}
+            if problem['status'] == 'quiet_pending':
+                problem['quiet_until'] = state.get('quiet_until')
             problem['last_error'] = safe_error(problem['last_error'])
             problems.append(problem)
         times = store.db.execute('SELECT MAX(observed_at),MAX(indexed_at) FROM ingest_sources').fetchone()

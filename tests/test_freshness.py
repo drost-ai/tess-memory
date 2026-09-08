@@ -52,6 +52,22 @@ class FreshnessTests(unittest.TestCase):
         self.assertTrue(fresh['pending_tail'])
         self.assertEqual(rollup_freshness(self.store, 'project', 'p')['status'], 'pending_refresh')
 
+    def test_quiet_pending_status_exposes_deadline_without_state_blob(self):
+        self.ingest()
+        with self.store.write_transaction():
+            self.store.record_source(path=str(self.path), session_id='codex:one', project='p', source_type='codex',
+                                     signature='changed', status='quiet_pending',
+                                     state={'quiet_until': 12345, 'private': 'do not expose'}, now=1,
+                                     error='source is still inside the configured quiet window')
+        fresh = session_freshness(self.store, 'codex:one', self.cfg)
+        self.assertEqual((fresh['status'], fresh['quiet_until']), ('quiet_pending', 12345))
+        self.assertIn('deferred until source is quiet', describe(fresh))
+        status = store_status(self.store, self.cfg)
+        problem = status['ingestion']['problems'][0]
+        self.assertEqual(problem['quiet_until'], 12345)
+        self.assertNotIn('state', problem)
+        self.assertNotIn('do not expose', json.dumps(status))
+
     def test_legacy_snapshot_is_explicitly_unverified(self):
         self.cfg.incremental_ingestion = False
         self.ingest()

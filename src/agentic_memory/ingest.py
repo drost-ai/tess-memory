@@ -72,6 +72,7 @@ class IngestStats:
     source_reads: int = 0
     sources_remaining: int = 0
     retries_deferred: int = 0
+    quiet_deferred: int = 0
 
 
 _LOG_LOCK = threading.Lock()

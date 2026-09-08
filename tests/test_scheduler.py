@@ -216,6 +216,39 @@ class WorkerOwnershipTests(unittest.TestCase):
 
 
 class SchedulerWorkerTests(unittest.TestCase):
+    def test_hot_source_finishes_at_poll_cadence_without_provider_work(self):
+        from agentic_memory.scheduler_config import load_service
+        from agentic_memory.scheduler_queue import WorkQueue
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = root / 'source'
+            write_rollout(source)
+            providers = root / 'providers.json'
+            providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused'}}}))
+            settings = root / 'settings.toml'
+            settings.write_text(f'[[data_stores]]\nname="codex"\ntype="codex"\npath="{source}"\n'
+                                f'[storage]\ndata_dir="{root / "memory"}"\n'
+                                f'[llm]\nprofile="offline"\nsettings="{providers}"\n'
+                                '[embedding]\nprovider="local"\n[ingest]\nquiet_seconds=900\n')
+            config_path = root / 'service.toml'
+            config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n'
+                                   f'[[stores]]\nname="codex"\nsettings="{settings}"\npoll_seconds=300\n')
+            config = load_service(config_path)
+            queue = WorkQueue(config)
+            run = queue.claim(instance='codex', kind='ingest', explicit=True)
+            backend = mock.Mock()
+            backend.name = 'unused-provider'
+            backend.cache_identity = 'unused-model'
+            with mock.patch('agentic_memory.scheduler.AgentCoreBackend', return_value=backend), \
+                 mock.patch('agentic_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
+                self.assertEqual(worker(config_path, run['id']), 0)
+            backend.complete.assert_not_called()
+            finished = queue.get_run(run['id'])
+            stats = json.loads(finished['stats'])
+            self.assertEqual((stats['quiet_deferred'], stats['model_calls'], stats['source_reads']), (1, 0, 0))
+            job = next(j for j in queue.status()['jobs'] if j['instance'] == 'codex' and j['kind'] == 'ingest')
+            self.assertAlmostEqual(job['due'] - job['last_success'], 300, places=3)
+
     def test_sigterm_drains_paid_completion_before_worker_exits(self):
         import signal
         from test_codex import write_rollout
