@@ -173,6 +173,21 @@ with ProviderGate(Path(sys.argv[1]),model_limit=1).acquire('p','model',owner='cr
             self.assertEqual(budget.calls, 0)
             self.assertEqual(gate.status()['waiting'], [])
 
+    def test_embedding_deferral_is_not_retried_or_wrapped_as_a_network_error(self):
+        from agentic_memory.embed import OpenAICompatEmbedder
+        from agentic_memory.model_usage import guard_source_requests
+        from agentic_memory.source_activity import require_quiet, SourceNotQuiet
+        path = self.root/'hot.jsonl'
+        path.write_text('{}\n')
+        embedder = OpenAICompatEmbedder.__new__(OpenAICompatEmbedder)
+        embedder._url, embedder._key, embedder._model, embedder._dims = 'https://unused.test', 'fake', 'fake', 4
+        with guard_source_requests(lambda: require_quiet(path, 'transcript', 900)), \
+             mock.patch('httpx.post') as post, mock.patch('time.sleep') as sleep:
+            with self.assertRaises(SourceNotQuiet):
+                embedder._post(['text'])
+        post.assert_not_called()
+        sleep.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

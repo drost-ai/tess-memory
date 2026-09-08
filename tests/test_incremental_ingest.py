@@ -500,6 +500,32 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual((result.quiet_deferred, result.checkpointed_requests), (1, 2))
         self.assertEqual(self.embedder.calls, [])
 
+    def test_embedding_batches_checkpoint_before_a_later_quiet_deferral(self):
+        import time
+        from collections import Counter
+        os.utime(self.path, (time.time()-3600, time.time()-3600))
+        self.cfg.quiet_seconds = 900
+        owner = self
+        class BatchedEmbedder(RecordingEmbedder):
+            batch_size = 1
+            def embed_passages(self, texts):
+                vectors = super().embed_passages(texts)
+                if len(self.calls) == 1:
+                    append(owner.path, wrapped('response_item', message('user', 'An unfinished new request'), 40))
+                return vectors
+        self.embedder = BatchedEmbedder()
+        first = self.run_ingest(limit=1)
+        self.assertEqual(first.quiet_deferred, 1)
+        self.assertEqual(len(self.embedder.calls), 1)
+        cache = DistillationCheckpoints(self.cfg.data_dir/'distillation-cache.db')
+        with cache._connect() as db:
+            self.assertEqual(db.execute('SELECT COUNT(*) FROM passages').fetchone()[0], 1)
+        with mock.patch('agentic_memory.source_activity.time.time', return_value=self.path.stat().st_mtime+901):
+            resumed = self.run_ingest(limit=1)
+        self.assertEqual((resumed.distilled, resumed.model_calls), (1, 0))
+        counts = Counter(text for batch in self.embedder.calls for text in batch)
+        self.assertTrue(all(n == 1 for n in counts.values()))
+
     def test_agent_core_body_mtime_drives_automatic_quiet_window(self):
         home = self.root / 'tess-quiet'
         home.mkdir()

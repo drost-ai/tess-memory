@@ -101,12 +101,15 @@ class OpenAICompatEmbedder(Embedder):
 
     def _post(self, inputs: list[str]) -> np.ndarray:
         import httpx
+        from .source_activity import SourceNotQuiet
+        from .model_usage import check_source_admission
 
         last_err: Exception | None = None
         for attempt in range(3):
             try:
                 guard = getattr(self, 'request_guard', nullcontext)
                 with guard():
+                    check_source_admission()
                     r = httpx.post(
                         self._url,
                         headers={"Authorization": f"Bearer {self._key}"},
@@ -124,6 +127,8 @@ class OpenAICompatEmbedder(Embedder):
                     raise ValueError('embedding response has invalid dimensions or values')
                 norms = np.linalg.norm(vecs, axis=1, keepdims=True)
                 return vecs / np.clip(norms, 1e-9, None)
+            except SourceNotQuiet:
+                raise  # a scheduling deferral must not become a transport retry/error
             except Exception as e:  # noqa: BLE001 — retry transient network/5xx
                 last_err = e
                 import time

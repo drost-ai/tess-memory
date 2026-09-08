@@ -88,16 +88,24 @@ def _embed_changed(rows, previous, cache, embedder):
             missing.setdefault(row.content, key)
     generated = {}
     if missing:
-        check_source_admission()
-        vectors = embedder.embed_passages(list(missing))
-        if len(vectors) != len(missing):
-            raise ValueError("embedder returned a different number of vectors than requested passages")
-        for (content, key), vector in zip(missing.items(), vectors, strict=True):
-            vector = np.asarray(vector, dtype=np.float32)
-            if vector.ndim != 1 or not len(vector) or not np.isfinite(vector).all():
-                raise ValueError("embedder returned an invalid vector")
-            generated[content] = vector
-        cache.save_passages([(missing[text], vec.tobytes()) for text, vec in generated.items()])
+        size = max(1, getattr(embedder, 'batch_size', len(missing)))
+        pending = list(missing.items())
+        for offset in range(0, len(pending), size):
+            batch = pending[offset:offset+size]
+            check_source_admission()
+            vectors = embedder.embed_passages([text for text, _ in batch])
+            if len(vectors) != len(batch):
+                raise ValueError("embedder returned a different number of vectors than requested passages")
+            validated = []
+            for (content, key), vector in zip(batch, vectors, strict=True):
+                vector = np.asarray(vector, dtype=np.float32)
+                if vector.ndim != 1 or not len(vector) or not np.isfinite(vector).all():
+                    raise ValueError("embedder returned an invalid vector")
+                generated[content] = vector
+                validated.append((key, vector.tobytes()))
+            # A source can become active between HTTP batches. Keep every
+            # completed batch even if the next admission must be deferred.
+            cache.save_passages(validated)
     for row in rows:
         if row.vector is None:
             row.vector = generated[row.content]
