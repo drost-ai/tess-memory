@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import asdict, replace
+from functools import partial
 import json
 from pathlib import Path
 import time
@@ -15,6 +16,8 @@ from .distill import CallBudgetExceeded, DistillationPool, SESSION_SYSTEM, REDUC
 from .ingest import IngestStats, _extractive_digest, _log, _refresh_aggregates, _session_rows
 from .readers import CompletedSourceReader, content_key, source_signature
 from .source_journal import SourceChanged
+from .source_activity import require_quiet, SourceNotQuiet
+from .model_usage import source_namespace, guard_source_requests, check_source_admission
 from .source_schedule import SCAN_CURSOR, source_scan_order
 from .stable_distill import STABLE_MAP_PROMPT, stable_digest
 from .time_utils import week_start
@@ -85,6 +88,7 @@ def _embed_changed(rows, previous, cache, embedder):
             missing.setdefault(row.content, key)
     generated = {}
     if missing:
+        check_source_admission()
         vectors = embedder.embed_passages(list(missing))
         if len(vectors) != len(missing):
             raise ValueError("embedder returned a different number of vectors than requested passages")
@@ -139,10 +143,19 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 signature=signature, status=status, state=state, now=time.time(),
                                 indexed=indexed, error=error)
 
-    def work(snapshot, seed, pool):
+    def defer_quiet(ds, path, project, state, sid, exc):
+        state.update(quiet_until=exc.quiet_until, observed_modified_at=exc.activity.modified_at)
+        record(ds, path, project, None, 'quiet_pending', state, sid, error=str(exc))
+        stats.deferred_active += 1
+        stats.quiet_deferred += 1
+
+    def source_guard(ds, path):
+        return partial(require_quiet, path, ds.type, cfg.quiet_seconds) if fair_scan and cfg.quiet_seconds else None
+
+    def work(snapshot, seed, pool, guard):
         if llm is None:
             return _extractive_digest(snapshot.transcript), 'extractive', None, None
-        calls = pool.session(f"incremental/{snapshot.transcript.source_type}/{snapshot.transcript.session_id}")
+        calls = pool.session(source_namespace(snapshot.transcript.source_type, snapshot.transcript.session_id), admission_guard=guard)
         keys = snapshot.unit_keys()
         if seed and keys[:len(seed['units'])] != seed['units']:
             seed = None
@@ -177,7 +190,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             while futures or not exhausted:
                 while not exhausted and len(futures) < max(1, cfg.codex.batch_size):
                     try:
-                        (modified_ns, ds, path, project, parent), advance_cursor = next(iterator)
+                        (_, ds, path, project, parent), advance_cursor = next(iterator)
                     except StopIteration:
                         exhausted = True
                         break
@@ -185,6 +198,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                     state = json.loads(progress['state']) if progress else {}
                     tracked = store.session_for_file(str(path))
                     known_id = progress['session_id'] if progress and progress['session_id'] else tracked['id'] if tracked else None
+                    if known_id is None and ds.type == 'codex':
+                        known_id = 'codex:' + reader.catalog.sources[path.resolve()].session_id
                     signature = None
                     try:
                         signature = content_key([source_signature(path, ds, cfg, catalog=reader.catalog if ds.type == 'codex' else None), policy])
@@ -214,19 +229,9 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 seen_sessions.setdefault(progress['session_id'], str(path))
                             stats.unchanged += 1
                             continue
-                        quiet_until = modified_ns / 1_000_000_000 + cfg.quiet_seconds
-                        if fair_scan and cfg.quiet_seconds and time.time() < quiet_until:
-                            # Automatic discovery stays frequent, but a source
-                            # that is still advancing cannot spend model calls.
-                            # quiet_pending is intentionally absent from the
-                            # scheduler's fast historical-backlog states.
-                            state.update(quiet_until=quiet_until,
-                                         observed_modified_at=modified_ns / 1_000_000_000)
-                            record(ds, path, project, signature, 'quiet_pending', state, known_id,
-                                   error='source is still inside the configured quiet window')
-                            stats.deferred_active += 1
-                            stats.quiet_deferred += 1
-                            continue
+                        guard = source_guard(ds, path)
+                        if guard:
+                            guard()  # current files, never the discovery-time timestamp
                         state.pop('quiet_until', None)
                         state.pop('observed_modified_at', None)
                         if limit is not None and attempted >= limit:
@@ -243,6 +248,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             with store.write_transaction():
                                 store.set_meta(SCAN_CURSOR, str(path))
                         snapshot = reader.read(ds, path, project, parent)
+                        if guard:
+                            guard()  # a source can advance during a slow parse
                         stats.parsed_records += snapshot.parsed_records
                         signature = content_key([snapshot.observed_signature, policy])
                         st = snapshot.transcript
@@ -319,8 +326,10 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             stats.unchanged += 1
                             continue
                         record(ds, path, project, signature, 'processing', state, st.session_id)
-                        future = coordinators.submit(work, snapshot, seed, pool)
+                        future = coordinators.submit(work, snapshot, seed, pool, guard)
                         futures[future] = (ds, path, project, parent, snapshot, old, previous, state, seed, signature)
+                    except SourceNotQuiet as exc:
+                        defer_quiet(ds, path, project, state, known_id, exc)
                     except Exception as exc:
                         stats.errors += 1
                         record(ds, path, project, signature, 'error', state, error=str(exc)[:500])
@@ -334,7 +343,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                     try:
                         digest, status, calls, seed = future.result()
                         rows = _session_rows(st, digest, cfg.chunk_chars)
-                        stats.embedded_passages += _embed_changed(rows, previous, cache, embedder)
+                        with guard_source_requests(source_guard(ds, path)):
+                            stats.embedded_passages += _embed_changed(rows, previous, cache, embedder)
                         # Re-read through the same journal after slow provider
                         # work. Appends can advance the tail; earlier semantic
                         # units (including repair/fork changes) must still match.
@@ -384,6 +394,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             stats.distilled += 1
                             stats.fallback += status == 'fallback'
                         _log(f"[incremental] {st.session_id}: published {len(keys)} units ({status}); pending_tail={pending}")
+                    except SourceNotQuiet as exc:
+                        defer_quiet(ds, path, project, state, st.session_id, exc)
                     except CallBudgetExceeded as exc:
                         stats.budget_deferred += 1
                         record(ds, path, project, signature, 'budget_pending', state, st.session_id, error=str(exc))

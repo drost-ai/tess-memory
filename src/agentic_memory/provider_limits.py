@@ -219,6 +219,28 @@ class ProviderGate:
         finally:
             db.close()
 
+    def source_receipts(self, *, instance, source_type, session_id, since, until):
+        """Bounded source audit using the same namespace formatter as ingestion."""
+        from .model_usage import source_namespace
+        if until <= since:
+            raise ValueError('receipt window must end after it starts')
+        namespace = source_namespace(source_type, session_id)
+        db = self.connect()
+        try:
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE name='model_requests'").fetchone():
+                return {'available': False, 'reason': 'attributed receipts are unavailable'}
+            rows = [dict(r) for r in db.execute('''
+                SELECT r.id,r.started,r.ended,r.outcome,r.provider,m.phase,m.request_hash,m.details
+                FROM call_receipts r JOIN model_requests m ON m.call_id=r.id
+                WHERE r.instance=? AND m.namespace=? AND r.started>=? AND r.started<?
+                ORDER BY r.started
+            ''', (instance, namespace, since, until))]
+            for row in rows:
+                row['details'] = json.loads(row['details'])
+            return {'available': True, 'namespace': namespace, 'since': since, 'until': until, 'receipts': rows}
+        finally:
+            db.close()
+
     def usage(self, *, since=0, until=None, instance=None, run_id=None):
         """Observed usage only; include explicit coverage gaps and retry counts."""
         until = time.time() if until is None else until
@@ -298,12 +320,17 @@ class LimitedBackend:
         self.name = backend.name
         self.cache_identity = getattr(backend, 'cache_identity', backend.name)
     def complete(self, **kwargs):
+        from .model_usage import check_source_admission
+        def check():
+            self.budget.check()
+            check_source_admission()
         verify = getattr(self.backend, 'verify_profile', lambda: None)
         verify()
-        self.budget.check()
+        check()
         with self.gate.acquire(self.provider, 'model', owner=self.owner, instance=self.instance,
-                               check_admission=self.budget.check) as call_id:
+                               check_admission=check) as call_id:
             verify()
+            check()
             self.budget.take()
             from .checkpoints import DistillationCheckpoints
             from .model_usage import UsageObserver, current_metadata, observe_usage

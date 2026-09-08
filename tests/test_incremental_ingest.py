@@ -425,6 +425,81 @@ class IncrementalIngestTests(unittest.TestCase):
         state = json.loads(self.store.source_progress(str(self.path))['state'])
         self.assertAlmostEqual(state['quiet_until'], second_modified + 900, places=3)
 
+    def test_activity_after_discovery_is_rechecked_before_dispatch(self):
+        from dataclasses import replace
+        from agentic_memory.readers import CompletedSourceReader
+        import time
+        second = write_rollout(self.home, 'two')
+        for p in (self.path, second):
+            os.utime(p, (time.time()-3600, time.time()-3600))
+        self.cfg.quiet_seconds = 900
+        self.cfg.codex = replace(self.cfg.codex, batch_size=16)
+        self.cfg.llm_workers = self.cfg.segment_workers = 16
+        read = CompletedSourceReader.read
+        changed = False
+        def read_and_advance(reader, ds, path, project, parent=None):
+            nonlocal changed
+            snapshot = read(reader, ds, path, project, parent)
+            if path == self.path and not changed:
+                changed = True
+                append(second, wrapped('response_item', message('user', 'NEW-ACTIVITY-WITHIN-PASS ' * 20), 20))
+                append(second, wrapped('response_item', message('assistant', 'New answer ' * 20), 21))
+            return snapshot
+        with mock.patch.object(CompletedSourceReader, 'read', read_and_advance):
+            result = self.run_ingest(limit=2)
+        self.assertEqual(result.quiet_deferred, 1)
+        self.assertEqual(self.store.source_progress(str(second))['status'], 'quiet_pending')
+        self.assertFalse(any('NEW-ACTIVITY-WITHIN-PASS' in prompt for prompt in self.backend.calls))
+
+    def test_source_advancing_during_parse_does_not_invoke_a_provider(self):
+        from agentic_memory.readers import CompletedSourceReader
+        import time
+        os.utime(self.path, (time.time()-3600, time.time()-3600))
+        self.cfg.quiet_seconds = 900
+        read = CompletedSourceReader.read
+        def advancing(reader, *args):
+            snapshot = read(reader, *args)
+            self.add_unit()
+            return snapshot
+        with mock.patch.object(CompletedSourceReader, 'read', advancing):
+            result = self.run_ingest(limit=1)
+        self.assertEqual((result.quiet_deferred, result.model_calls), (1, 0))
+        self.assertEqual(self.backend.calls, [])
+        self.assertEqual(self.embedder.calls, [])
+
+    def test_activity_during_model_work_defers_next_call_without_fallback_and_resumes_cache(self):
+        import time
+        os.utime(self.path, (time.time()-3600, time.time()-3600))
+        self.cfg.quiet_seconds = 900
+        self.backend.hook = self.add_unit
+        fallback = Backend()
+        fallback.name = fallback.cache_identity = 'fallback'
+        result = ingest(self.cfg, self.store, self.embedder, self.backend, fallback,
+                        limit=1, refresh_aggregates=False)
+        self.assertEqual((result.quiet_deferred, result.checkpointed_requests), (1, 1))
+        self.assertEqual(len(self.backend.calls), 1)
+        self.assertEqual(fallback.calls, [])
+        self.assertEqual(self.embedder.calls, [])
+        with mock.patch('agentic_memory.source_activity.time.time', return_value=self.path.stat().st_mtime+901):
+            resumed = self.run_ingest(limit=1)
+        self.assertEqual((resumed.distilled, resumed.model_calls), (1, 2))
+        self.assertGreaterEqual(resumed.request_cache_hits, 1)
+
+    def test_source_advancing_after_reduction_defers_new_embeddings_and_retains_models(self):
+        import time
+        os.utime(self.path, (time.time()-3600, time.time()-3600))
+        self.cfg.quiet_seconds = 900
+        complete = self.backend.complete
+        def after_reduce(**kwargs):
+            result = complete(**kwargs)
+            if len(self.backend.calls) == 2:
+                self.add_unit()
+            return result
+        with mock.patch.object(self.backend, 'complete', after_reduce):
+            result = self.run_ingest(limit=1)
+        self.assertEqual((result.quiet_deferred, result.checkpointed_requests), (1, 2))
+        self.assertEqual(self.embedder.calls, [])
+
     def test_agent_core_body_mtime_drives_automatic_quiet_window(self):
         home = self.root / 'tess-quiet'
         home.mkdir()

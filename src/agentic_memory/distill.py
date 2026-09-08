@@ -19,6 +19,7 @@ from typing import Callable
 
 from .checkpoints import DistillationCheckpoints
 from .llm import AgentCoreBackend
+from .source_activity import SourceNotQuiet
 
 MEMORY_KINDS = ("decision", "fact", "preference", "solution", "problem", "task_state")
 
@@ -324,7 +325,9 @@ class DistillationPool:
         self.active_calls = 0
         self.peak_calls = 0
 
-    def complete(self, backend, *, system, prompt, namespace='', phase='', json_retry=0):
+    def complete(self, backend, *, system, prompt, namespace='', phase='', json_retry=0, admission_guard=None):
+        if admission_guard:
+            admission_guard()
         with self._lock:
             if self.max_calls and self.calls >= self.max_calls:
                 raise CallBudgetExceeded("model-call budget reached; validated checkpoints remain available")
@@ -334,8 +337,9 @@ class DistillationPool:
         try:
             verify = getattr(backend, 'verify_profile', lambda: None)
             verify()
-            from .model_usage import request_metadata
-            with request_metadata(namespace=namespace, phase=phase, json_retry=json_retry):
+            from .model_usage import request_metadata, guard_source_requests, check_source_admission
+            with request_metadata(namespace=namespace, phase=phase, json_retry=json_retry), guard_source_requests(admission_guard):
+                check_source_admission()
                 result = backend.complete(system=system, prompt=prompt)
             verify()
             return result
@@ -349,8 +353,8 @@ class DistillationPool:
     def __exit__(self, *exc):
         self.executor.shutdown(wait=True, cancel_futures=True)
 
-    def session(self, namespace: str) -> SessionCalls:
-        return SessionCalls(self, namespace)
+    def session(self, namespace: str, *, admission_guard=None) -> SessionCalls:
+        return SessionCalls(self, namespace, admission_guard=admission_guard)
 
     @contextmanager
     def shared_request(self, system: str, prompt: str):
@@ -382,9 +386,10 @@ class DistillationPool:
 
 
 class SessionCalls:
-    def __init__(self, pool: DistillationPool, namespace: str):
+    def __init__(self, pool: DistillationPool, namespace: str, *, admission_guard=None):
         self.pool = pool
         self.namespace = namespace
+        self.admission_guard = admission_guard
         self._fallback_used = threading.Event()
         self.keys: set[str] = set()
         self._lock = threading.Lock()
@@ -510,14 +515,15 @@ class SessionCalls:
                     retry = self.attempts
                     self.attempts += 1
                     return pool.complete(backend, system=system, prompt=prompt,
-                                         namespace=namespace, phase=phase, json_retry=retry)
+                                         namespace=namespace, phase=phase, json_retry=retry, admission_guard=admission_guard)
             namespace = self.namespace
+            admission_guard = self.admission_guard
             try:
                 data = _call_json(CountedBackend(), system, prompt)
                 self._validate(data, phase)
                 if validate:
                     validate(data)
-            except CallBudgetExceeded:
+            except (CallBudgetExceeded, SourceNotQuiet):
                 raise
             except Exception as exc:
                 last_error = exc

@@ -145,6 +145,34 @@ with ProviderGate(Path(sys.argv[1]),model_limit=1).acquire('p','model',owner='cr
         self.assertEqual(budget.calls, 0)
         self.assertTrue(budget.draining.is_set())
 
+    def test_source_becoming_active_while_waiting_never_reaches_model(self):
+        from functools import partial
+        from agentic_memory.distill import DistillationPool
+        from agentic_memory.source_activity import require_quiet, SourceNotQuiet
+        from test_incremental_ingest import Backend
+        path = self.root/'source.jsonl'
+        path.write_text('{}\n')
+        os.utime(path, (time.time()-3600, time.time()-3600))
+        gate = ProviderGate(self.path, model_limit=1, poll_seconds=0.005)
+        budget = ModelBudget(10)
+        primary, fallback = Backend(), Backend()
+        backend = LimitedBackend(primary, gate, budget, provider='p', owner='target', instance='one')
+        with gate.acquire('p', 'model', owner='occupied', instance='other'), \
+             DistillationPool(backend, fallback, workers=1) as pool:
+            calls = pool.session('target', admission_guard=partial(require_quiet, path, 'transcript', 900))
+            future = calls.submit('system', 'prompt', 'segment stable')
+            until = time.monotonic()+2
+            while not gate.status()['waiting'] and time.monotonic()<until:
+                time.sleep(0.005)
+            self.assertTrue(gate.status()['waiting'])
+            path.write_text('{"new":"activity"}\n')
+            with self.assertRaises(SourceNotQuiet):
+                future.result(timeout=2)
+            self.assertEqual(primary.calls, [])
+            self.assertEqual(fallback.calls, [])
+            self.assertEqual(budget.calls, 0)
+            self.assertEqual(gate.status()['waiting'], [])
+
 
 if __name__ == '__main__':
     unittest.main()

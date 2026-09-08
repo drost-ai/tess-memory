@@ -191,4 +191,10 @@ def store_status(store, cfg=None):
                            'note': 'Counts describe recorded source states. Worker/supervisor heartbeats do not certify source freshness; individual session checks compare current file metadata.'}
     if getattr(store, '_scoped_vectors', None) is not None:
         result['retrieval_index'] = store._scoped_vectors.status()
+    if cfg is not None:
+        from .detection import detection_status
+        try:
+            result['ingestion']['detection'] = detection_status(cfg)
+        except Exception as exc:
+            result['ingestion']['detection'] = {'status': 'unavailable', 'error': safe_error(exc)}
     return result

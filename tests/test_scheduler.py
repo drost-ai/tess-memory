@@ -45,7 +45,7 @@ class SchedulerQueueTests(unittest.TestCase):
         writer.execute("UPDATE scheduled_stores SET enabled=0 WHERE name='a'")
         before = self.config.db_path.stat().st_mtime_ns
         status = service_status(self.config)
-        self.assertEqual(len(status['jobs']), 6)
+        self.assertEqual(len(status['jobs']), 8)
         self.assertTrue(all(j['enabled'] for j in status['jobs']))
         self.assertEqual(self.config.db_path.stat().st_mtime_ns, before)
         self.assertEqual(status['providers']['active'], [])
@@ -166,7 +166,38 @@ class SchedulerQueueTests(unittest.TestCase):
         two = self.queue.claim(now=wake)
         self.assertNotEqual(one['instance'], two['instance'])
         self.assertIsNone(self.queue.claim(now=wake))
-        self.assertEqual(len(self.queue.status()['jobs']), 6)
+        self.assertEqual(len(self.queue.status()['jobs']), 8)
+
+    def test_detection_has_independent_capacity_and_cadence_while_paid_jobs_run(self):
+        now = 10**10
+        first = self.queue.claim(now=now, instance='a', kind='ingest')
+        second = self.queue.claim(now=now, instance='b', kind='profiles')
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertIsNone(self.queue.claim(now=now+600))  # paid capacity remains exclusive
+        detect = self.queue.claim(now=now, instance='a', kind='detect')
+        other = self.queue.claim(now=now, instance='b', kind='detect')
+        self.assertIsNotNone(detect)
+        self.assertIsNotNone(other)
+        self.assertIsNone(self.queue.claim(now=now, instance='a', kind='detect', explicit=True))
+        self.queue.finish(detect['id'], now=now+10, stats={'model_calls': 0})
+        self.assertIsNone(self.queue.claim(now=now+299, instance='a', kind='detect'))
+        next_detection = self.queue.claim(now=now+300, instance='a', kind='detect')
+        self.assertIsNotNone(next_detection)
+        self.assertEqual(self.queue.get_run(first['id'])['outcome'], 'starting')
+        self.assertIsNone(self.queue.claim(now=now+600, instance='a', kind='ingest', explicit=True))
+
+    def test_paid_job_can_start_while_detection_runs_and_disable_blocks_both(self):
+        now = 10**10
+        detect = self.queue.claim(now=now, instance='a', kind='detect')
+        paid = self.queue.claim(now=now, instance='a', kind='ingest')
+        self.assertIsNotNone(detect)
+        self.assertIsNotNone(paid)
+        self.queue.set_enabled('a', False)
+        for run in (detect, paid):
+            self.queue.finish(run['id'], now=now)
+        self.assertIsNone(self.queue.claim(now=now+600, instance='a', kind='detect'))
+        self.assertIsNone(self.queue.claim(now=now+600, instance='a', kind='ingest'))
 
 
 class WorkerOwnershipTests(unittest.TestCase):

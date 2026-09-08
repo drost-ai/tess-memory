@@ -9,6 +9,33 @@ from contextvars import ContextVar
 
 _metadata = ContextVar('memory_request_metadata', default={})
 _observer = ContextVar('memory_usage_observer', default=None)
+_admission_guard = ContextVar('memory_source_admission_guard', default=None)
+
+
+def source_namespace(source_type, session_id):
+    """One formatter for ingestion, warming and source-level receipt audits."""
+    if source_type == 'codex':
+        session_id = 'codex:' + session_id.removeprefix('codex:')
+    elif source_type in {'claude-code', 'agent-core', 'transcript'}:
+        # Existing generic-reader checkpoints use an empty source-type field.
+        # Accept configured adapter names in audits without renaming paid keys.
+        source_type = ''
+    return f'incremental/{source_type}/{session_id}'
+
+
+@contextmanager
+def guard_source_requests(check):
+    token = _admission_guard.set(check)
+    try:
+        yield
+    finally:
+        _admission_guard.reset(token)
+
+
+def check_source_admission():
+    check = _admission_guard.get()
+    if check:
+        check()
 
 
 @contextmanager

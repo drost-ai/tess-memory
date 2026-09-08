@@ -114,6 +114,14 @@ def worker(config_path: Path, run_id: str) -> int:
             from .codex import load_dedicated_config
             cfg = load_dedicated_config(scheduled.settings)
         workers = scheduled.workers or cfg.llm_workers
+        if run['kind'] == 'detect':
+            from .detection import detect_sources
+            result = detect_sources(cfg, stop_requested=budget.draining.is_set)
+            outcome = 'partial' if result['errors'] else 'success'
+            queue.finish(run_id, outcome=outcome, stats=result)
+            print(json.dumps({'run_id': run_id, 'instance': scheduled.name, 'kind': 'detect',
+                              'outcome': outcome, 'stats': result}), flush=True)
+            return 0
         held = []
         if scheduled.hold_text_file:
             held = json.loads(scheduled.hold_text_file.read_text())
@@ -129,8 +137,10 @@ def worker(config_path: Path, run_id: str) -> int:
         if cfg.embed_provider != 'local' and isinstance(embedder, LocalEmbedder):
             raise ValueError('configured embedding provider is unavailable; scheduled workers do not change embedding spaces')
         if isinstance(embedder, OpenAICompatEmbedder):
+            from .model_usage import check_source_admission
             key = provider_key(cfg, cfg.embed_provider)
-            embedder.request_guard = lambda: gate.acquire(key, 'embedding', owner=run_id, instance=scheduled.name)
+            embedder.request_guard = lambda: gate.acquire(key, 'embedding', owner=run_id, instance=scheduled.name,
+                                                         check_admission=check_source_admission)
         primary = AgentCoreBackend(cfg, probe=False)
         llm = LimitedBackend(primary, gate, budget, provider=provider_key(cfg, cfg.agent_core_profile), owner=run_id, instance=scheduled.name)
         fallback = None
@@ -262,6 +272,7 @@ def serve(config_path: Path, *, stop_event=None):
         signal.signal(signal.SIGTERM, lambda *_: stop_event.set())
         signal.signal(signal.SIGINT, lambda *_: stop_event.set())
     active = {}
+    detectors = {}
     modified = {s.name: s.settings.stat().st_mtime_ns for s in config.stores}
     started = time.time()
     last_heartbeat = 0
@@ -271,13 +282,14 @@ def serve(config_path: Path, *, stop_event=None):
                 if time.time() - last_heartbeat >= 5:
                     queue.supervisor_heartbeat(os.getpid(), started)
                     last_heartbeat = time.time()
-                for identifier, process in list(active.items()):
-                    if process.poll() is not None:
-                        active.pop(identifier)
-                        run = queue.get_run(identifier)
-                        if run and run['outcome'] in ('starting', 'running'):
-                            queue.finish(identifier, outcome='worker_lost', error=f'worker exited with code {process.returncode}')
-                            gate.release_owner(identifier)
+                for processes in (active, detectors):
+                    for identifier, process in list(processes.items()):
+                        if process.poll() is not None:
+                            processes.pop(identifier)
+                            run = queue.get_run(identifier)
+                            if run and run['outcome'] in ('starting', 'running'):
+                                queue.finish(identifier, outcome='worker_lost', error=f'worker exited with code {process.returncode}')
+                                gate.release_owner(identifier)
                 for identifier in queue.recover():
                     gate.release_owner(identifier)
                 for job in queue.status()['jobs']:
@@ -298,21 +310,22 @@ def serve(config_path: Path, *, stop_event=None):
                         continue
                     if modified[instance.name] != current:
                         modified[instance.name] = current
-                        for kind in ('ingest', 'profiles', 'digests'):
+                        for kind in ('ingest', 'profiles', 'digests', 'detect'):
                             queue.request(instance.name, kind)
-                while len(active) < config.parallel_stores and not stop_event.is_set():
-                    run = queue.claim()
-                    if run is None:
-                        break
-                    try:
-                        active[run['id']] = spawn_worker(config, run)
-                        queue.start(run['id'], active[run['id']].pid, allow_finished=True)
-                    except sqlite3.OperationalError:
-                        # A spawned worker may already own this run. Keep its
-                        # process and durable claim intact while the DB is busy.
-                        raise
-                    except Exception as exc:
-                        queue.finish(run['id'], outcome='error', error=f'worker launch failed: {type(exc).__name__}')
+                for kind, processes in (('detect', detectors), (None, active)):
+                    while len(processes) < config.parallel_stores and not stop_event.is_set():
+                        run = queue.claim(kind=kind) if kind else queue.claim()
+                        if run is None:
+                            break
+                        try:
+                            processes[run['id']] = spawn_worker(config, run)
+                            queue.start(run['id'], processes[run['id']].pid, allow_finished=True)
+                        except sqlite3.OperationalError:
+                            # A spawned worker may already own this run. Keep
+                            # its process and durable claim while the DB is busy.
+                            raise
+                        except Exception as exc:
+                            queue.finish(run['id'], outcome='error', error=f'worker launch failed: {type(exc).__name__}')
             except sqlite3.OperationalError as exc:
                 code = getattr(exc, 'sqlite_errorcode', None)
                 if (code is not None and (code & 0xff) not in (sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED)) or (code is None and str(exc) not in ('database is locked', 'database table is locked')):

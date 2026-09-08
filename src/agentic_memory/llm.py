@@ -195,6 +195,8 @@ class AgentCoreBackend:
             )
             runtime["startTurn"]({"prompt": prompt})
             try:
+                from .model_usage import check_source_admission
+                check_source_admission()
                 result = await self._run_agent_prompt(
                     {
                         "session": session,

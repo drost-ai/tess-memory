@@ -8,7 +8,7 @@ import uuid
 
 from .provider_limits import process_alive
 
-KINDS = ('ingest', 'profiles', 'digests')
+KINDS = ('ingest', 'profiles', 'digests', 'detect')
 
 
 class WorkQueue:
@@ -82,12 +82,19 @@ class WorkQueue:
         try:
             with db:
                 db.execute('BEGIN IMMEDIATE')
-                active = {r[0] for r in db.execute("SELECT instance FROM jobs WHERE state='running'")}
+                detection = kind == 'detect'
+                # Metadata-only workers have independent capacity. They can
+                # observe a store while its one paid ingestion/aggregate owner
+                # runs, without authorizing a second paid owner.
+                active = {r['instance'] for r in db.execute("SELECT instance,kind FROM jobs WHERE state='running'")
+                          if (r['kind'] == 'detect') == detection}
                 if len(active) >= self.config.parallel_stores:
                     return None
                 rows = db.execute("SELECT j.*,s.enabled FROM jobs j JOIN scheduled_stores s ON s.name=j.instance WHERE j.state!='running' ORDER BY j.due,CASE j.kind WHEN 'ingest' THEN 0 WHEN 'profiles' THEN 1 ELSE 2 END,j.instance").fetchall()
                 valid_names = {s.name for s in self.config.stores}
                 for row in rows:
+                    if (row['kind'] == 'detect') != detection:
+                        continue
                     if row['instance'] not in valid_names or row['instance'] in active:
                         continue
                     if instance and row['instance'] != instance:
@@ -160,11 +167,16 @@ class WorkQueue:
                 if row is None:
                     return False
                 store = self.config.store(row['instance'])
-                interval = {'ingest': store.poll_seconds, 'profiles': store.profile_seconds, 'digests': store.digest_seconds}[row['kind']]
+                interval = {'ingest': store.poll_seconds, 'detect': store.poll_seconds,
+                            'profiles': store.profile_seconds, 'digests': store.digest_seconds}[row['kind']]
                 completed = outcome in ('success', 'partial')
                 attempts = 0 if completed else row['attempts'] + 1
                 delay = (self.config.backlog_seconds if remaining else interval) if completed else min(self.config.max_retry_seconds, self.config.retry_seconds * 2 ** min(attempts - 1, 10))
                 due = now if row['requested'] else now + delay
+                if row['kind'] == 'detect' and completed and not row['requested']:
+                    # Start-to-start cadence, coalescing a missed tick. This
+                    # clock is independent of paid job completion/backlog.
+                    due = max(now, row['started'] + interval)
                 db.execute("UPDATE jobs SET state='pending',due=?,pid=NULL,heartbeat=?,attempts=?,last_error=?,last_stats=?,last_success=CASE WHEN ? THEN ? ELSE last_success END WHERE run_id=?",
                            (due, now, attempts, error, json.dumps(stats) if stats is not None else None, completed, now, identifier))
                 db.execute('UPDATE runs SET finished=?,outcome=?,stats=?,error=? WHERE id=?',

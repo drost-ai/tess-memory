@@ -9,6 +9,7 @@ from .locks import ingestion_lock
 from .readers import CompletedSourceReader
 from .stable_distill import stable_map_prompts
 from .store import MemoryStore
+from .model_usage import source_namespace
 
 
 def warm_incremental_checkpoints(cfg, primary, fallback=None, *, session_ids=None, report=lambda _: None):
@@ -55,7 +56,7 @@ def warm_incremental_checkpoints(cfg, primary, fallback=None, *, session_ids=Non
                 seed = state.get('seed') or {}
                 units = seed.get('units', [])
                 seed_units = len(units) if snapshot.unit_keys()[:len(units)] == units else 0
-                calls = pool.session(f'incremental/{st.source_type}/{st.session_id}')
+                calls = pool.session(source_namespace(st.source_type, st.session_id))
                 checked = found = 0
                 before_promotions, before_shared = pool.cache_promotions, pool.shared_cache_hits
                 for prompt in stable_map_prompts(cfg, snapshot, seed_units=seed_units):

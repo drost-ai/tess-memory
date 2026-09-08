@@ -12,6 +12,33 @@ from agentic_memory.provider_limits import LimitedBackend, ModelBudget, Provider
 
 
 class ModelUsageTests(unittest.TestCase):
+    def test_source_receipt_audit_detects_known_call_and_bounds_store_and_time(self):
+        from agentic_memory.model_usage import source_namespace
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = ProviderGate(Path(tmp)/'gate.db')
+            with gate.connect() as db:
+                for key, instance, when in [('before', 'codex', 9), ('known', 'codex', 10),
+                                             ('after', 'codex', 20), ('other-store', 'tess', 15)]:
+                    db.execute('INSERT INTO call_receipts VALUES(?,?,?,?,?,?,?)',
+                               (key, instance, 'codex', 'model', when, when+1, 'success'))
+                    db.execute('INSERT INTO model_requests VALUES(?,?,?,?,?,?,?,?)',
+                               (key, 'run', source_namespace('codex', 'codex:one'), 'segment stable', key, 10, 0, '{}'))
+            for sid in ['one', 'codex:one']:
+                result = gate.source_receipts(instance='codex', source_type='codex', session_id=sid, since=10, until=20)
+                self.assertTrue(result['available'])
+                self.assertEqual([r['id'] for r in result['receipts']], ['known'])
+                self.assertEqual(result['namespace'], 'incremental/codex/codex:one')
+
+    def test_configured_generic_adapters_find_existing_empty_type_namespaces(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = ProviderGate(Path(tmp)/'gate.db')
+            with gate.connect() as db:
+                db.execute('INSERT INTO call_receipts VALUES(?,?,?,?,?,?,?)', ('old', 'store', 'p', 'model', 10, 11, 'success'))
+                db.execute('INSERT INTO model_requests VALUES(?,?,?,?,?,?,?,?)',
+                           ('old', 'run', 'incremental//native', 'segment stable', 'hash', 10, 0, '{}'))
+            for adapter in ['agent-core', 'claude-code', 'transcript', '']:
+                result = gate.source_receipts(instance='store', source_type=adapter, session_id='native', since=10, until=20)
+                self.assertEqual([r['id'] for r in result['receipts']], ['old'])
     def test_wire_details_survive_normalization_and_failed_attempt_usage_is_not_doubled(self):
         records = []
         usage = UsageObserver(records.append)
