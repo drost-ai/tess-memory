@@ -126,6 +126,7 @@ class Config:
     # Empty overrides preserve the selected profile's model/effort defaults.
     agent_core_model: str = ""
     agent_core_reasoning_effort: str = ""
+    agent_core_codex_auth_path: Path | None = None  # credential routing only; excluded from cache identity
     # Profile to retry with when the primary model refuses (safety classifiers).
     # Empty = no fallback; refused sessions degrade to extractive digests.
     agent_core_fallback_profile: str = ""
@@ -268,6 +269,13 @@ def load_config(path: Path | None = None) -> Config:
         cfg.agent_core_path = _path(llm["agent_core_path"])
     if "settings" in llm:
         cfg.agent_core_settings = _path(llm["settings"])
+    if 'codex_auth_path' in llm:
+        value = llm['codex_auth_path']
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError('[llm] codex_auth_path must be a nonempty absolute path')
+        cfg.agent_core_codex_auth_path = _path(value.strip())
+        if not cfg.agent_core_codex_auth_path.is_absolute():
+            raise ValueError('[llm] codex_auth_path must be absolute after expanding ~')
     cfg.agent_core_profile = llm.get("profile", cfg.agent_core_profile)
     cfg.agent_core_fallback_profile = llm.get(
         "fallback_profile", cfg.agent_core_fallback_profile

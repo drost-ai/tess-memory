@@ -191,6 +191,56 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertEqual(observer.data()['output_tokens'], 20)
         self.assertNotIn('private reasoning', json.dumps(records))
 
+    def test_codex_auth_pin_overrides_inherited_config_and_does_not_invalidate_cache(self):
+        import asyncio
+        original_identity = AgentCoreBackend(self.cfg, probe=False).cache_identity
+        self.cfg.agent_core_codex_auth_path = self.root / 'alt-auth.json'
+        loader = mock.AsyncMock(side_effect=['first-token', 'refreshed-token'])
+        normalizer = mock.AsyncMock(side_effect=lambda **kw: {'secretRef': kw['value']})
+        modules = {'agent_core.storage': types.SimpleNamespace(load_codex_auth_token=loader),
+                   'agent_core.runtime.secret_provider': types.SimpleNamespace(normalize_runtime_secret_value=normalizer)}
+        source = {'provider': 'openai', 'openaiApiMode': 'codex', 'openaiToken': 'inherited-token',
+                  'openaiCodexAuthPath': '/different/auth.json',
+                  'compactionProviderProfile': {'profile': {'kind': 'openai', 'apiMode': 'codex'}, 'openaiToken': 'old'}}
+        before = copy.deepcopy(source)
+        with mock.patch.dict(sys.modules, modules):
+            for role, expected in [('primary', 'first-token'), ('search', 'refreshed-token')]:
+                backend = AgentCoreBackend(self.cfg, probe=False) if role == 'primary' else AgentCoreBackend.for_role(self.cfg, role)
+                if role == 'primary':
+                    self.assertEqual(backend.cache_identity, original_identity)
+                result = asyncio.run(backend._apply_codex_auth_override(source))
+                self.assertEqual(result['openaiCodexAuthPath'], str(self.cfg.agent_core_codex_auth_path))
+                self.assertEqual(result['openaiToken'], {'secretRef': expected})
+                self.assertEqual(result['compactionProviderProfile']['openaiToken'], result['openaiToken'])
+            fallback = AgentCoreBackend.for_role(self.cfg, 'fallback')
+            other = {'provider': 'openai', 'openaiApiMode': 'chat_completions', 'openaiToken': 'deepseek'}
+            self.assertIs(asyncio.run(fallback._apply_codex_auth_override(other)), other)
+        self.assertEqual(loader.await_count, 2)
+        loader.assert_awaited_with(str(self.cfg.agent_core_codex_auth_path))
+        self.assertEqual(source, before)
+        self.assertEqual(self.settings.read_bytes(), self.original_settings)
+
+    def test_missing_pinned_codex_credential_never_uses_inherited_account(self):
+        import asyncio
+        self.cfg.agent_core_codex_auth_path = self.root / 'missing-auth.json'
+        loader = mock.AsyncMock(return_value=None)
+        normalizer = mock.AsyncMock()
+        with mock.patch.dict(sys.modules, {'agent_core.storage': types.SimpleNamespace(load_codex_auth_token=loader),
+                                          'agent_core.runtime.secret_provider': types.SimpleNamespace(normalize_runtime_secret_value=normalizer)}):
+            backend = AgentCoreBackend(self.cfg, probe=False)
+            with self.assertRaisesRegex(RuntimeError, 'no usable credential'):
+                asyncio.run(backend._apply_codex_auth_override({'provider': 'openai', 'openaiApiMode': 'codex', 'openaiToken': 'old'}))
+            normalizer.assert_not_awaited()
+
+    def test_codex_auth_path_loads_and_requires_an_explicit_file_path(self):
+        path = self.root / 'memory.toml'
+        path.write_text('[llm]\ncodex_auth_path="~/.codex-second/auth.json"\n')
+        self.assertEqual(load_config(path).agent_core_codex_auth_path, Path('~/.codex-second/auth.json').expanduser())
+        for value in ['"relative.json"', '""', 'true']:
+            path.write_text('[llm]\ncodex_auth_path='+value+'\n')
+            with self.assertRaises(ValueError):
+                load_config(path)
+
 
 if __name__ == "__main__":
     unittest.main()

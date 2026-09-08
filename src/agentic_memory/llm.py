@@ -52,6 +52,7 @@ class AgentCoreBackend:
                  *, model: str | None = None, reasoning_effort: str | None = None) -> None:
         self._model = model or (cfg.agent_core_model if profile is None else "")
         self._reasoning_effort = reasoning_effort or (cfg.agent_core_reasoning_effort if profile is None else "")
+        self._codex_auth_path = cfg.agent_core_codex_auth_path
         root = cfg.agent_core_path
         if not (root / "agent_core").is_dir():
             raise RuntimeError(f"agent-core-python not found at {root}")
@@ -151,6 +152,7 @@ class AgentCoreBackend:
         if self._reasoning_effort:
             options["effort"] = self._reasoning_effort
         config = await self._resolve_config(options, cwd)
+        config = await self._apply_codex_auth_override(config)
         config = self._apply_reasoning_override(config)
         from .model_usage import current_observer
         observer = current_observer()
@@ -239,6 +241,34 @@ class AgentCoreBackend:
                 f"agent-core turn failed: {result.get('error') or text[:200] or result.get('stopReason')}"
             )
         return text
+
+    async def _apply_codex_auth_override(self, config: dict) -> dict:
+        """Pin this store's Codex account without changing process-wide env.
+
+        Read on every call so ordinary credential refreshes take effect. Apply
+        after agent-core config resolution to override both CODEX_HOME defaults
+        and inherited auth-path settings; retain its native secret-reference
+        handling. Non-Codex providers keep their own credentials.
+        """
+        if not self._codex_auth_path or config.get('provider') != 'openai' or config.get('openaiApiMode') != 'codex':
+            return config
+        from agent_core.storage import load_codex_auth_token
+        from agent_core.runtime.secret_provider import normalize_runtime_secret_value
+        path = str(self._codex_auth_path)
+        token = await load_codex_auth_token(path)
+        if not token:
+            raise RuntimeError(f'Configured Codex auth file has no usable credential: {path}')
+        reference = await normalize_runtime_secret_value(
+            value=token, purpose='provider_oauth_token',
+            acceptedPurposes=('provider_api_key', 'provider_oauth_token'),
+            idempotencyScope=f'memory:{self._profile}:{path}:codex-token')
+        result = {**config, 'openaiToken': reference, 'openaiCodexAuthPath': path}
+        for key in ('compactionProviderProfile', 'compactionVerificationProviderProfile'):
+            binding = config.get(key)
+            profile = (binding or {}).get('profile') or {}
+            if profile.get('kind') == 'openai' and profile.get('apiMode') == 'codex':
+                result[key] = {**binding, 'openaiToken': reference}
+        return result
 
     def _apply_reasoning_override(self, config: dict) -> dict:
         """Preserve explicit effort on compatible Chat Completions backends.

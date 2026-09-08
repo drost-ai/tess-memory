@@ -67,12 +67,14 @@ class UsageObserver:
         self.retries = 0
         self.runtime_model = self.response_model = None
         self.requested_model = self.requested_effort = None
+        self.auth_source = None
         self.final_usage = {}
 
     def configured(self, config):
         self.observed = True
         self.requested_model = config.get('model')
         self.requested_effort = config.get('effort')
+        self.auth_source = config.get('openaiCodexAuthPath') if config.get('openaiApiMode') == 'codex' else None
         self.persist(self.data())
 
     def event(self, event, data):
@@ -117,6 +119,7 @@ class UsageObserver:
             values = [a[key] for a in known if key in a]
             totals[key] = sum(values) if values else self.final_usage.get(key)
         return {**totals, 'requested_model': self.requested_model, 'requested_effort': self.requested_effort,
+                'auth_source': self.auth_source,
                 'runtime_model': self.runtime_model, 'response_model': self.response_model,
                 'wire_attempts': len(self.attempts) if self.observed else None,
                 'transport_retries': self.retries if self.observed else None,
