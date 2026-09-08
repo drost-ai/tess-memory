@@ -230,6 +230,38 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual(result.preserved, 1)
         self.assertEqual(before, self.paid_rows())
 
+    def incompatible_tracking(self):
+        progress = self.store.source_progress(str(self.path))
+        state = json.loads(progress['state'])
+        state['indexed_units'] = ['obsolete-boundary'] * 4
+        state['seed'] = {'units': state['indexed_units'], 'digest': {'summary': 'stale seed'}}
+        self.store.db.execute("UPDATE ingest_sources SET state=?,status='budget_pending' WHERE path=?",
+                              (json.dumps(state), str(self.path)))
+        self.store.commit()
+
+    def test_incompatible_tracking_readopts_verified_paid_content_without_calls(self):
+        self.run_ingest()
+        before = self.paid_rows()
+        counts = len(self.backend.calls), len(self.embedder.calls)
+        self.incompatible_tracking()
+        result = self.run_ingest()
+        self.assertEqual((result.unchanged, result.model_calls, result.embedded_passages), (1, 0, 0))
+        self.assertEqual(before, self.paid_rows())
+        self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
+        state = json.loads(self.store.source_progress(str(self.path))['state'])
+        self.assertEqual(state['seed']['units'], state['indexed_units'])
+        self.add_unit()
+        self.assertEqual(self.run_ingest().model_calls, 2)  # new unit plus merge
+
+    def test_incompatible_tracking_does_not_adopt_changed_content_or_model_policy(self):
+        self.run_ingest()
+        self.incompatible_tracking()
+        write_rollout(self.home, items=[message('user', 'Changed task ' * 20), message('assistant', 'Changed solution ' * 20)])
+        self.assertGreater(self.run_ingest().model_calls, 0)
+        self.incompatible_tracking()
+        self.backend.cache_identity = 'explicitly-changed-model'
+        self.assertGreater(self.run_ingest().model_calls, 0)
+
     def test_budget_deferred_run_resumes_without_repaying_for_completed_map(self):
         self.cfg.max_model_calls_per_run = 1
         first = self.run_ingest()

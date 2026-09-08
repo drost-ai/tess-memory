@@ -277,8 +277,18 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             adopt(ds, path, project, signature, state, st, old, snapshot.pending_tail, known_status)
                             stats.unchanged += 1
                             continue
-                        seed = state.get('seed') if state.get('policy') == policy else None
-                        if seed is None and not state.get('indexed_units') and not retry_extractive:
+                        same_policy = state.get('policy') == policy
+                        seed = state.get('seed') if same_policy else None
+                        indexed = state.get('indexed_units') or []
+                        tracking_matches = keys[:len(indexed)] == indexed
+                        seed_matches = not seed or keys[:len(seed['units'])] == seed['units']
+                        # A previous reader may have used different completed
+                        # boundaries for identical content. Re-verify the paid
+                        # prefix before discarding that seed and redistilling.
+                        # Explicit model/prompt policy changes still invalidate
+                        # tracked work, and ordinary appends retain map caches.
+                        if (not retry_extractive and
+                                (not indexed or (same_policy and (not tracking_matches or not seed_matches)))):
                             seed = _bootstrap(snapshot, old, previous, cfg)
                             if seed:
                                 seed['status'] = known_status
