@@ -8,6 +8,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from agentic_memory.provider_limits import ProviderGate, LimitedBackend, ModelBudget
 from agentic_memory.distill import CallBudgetExceeded
@@ -109,6 +110,40 @@ with ProviderGate(Path(sys.argv[1]),model_limit=1).acquire('p','model',owner='cr
             b.complete(system='s', prompt='p')
         self.assertEqual(budget.calls, 2)
         self.assertFalse(gate.status()['active'])
+
+    def test_deadline_drains_active_call_and_removes_waiter_without_new_call(self):
+        started, release = threading.Event(), threading.Event()
+        class Backend:
+            name = 'stub'
+            def complete(self, **kwargs):
+                started.set()
+                self_test.assertTrue(release.wait(3))
+                return 'paid output'
+        self_test = self
+        gate = ProviderGate(self.path, model_limit=1, poll_seconds=0.005)
+        budget = ModelBudget(100)
+        backend = LimitedBackend(Backend(), gate, budget, provider='p', owner='o', instance='i')
+        with ThreadPoolExecutor(2) as pool:
+            active = pool.submit(backend.complete, system='s', prompt='first')
+            self.assertTrue(started.wait(2))
+            waiting = pool.submit(backend.complete, system='s', prompt='second')
+            budget.draining.set()
+            with self.assertRaises(CallBudgetExceeded):
+                waiting.result(timeout=2)
+            self.assertFalse(active.done())
+            release.set()
+            self.assertEqual(active.result(timeout=2), 'paid output')
+        self.assertEqual(budget.calls, 1)
+        self.assertFalse(gate.status()['waiting'])
+        self.assertEqual(gate.status()['completed'][0]['calls'], 1)
+
+    def test_monotonic_deadline_stops_admission(self):
+        with mock.patch('agentic_memory.provider_limits.time.monotonic', return_value=11):
+            budget = ModelBudget(128, deadline=10)
+            with self.assertRaises(CallBudgetExceeded):
+                budget.take()
+        self.assertEqual(budget.calls, 0)
+        self.assertTrue(budget.draining.is_set())
 
 
 if __name__ == '__main__':

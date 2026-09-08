@@ -35,6 +35,7 @@ class ServiceConfig:
     retry_seconds: float = 30
     max_retry_seconds: float = 1800
     job_timeout_seconds: float = 3600
+    job_drain_seconds: float = 900
 
     @property
     def db_path(self):
@@ -96,7 +97,7 @@ def load_service(path: Path) -> ServiceConfig:
         value = getattr(result, key)
         if isinstance(value, bool) or not isinstance(value, int) or value < 1:
             raise ValueError(f'{key} must be a positive integer')
-    for key in ('backlog_seconds', 'retry_seconds', 'max_retry_seconds', 'job_timeout_seconds'):
+    for key in ('backlog_seconds', 'retry_seconds', 'max_retry_seconds', 'job_timeout_seconds', 'job_drain_seconds'):
         value = getattr(result, key)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float('inf'):
             raise ValueError(f'{key} must be positive and finite')

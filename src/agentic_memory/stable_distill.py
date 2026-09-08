@@ -62,19 +62,15 @@ def stable_map_prompts(cfg, snapshot, *, seed_units: int = 0):
         start = end
 
 
-def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units: int = 0):
-    st = snapshot.transcript
-    pieces = list(stable_map_prompts(cfg, snapshot, seed_units=seed_units))
-    if not pieces and seed:
-        return _digest_from(seed, cfg.min_importance)
+def _ordered_requests(pieces, submit, workers):
+    """Bound queued work, retain source order, and drain successful siblings."""
     results = [None] * len(pieces)
     pending = {}
     next_index = 0
-    workers = max(1, min(cfg.segment_workers, cfg.llm_workers))
     try:
         while next_index < len(pieces) or pending:
             while next_index < len(pieces) and len(pending) < workers:
-                pending[calls.submit(SESSION_SYSTEM, pieces[next_index], "segment stable")] = next_index
+                pending[submit(pieces[next_index])] = next_index
                 next_index += 1
             done, _ = wait(pending, return_when=FIRST_COMPLETED)
             for future in done:
@@ -83,6 +79,16 @@ def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units:
         for future in pending:
             future.cancel()
         wait(pending)
+    return results
+
+
+def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units: int = 0):
+    st = snapshot.transcript
+    pieces = list(stable_map_prompts(cfg, snapshot, seed_units=seed_units))
+    if not pieces and seed:
+        return _digest_from(seed, cfg.min_importance)
+    workers = max(1, min(cfg.segment_workers, cfg.llm_workers))
+    results = _ordered_requests(pieces, lambda prompt: calls.submit(SESSION_SYSTEM, prompt, 'segment stable'), workers)
     nodes = ([seed] if seed else []) + results
     if not nodes:
         raise ValueError("no eligible message units to distill")
@@ -98,12 +104,13 @@ def stable_digest(cfg, snapshot, calls, *, seed: dict | None = None, seed_units:
                 candidates.append(item)
         prompt = REDUCE_PROMPT.format(project=st.project, date=(st.started_at or "")[:10], total=len(group),
                                        summaries="\n".join(summaries), candidates=json.dumps(candidates, ensure_ascii=False))
-        return calls.submit(SESSION_SYSTEM, prompt, "reduce").result()
+        return calls.submit(SESSION_SYSTEM, prompt, "reduce")
 
     # Complete groups have stable membership; only the rightmost partial
     # branch changes when new units arrive. All reduction inputs are bounded.
     while len(nodes) > cfg.incremental_reduce_fanout:
-        nodes = [reduce(nodes[i:i + cfg.incremental_reduce_fanout])
-                 for i in range(0, len(nodes), cfg.incremental_reduce_fanout)]
-    result = reduce(nodes)
+        groups = [nodes[i:i + cfg.incremental_reduce_fanout]
+                  for i in range(0, len(nodes), cfg.incremental_reduce_fanout)]
+        nodes = _ordered_requests(groups, reduce, workers)
+    result = reduce(nodes).result()
     return _digest_from(result, cfg.min_importance)

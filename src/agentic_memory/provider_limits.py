@@ -123,7 +123,7 @@ class ProviderGate:
             db.close()
 
     @contextmanager
-    def acquire(self, provider: str, kind: str, *, owner: str, instance: str):
+    def acquire(self, provider: str, kind: str, *, owner: str, instance: str, check_admission=None):
         if kind not in self.limits:
             raise ValueError('unknown provider operation kind')
         self.reap_dead()
@@ -135,6 +135,8 @@ class ProviderGate:
                            (identifier, owner, os.getpid(), instance, provider, kind, time.time()))
             last_reap = time.monotonic()
             while True:
+                if check_admission:
+                    check_admission()
                 if time.monotonic() - last_reap >= 1:
                     self.reap_dead()
                     last_reap = time.monotonic()
@@ -211,13 +213,22 @@ class ProviderGate:
 
 
 class ModelBudget:
-    def __init__(self, maximum: int):
+    def __init__(self, maximum: int, *, deadline: float | None = None):
         self.maximum, self.calls = maximum, 0
+        self.deadline = deadline
+        self.draining = threading.Event()
         self.lock = threading.Lock()
+
+    def check(self):
+        if self.draining.is_set() or (self.deadline is not None and time.monotonic() >= self.deadline):
+            self.draining.set()
+            raise CallBudgetExceeded('worker deadline reached; draining active requests into checkpoints')
+        if self.maximum and self.calls >= self.maximum:
+            raise CallBudgetExceeded('worker model-call budget reached')
+
     def take(self):
         with self.lock:
-            if self.maximum and self.calls >= self.maximum:
-                raise CallBudgetExceeded('worker model-call budget reached')
+            self.check()
             self.calls += 1
 
 
@@ -230,9 +241,11 @@ class LimitedBackend:
     def complete(self, **kwargs):
         verify = getattr(self.backend, 'verify_profile', lambda: None)
         verify()
-        self.budget.take()
-        with self.gate.acquire(self.provider, 'model', owner=self.owner, instance=self.instance):
+        self.budget.check()
+        with self.gate.acquire(self.provider, 'model', owner=self.owner, instance=self.instance,
+                               check_admission=self.budget.check):
             verify()
+            self.budget.take()
             result = self.backend.complete(**kwargs)
             verify()
             return result

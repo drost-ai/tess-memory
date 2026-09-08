@@ -82,6 +82,17 @@ def worker(config_path: Path, run_id: str) -> int:
     scheduled = config.store(run['instance'])
     queue.start(run_id, os.getpid())
     gate = _gate(config)
+    maximum = scheduled.model_calls_per_run if run['kind'] == 'ingest' else scheduled.aggregate_calls_per_run
+    # Stop admission before the supervisor's soft deadline. A request already
+    # running can finish and checkpoint; neither a model-budget boundary nor
+    # SIGTERM should throw away its paid output.
+    reserve = min(60, config.job_timeout_seconds / 10)
+    remaining_time = run['started'] + config.job_timeout_seconds - reserve - time.time()
+    budget = ModelBudget(maximum, deadline=time.monotonic() + max(0, remaining_time))
+    old_signals = {}
+    if threading.current_thread() is threading.main_thread():
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            old_signals[sig] = signal.signal(sig, lambda *_: budget.draining.set())
     stop = threading.Event()
     def beat():
         while not stop.wait(5):
@@ -103,7 +114,6 @@ def worker(config_path: Path, run_id: str) -> int:
             from .codex import load_dedicated_config
             cfg = load_dedicated_config(scheduled.settings)
         workers = scheduled.workers or cfg.llm_workers
-        maximum = scheduled.model_calls_per_run if run['kind'] == 'ingest' else scheduled.aggregate_calls_per_run
         held = []
         if scheduled.hold_text_file:
             held = json.loads(scheduled.hold_text_file.read_text())
@@ -121,7 +131,6 @@ def worker(config_path: Path, run_id: str) -> int:
         if isinstance(embedder, OpenAICompatEmbedder):
             key = provider_key(cfg, cfg.embed_provider)
             embedder.request_guard = lambda: gate.acquire(key, 'embedding', owner=run_id, instance=scheduled.name)
-        budget = ModelBudget(maximum)
         primary = AgentCoreBackend(cfg, probe=False)
         llm = LimitedBackend(primary, gate, budget, provider=provider_key(cfg, cfg.agent_core_profile), owner=run_id, instance=scheduled.name)
         fallback = None
@@ -137,6 +146,7 @@ def worker(config_path: Path, run_id: str) -> int:
                        aggregates_only=run['kind'] != 'ingest', aggregate_levels=levels)
         result = asdict(stats)
         result['model_calls'] = budget.calls
+        result['deadline_drained'] = budget.draining.is_set()
         result['held_sources'] = store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status='held'").fetchone()[0]
         result['failed_sources'] = store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status='error'").fetchone()[0]
         if run['kind'] == 'ingest':
@@ -161,6 +171,8 @@ def worker(config_path: Path, run_id: str) -> int:
         gate.release_owner(run_id)
         if store:
             store.close()
+        for sig, handler in old_signals.items():
+            signal.signal(sig, handler)
 
 
 def _worker_environment():
@@ -270,7 +282,7 @@ def serve(config_path: Path, *, stop_event=None):
                             queue.finish(job['run_id'], outcome='worker_lost', error='recorded worker ownership is no longer valid')
                             gate.release_owner(job['run_id'])
                         elif time.time() - job['started'] > config.job_timeout_seconds:
-                            stop_run(config, job['run_id'], force=time.time() - job['started'] > config.job_timeout_seconds + 30)
+                            stop_run(config, job['run_id'], force=time.time() - job['started'] > config.job_timeout_seconds + config.job_drain_seconds)
                 for instance in config.stores:
                     try:
                         current = instance.settings.stat().st_mtime_ns
