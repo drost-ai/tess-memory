@@ -239,8 +239,10 @@ class ProviderGate:
             groups, hashes = {}, {}
             for row in rows:
                 details = json.loads(row['details'] or '{}')
-                key = row['instance'], row['provider'], row['phase'] or 'unattributed', details.get('requested_model')
+                key = (row['instance'], row['provider'], row['phase'] or 'unattributed',
+                       details.get('requested_model'), details.get('auth_source'))
                 group = groups.setdefault(key, {'instance': key[0], 'provider': key[1], 'phase': key[2], 'model': key[3],
+                                                 'auth_source': key[4],
                                                  'calls': 0, 'attributed_calls': 0, 'calls_with_usage': 0,
                                                  'outcomes': {},
                                                  'calls_with_complete_usage': 0, 'wire_attempts_observed': 0,

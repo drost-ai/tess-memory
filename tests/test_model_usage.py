@@ -81,6 +81,20 @@ class ModelUsageTests(unittest.TestCase):
             self.assertEqual((group['calls'], group['attributed_calls'], group['calls_with_usage']), (1, 0, 0))
             self.assertIsNone(group['input_tokens'])
 
+    def test_usage_groups_distinguish_auth_files_without_storing_credentials(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            gate = ProviderGate(Path(tmp)/'gate.db')
+            with gate.connect() as db:
+                for index, path in enumerate(['/codex/auth.json', '/alt/auth.json']):
+                    key = str(index)
+                    db.execute('INSERT INTO call_receipts VALUES(?,?,?,?,?,?,?)', (key, 'codex', 'codex', 'model', 1, 2, 'success'))
+                    db.execute('INSERT INTO model_requests VALUES(?,?,?,?,?,?,?,?)',
+                               (key, 'run', 'session', 'profile', key, 10, 0,
+                                json.dumps({'requested_model': 'm', 'auth_source': path, 'input_tokens': 10})))
+            groups = gate.usage()['groups']
+            self.assertEqual(len(groups), 2)
+            self.assertEqual({g['auth_source'] for g in groups}, {'/codex/auth.json', '/alt/auth.json'})
+
     def test_accounting_failure_does_not_reissue_or_discard_provider_result(self):
         class Backend:
             name = 'fake'
