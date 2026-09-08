@@ -242,11 +242,13 @@ class ProviderGate:
                 key = row['instance'], row['provider'], row['phase'] or 'unattributed', details.get('requested_model')
                 group = groups.setdefault(key, {'instance': key[0], 'provider': key[1], 'phase': key[2], 'model': key[3],
                                                  'calls': 0, 'attributed_calls': 0, 'calls_with_usage': 0,
+                                                 'outcomes': {},
                                                  'calls_with_complete_usage': 0, 'wire_attempts_observed': 0,
                                                  'transport_retries_observed': 0, 'json_retries': 0,
                                                  'input_tokens': None, 'output_tokens': None, 'reasoning_tokens': None,
                                                  'cache_read_tokens': None, 'cache_write_tokens': None})
                 group['calls'] += 1
+                group['outcomes'][row['outcome']] = group['outcomes'].get(row['outcome'], 0) + 1
                 group['attributed_calls'] += int(row['call_id'] is not None)
                 group['calls_with_usage'] += int(details.get('input_tokens') is not None or details.get('output_tokens') is not None)
                 group['calls_with_complete_usage'] += int(bool(details.get('usage_complete')))

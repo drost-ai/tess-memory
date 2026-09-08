@@ -216,6 +216,62 @@ class WorkerOwnershipTests(unittest.TestCase):
 
 
 class SchedulerWorkerTests(unittest.TestCase):
+    def test_sigterm_drains_paid_completion_before_worker_exits(self):
+        import signal
+        from test_codex import write_rollout
+        from agentic_memory.scheduler_config import load_service
+        from agentic_memory.scheduler_queue import WorkQueue
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            source = root / 'source'
+            write_rollout(source)
+            providers = root / 'providers.json'
+            providers.write_text(json.dumps({'providerProfiles': {'codex': {'kind': 'openai', 'apiMode': 'codex'}}}))
+            settings = root / 'settings.toml'
+            settings.write_text(f'[[data_stores]]\nname="codex"\ntype="codex"\npath="{source}"\n'
+                                f'[storage]\ndata_dir="{root / "memory"}"\n'
+                                f'[llm]\nprofile="codex"\nsettings="{providers}"\n'
+                                '[embedding]\nprovider="local"\n')
+            config = root / 'service.toml'
+            config.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="codex"\nsettings="{settings}"\n')
+            queue = WorkQueue(load_service(config))
+            run = queue.claim(instance='codex', kind='ingest', explicit=True)
+            marker = root / 'active'
+            code = '''import json,time,sys
+from pathlib import Path
+from unittest import mock
+from agentic_memory.scheduler import worker
+class Model:
+ name='offline'
+ def complete(self,**kwargs):
+  Path(sys.argv[3]).write_text('active')
+  time.sleep(0.5)
+  return '{"summary":"Paid result survives SIGTERM","memories":[]}'
+class Embedding:
+ descriptor='offline'
+ def embed_passages(self,*args):raise AssertionError('no final session before reduction')
+with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()), mock.patch('agentic_memory.scheduler.make_embedder',return_value=Embedding()):
+ sys.exit(worker(Path(sys.argv[1]),sys.argv[2]))
+'''
+            process = subprocess.Popen([sys.executable, '-c', code, str(config), run['id'], str(marker)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            try:
+                import time
+                until = time.monotonic() + 5
+                while not marker.exists() and process.poll() is None and time.monotonic() < until:
+                    time.sleep(0.01)
+                self.assertTrue(marker.exists())
+                process.send_signal(signal.SIGTERM)
+                output, error = process.communicate(timeout=5)
+                self.assertEqual(process.returncode, 0, error.decode())
+                row = queue.get_run(run['id'])
+                stats = json.loads(row['stats'])
+                self.assertEqual((stats['model_calls'], stats['checkpointed_requests'], stats['budget_deferred']), (1, 1, 1))
+                self.assertTrue(stats['deadline_drained'])
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait()
+
     def test_real_cli_worker_process_completes_empty_poll_without_provider_calls(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
