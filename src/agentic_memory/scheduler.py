@@ -140,13 +140,21 @@ def worker(config_path: Path, run_id: str) -> int:
         levels = None if run['kind'] == 'ingest' else ('project',) if run['kind'] == 'profiles' else ('digest',)
         if levels:
             store.bootstrap_aggregate_tracking(levels)
-        stats = ingest(cfg, store, embedder, llm, fallback,
-                       limit=scheduled.sources_per_run if run['kind'] == 'ingest' else None,
-                       refresh_aggregates=False if run['kind'] == 'ingest' else True,
-                       aggregates_only=run['kind'] != 'ingest', aggregate_levels=levels)
+        from .model_usage import request_metadata
+        with request_metadata(phase=run['kind']):
+            stats = ingest(cfg, store, embedder, llm, fallback,
+                           limit=scheduled.sources_per_run if run['kind'] == 'ingest' else None,
+                           refresh_aggregates=False if run['kind'] == 'ingest' else True,
+                           aggregates_only=run['kind'] != 'ingest', aggregate_levels=levels)
         result = asdict(stats)
         result['model_calls'] = budget.calls
         result['deadline_drained'] = budget.draining.is_set()
+        usage = gate.usage(run_id=run_id)
+        result['usage'] = usage
+        result['usage_recording_errors'] = budget.telemetry_errors
+        for name in ('input_tokens', 'output_tokens'):
+            values = [g[name] for g in usage.get('groups', []) if g[name] is not None]
+            result[name] = sum(values) if values else None
         result['held_sources'] = store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status='held'").fetchone()[0]
         result['failed_sources'] = store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status='error'").fetchone()[0]
         if run['kind'] == 'ingest':

@@ -11,6 +11,7 @@ import threading
 import time
 from urllib.parse import urlparse
 import uuid
+import sys
 
 from .distill import CallBudgetExceeded
 
@@ -76,6 +77,13 @@ class ProviderGate:
                 CREATE TABLE IF NOT EXISTS call_receipts (
                     id TEXT PRIMARY KEY, instance TEXT NOT NULL, provider TEXT NOT NULL,
                     kind TEXT NOT NULL, started REAL NOT NULL, ended REAL, outcome TEXT);
+                CREATE TABLE IF NOT EXISTS model_requests (
+                    call_id TEXT PRIMARY KEY, run_id TEXT NOT NULL,
+                    namespace TEXT NOT NULL, phase TEXT NOT NULL, request_hash TEXT NOT NULL,
+                    input_chars INTEGER NOT NULL, json_retry INTEGER NOT NULL,
+                    details TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS model_requests_run ON model_requests(run_id);
+                CREATE INDEX IF NOT EXISTS model_requests_hash ON model_requests(request_hash);
             ''')
             db.commit()
         finally:
@@ -181,7 +189,7 @@ class ProviderGate:
             thread.start()
             outcome = 'success'
             try:
-                yield
+                yield identifier
             except BaseException as exc:
                 outcome = type(exc).__name__
                 if re.search(r'rate[ _-]?limit|\b429\b', str(exc), re.I):
@@ -211,12 +219,59 @@ class ProviderGate:
         finally:
             db.close()
 
+    def usage(self, *, since=0, until=None, instance=None, run_id=None):
+        """Observed usage only; include explicit coverage gaps and retry counts."""
+        until = time.time() if until is None else until
+        db = self.connect()
+        try:
+            params = [since, until]
+            where = "r.kind='model' AND r.started>=? AND r.started<?"
+            if instance:
+                where += ' AND r.instance=?'
+                params.append(instance)
+            if run_id:
+                where += ' AND m.run_id=?'
+                params.append(run_id)
+            if not db.execute("SELECT 1 FROM sqlite_master WHERE name='model_requests'").fetchone():
+                return {'available': False, 'reason': 'usage receipts have not been installed'}
+            rows = db.execute('SELECT r.instance,r.provider,r.outcome,m.* FROM call_receipts r '
+                              'LEFT JOIN model_requests m ON m.call_id=r.id WHERE ' + where, params).fetchall()
+            groups, hashes = {}, {}
+            for row in rows:
+                details = json.loads(row['details'] or '{}')
+                key = row['instance'], row['provider'], row['phase'] or 'unattributed', details.get('requested_model')
+                group = groups.setdefault(key, {'instance': key[0], 'provider': key[1], 'phase': key[2], 'model': key[3],
+                                                 'calls': 0, 'attributed_calls': 0, 'calls_with_usage': 0,
+                                                 'calls_with_complete_usage': 0, 'wire_attempts_observed': 0,
+                                                 'transport_retries_observed': 0, 'json_retries': 0,
+                                                 'input_tokens': None, 'output_tokens': None, 'reasoning_tokens': None,
+                                                 'cache_read_tokens': None, 'cache_write_tokens': None})
+                group['calls'] += 1
+                group['attributed_calls'] += int(row['call_id'] is not None)
+                group['calls_with_usage'] += int(details.get('input_tokens') is not None or details.get('output_tokens') is not None)
+                group['calls_with_complete_usage'] += int(bool(details.get('usage_complete')))
+                group['wire_attempts_observed'] += details.get('wire_attempts') or 0
+                group['transport_retries_observed'] += details.get('transport_retries') or 0
+                group['json_retries'] += row['json_retry'] or 0
+                for field in ('input_tokens', 'output_tokens', 'reasoning_tokens', 'cache_read_tokens', 'cache_write_tokens'):
+                    if details.get(field) is not None:
+                        group[field] = (group[field] or 0) + details[field]
+                if row['outcome'] == 'success' and row['request_hash']:
+                    h = row['instance'], row['request_hash']
+                    hashes[h] = hashes.get(h, 0) + 1
+            return {'available': True, 'since': since, 'until': until, 'groups': list(groups.values()),
+                    'repeated_successful_request_hashes': sum(n - 1 for n in hashes.values()),
+                    'note': 'Observed provider usage, not Pro allowance or billed cost. Missing/failed-attempt usage remains unknown; reasoning and cached input are subsets, not additional totals. Repeated successes can include invalid output or publication recovery.'}
+        finally:
+            db.close()
+
 
 class ModelBudget:
     def __init__(self, maximum: int, *, deadline: float | None = None):
         self.maximum, self.calls = maximum, 0
         self.deadline = deadline
         self.draining = threading.Event()
+        self.telemetry_errors = 0
         self.lock = threading.Lock()
 
     def check(self):
@@ -243,9 +298,34 @@ class LimitedBackend:
         verify()
         self.budget.check()
         with self.gate.acquire(self.provider, 'model', owner=self.owner, instance=self.instance,
-                               check_admission=self.budget.check):
+                               check_admission=self.budget.check) as call_id:
             verify()
             self.budget.take()
-            result = self.backend.complete(**kwargs)
+            from .checkpoints import DistillationCheckpoints
+            from .model_usage import UsageObserver, current_metadata, observe_usage
+            metadata = current_metadata()
+            request_hash = DistillationCheckpoints.shared_key(self.cache_identity, kwargs['system'], kwargs['prompt'])
+            def persist(details):
+                db = None
+                try:
+                    db = self.gate.connect()
+                    with db:
+                        db.execute('INSERT OR REPLACE INTO model_requests VALUES(?,?,?,?,?,?,?,?)',
+                                   (call_id, self.owner, metadata.get('namespace', ''), metadata.get('phase', 'unknown'),
+                                    request_hash, len(kwargs['system']) + len(kwargs['prompt']), metadata.get('json_retry', 0),
+                                    json.dumps(details)))
+                except sqlite3.Error as exc:
+                    # Accounting failure must never discard a paid completion
+                    # or trigger another provider call to recover its answer.
+                    with self.budget.lock:
+                        self.budget.telemetry_errors += 1
+                    print(f'[usage] receipt update failed: {type(exc).__name__}', file=sys.stderr, flush=True)
+                finally:
+                    if db:
+                        db.close()
+            observer = UsageObserver(persist)
+            persist(observer.data())
+            with observe_usage(observer):
+                result = self.backend.complete(**kwargs)
             verify()
             return result

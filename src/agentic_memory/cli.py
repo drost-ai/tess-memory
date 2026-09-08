@@ -266,6 +266,20 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
     if args.action == 'run':
         return run_once(path, args.instance, args.kind)
     config = load_service(path)
+    if args.action == 'usage':
+        from datetime import datetime, timezone
+        from .scheduler import _gate
+        def timestamp(value):
+            parsed = datetime.fromisoformat(value.replace('Z', '+00:00'))
+            if parsed.tzinfo is None:
+                raise ValueError('usage timestamps must include a timezone, e.g. 2026-09-08T00:00:00Z')
+            return parsed.timestamp()
+        since = timestamp(args.since) if args.since else datetime.now(timezone.utc).timestamp() - 86400
+        until = timestamp(args.until) if args.until else None
+        if until is not None and until <= since:
+            raise ValueError('usage --until must be later than --since')
+        print(json.dumps(_gate(config, readonly=True).usage(since=since, until=until, instance=args.instance), indent=2))
+        return 0
     if args.action == 'status':
         print(json.dumps(service_status(config), indent=2))
         return 0
@@ -427,6 +441,11 @@ def main(argv: list[str] | None = None) -> int:
     commands = p.add_subparsers(dest='action', required=True)
     for action in ('serve', 'status'):
         commands.add_parser(action).set_defaults(fn=cmd_scheduler)
+    command = commands.add_parser('usage', help='Observed model tokens, retries and accounting coverage')
+    command.add_argument('--instance')
+    command.add_argument('--since', help='ISO timestamp with timezone; defaults to 24 hours ago')
+    command.add_argument('--until', help='ISO timestamp with timezone; defaults to now')
+    command.set_defaults(fn=cmd_scheduler)
     for action in ('install', 'start', 'stop', 'restart'):
         command = commands.add_parser(action)
         command.add_argument('--label', default='com.agentic-memory.scheduler')

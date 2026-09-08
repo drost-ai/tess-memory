@@ -518,7 +518,9 @@ def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval
                 cwd = next((s["cwd"] for s in sessions if s["cwd"]), "")
 
                 def generate(backend):
-                    return distill_profile(backend, scope, cwd, lines)
+                    from .model_usage import request_metadata
+                    with request_metadata(phase='profile', namespace=scope):
+                        return distill_profile(backend, scope, cwd, lines)
             else:
                 end = (datetime.fromisoformat(scope) + timedelta(days=7)).isoformat()
                 sessions = [s for s in store.sessions_since(scope) if (s["ended_at"] or "") < end]
@@ -528,7 +530,9 @@ def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval
                 ]
 
                 def generate(backend):
-                    return distill_week(backend, scope, lines)
+                    from .model_usage import request_metadata
+                    with request_metadata(phase='digest', namespace=scope):
+                        return distill_week(backend, scope, lines)
 
             rows = []
             if sessions:

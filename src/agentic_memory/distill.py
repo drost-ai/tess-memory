@@ -322,7 +322,7 @@ class DistillationPool:
         self.active_calls = 0
         self.peak_calls = 0
 
-    def complete(self, backend, *, system, prompt):
+    def complete(self, backend, *, system, prompt, namespace='', phase='', json_retry=0):
         with self._lock:
             if self.max_calls and self.calls >= self.max_calls:
                 raise CallBudgetExceeded("model-call budget reached; validated checkpoints remain available")
@@ -332,7 +332,9 @@ class DistillationPool:
         try:
             verify = getattr(backend, 'verify_profile', lambda: None)
             verify()
-            result = backend.complete(system=system, prompt=prompt)
+            from .model_usage import request_metadata
+            with request_metadata(namespace=namespace, phase=phase, json_retry=json_retry):
+                result = backend.complete(system=system, prompt=prompt)
             verify()
             return result
         finally:
@@ -468,8 +470,13 @@ class SessionCalls:
             pool.log(f"[distill] {self.namespace}: {phase} started ({backend.name})")
             class CountedBackend:
                 name = backend.name
+                attempts = 0
                 def complete(self, *, system, prompt):
-                    return pool.complete(backend, system=system, prompt=prompt)
+                    retry = self.attempts
+                    self.attempts += 1
+                    return pool.complete(backend, system=system, prompt=prompt,
+                                         namespace=namespace, phase=phase, json_retry=retry)
+            namespace = self.namespace
             try:
                 data = _call_json(CountedBackend(), system, prompt)
                 self._validate(data, phase)

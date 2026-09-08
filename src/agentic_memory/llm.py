@@ -152,16 +152,28 @@ class AgentCoreBackend:
             options["effort"] = self._reasoning_effort
         config = await self._resolve_config(options, cwd)
         config = self._apply_reasoning_override(config)
+        from .model_usage import current_observer
+        observer = current_observer()
+        if observer:
+            observer.configured(config)
         session = await self._resolve_session({}, config, {"cwd": cwd, "originalCwd": cwd})
         runtime = await self._bootstrap_runtime(
             {"session": session, "config": config, "cwd": cwd}
         )
         try:
             daemon = runtime.get("daemon")
+            def emit(event, data):
+                if observer:
+                    observer.event(event, data)
+                # Raw stream events are enabled only for usage extraction.
+                # Never forward their private content to runtime logs.
+                if event != 'provider.stream_event':
+                    runtime['emitEvent'](event, data)
             bindings = self._create_bindings(
                 {
                     "tools": runtime["tools"],
-                    "emitEvent": runtime["emitEvent"],
+                    "emitEvent": emit,
+                    "streamProviderMessages": bool(observer and config.get('provider') == 'openai'),
                     "daemon": {"state": "connected", "client": daemon}
                     if self._is_gateway(daemon)
                     else {
@@ -208,6 +220,10 @@ class AgentCoreBackend:
         import asyncio
 
         result = asyncio.run(self._run_turn(system=system, prompt=prompt))
+        from .model_usage import current_observer
+        observer = current_observer()
+        if observer:
+            observer.finish(result)
         text = result.get("text") or ""
         if result.get("stopReason") == "refusal":
             raise RefusalError(

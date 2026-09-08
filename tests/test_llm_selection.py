@@ -171,6 +171,26 @@ class ModelSelectionTests(unittest.TestCase):
         self.cfg.agent_core_model = 'different-explicit-model'
         self.assertNotEqual(AgentCoreBackend(self.cfg, probe=False).cache_identity, original)
 
+    def test_usage_observer_extracts_wire_counters_without_forwarding_raw_events(self):
+        from agentic_memory.model_usage import UsageObserver, observe_usage
+        backend = AgentCoreBackend(self.cfg, probe=False)
+        records = []
+        observer = UsageObserver(records.append)
+        async def turn(args):
+            runtime = args['runtime']
+            self.assertTrue(runtime['streamProviderMessages'])
+            runtime['emitEvent']('provider.request_started', {})
+            runtime['emitEvent']('provider.stream_event', {'stream_event': 'response.completed', 'payload': {'response': {
+                'model': 'gpt-5.6-terra', 'output': 'private reasoning',
+                'usage': {'input_tokens': 10, 'output_tokens': 20, 'output_tokens_details': {'reasoning_tokens': 15}}}}})
+            return {'text': 'OK', 'model': 'gpt-5.6-terra', 'usage': {'input_tokens': 10, 'output_tokens': 20}}
+        backend._run_agent_prompt = turn
+        with observe_usage(observer):
+            self.assertEqual(backend.complete(system='s', prompt='p'), 'OK')
+        self.assertEqual(observer.data()['reasoning_tokens'], 15)
+        self.assertEqual(observer.data()['output_tokens'], 20)
+        self.assertNotIn('private reasoning', json.dumps(records))
+
 
 if __name__ == "__main__":
     unittest.main()
