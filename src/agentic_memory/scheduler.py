@@ -62,6 +62,17 @@ def service_status(config):
     return result
 
 
+def run_outcome(stats, model_calls, kind):
+    if not stats.errors:
+        return 'success'
+    # Retained map/reduction results are progress even before a large session
+    # can publish. An unrelated malformed source must not turn that into a
+    # total worker failure and exponentially postpone all remaining sources.
+    if kind == 'ingest' and model_calls and not stats.distilled and not getattr(stats, 'checkpointed_requests', 0):
+        return 'error'
+    return 'partial'
+
+
 def worker(config_path: Path, run_id: str) -> int:
     config = load_service(config_path)
     queue = WorkQueue(config)
@@ -132,9 +143,7 @@ def worker(config_path: Path, run_id: str) -> int:
             remaining = stats.sources_remaining + store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status IN ('pending_work','budget_pending','source_changed','processing')").fetchone()[0]
         else:
             remaining = sum(r['level'] in levels for r in store.pending_aggregates(float('inf')))
-        outcome = 'partial' if stats.errors else 'success'
-        if stats.errors and budget.calls and not stats.distilled and run['kind'] == 'ingest':
-            outcome = 'error'
+        outcome = run_outcome(stats, budget.calls, run['kind'])
         queue.finish(run_id, outcome=outcome, stats=result, remaining=remaining,
                      error=f'{stats.errors} source/aggregate failures; see store status' if stats.errors else None)
         print(json.dumps({'run_id': run_id, 'instance': scheduled.name, 'kind': run['kind'],

@@ -112,6 +112,26 @@ class FreshnessTests(unittest.TestCase):
         self.assertEqual(self.store.bootstrap_aggregate_tracking(('project', 'digest')), 0)
         self.assertEqual(self.store.pending_aggregates(float('inf')), [])
 
+    def test_untracked_legacy_projects_are_in_the_profile_denominator(self):
+        self.store.upsert_session(id='legacy', project='p', ended_at='2026-08-10T00:00:00Z')
+        self.store.commit()
+        data = store_status(self.store)['ingestion']['aggregate_progress']['project']
+        self.assertEqual((data['total'], data['current'], data['untracked'], data['percent_current']), (1, 0, 1, 0.0))
+        self.assertEqual(self.store.pending_aggregates(float('inf')), [])
+        self.store.bootstrap_aggregate_tracking(('project',))
+        with self.store.write_transaction():
+            self.store.acknowledge_aggregate('project', 'p', 1, time.time())
+        self.assertEqual(store_status(self.store)['ingestion']['aggregate_progress']['project']['percent_current'], 100.0)
+        self.store.upsert_session(id='new-project', project='q', ended_at='2026-09-07')
+        self.store.commit()
+        data = store_status(self.store)['ingestion']['aggregate_progress']['project']
+        self.assertEqual((data['total'], data['current'], data['untracked'], data['percent_current']), (2, 1, 1, 50.0))
+
+    def test_empty_store_does_not_claim_one_hundred_percent_aggregate_coverage(self):
+        data = store_status(self.store)['ingestion']['aggregate_progress']
+        self.assertIsNone(data['project']['percent_current'])
+        self.assertIsNone(data['digest']['percent_current'])
+
 
 if __name__ == '__main__':
     unittest.main()

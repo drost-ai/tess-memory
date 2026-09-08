@@ -9,6 +9,7 @@ import re
 import time
 
 from .source_journal import SourceRevision
+from .time_utils import week_start
 
 
 def safe_error(value):
@@ -133,6 +134,30 @@ def project_coverage(store, project):
     return 'Recorded source states: ' + ', '.join(f'{status}={count}' for status, count in rows) + '. Unprocessed or changed sources can contain newer work.'
 
 
+def aggregate_progress(store):
+    """Include legacy scopes that have not entered the refresh queue yet."""
+    expected = {
+        'project': {r[0] for r in store.db.execute('SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL')},
+        'digest': {week for r in store.db.execute('SELECT DISTINCT ended_at FROM sessions') if (week := week_start(r[0]))},
+    }
+    tracked = {'project': {}, 'digest': {}}
+    if _table(store, 'aggregate_refresh'):
+        for row in store.db.execute('SELECT level,scope,revision,applied_revision FROM aggregate_refresh'):
+            if row['level'] in tracked:
+                tracked[row['level']][row['scope']] = row
+    result = {}
+    for level, required in expected.items():
+        rows = tracked[level]
+        scopes = required | set(rows)
+        current = sum(r['applied_revision'] >= r['revision'] for r in rows.values())
+        result[level] = {'total': len(scopes), 'current': current,
+                         'pending': sum(r['applied_revision'] < r['revision'] for r in rows.values()),
+                         'untracked': len(required - set(rows)),
+                         'percent_current': round(100 * current / len(scopes), 1) if scopes else None,
+                         'note': 'Current covers indexed sessions and recorded refresh revisions; untracked legacy scopes are unverified, and unprocessed transcripts can contain newer work.'}
+    return result
+
+
 def store_status(store, cfg=None):
     result = store.counts()
     tracked = _table(store, 'ingest_sources')
@@ -153,7 +178,7 @@ def store_status(store, cfg=None):
     result['ingestion'] = {'observed_at': time.time(), 'source_statuses': statuses,
                            'last_source_observation': times[0], 'last_publication': times[1],
                            'legacy_sessions_without_prefix_verification': legacy,
-                           'pending_aggregates': pending, 'problems': problems,
+                           'pending_aggregates': pending, 'aggregate_progress': aggregate_progress(store), 'problems': problems,
                            'note': 'Counts describe recorded source states. Worker/supervisor heartbeats do not certify source freshness; individual session checks compare current file metadata.'}
     if getattr(store, '_scoped_vectors', None) is not None:
         result['retrieval_index'] = store._scoped_vectors.status()

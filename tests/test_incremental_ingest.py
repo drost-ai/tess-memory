@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -44,7 +45,7 @@ class IncrementalIngestTests(unittest.TestCase):
                           data_dir=self.root / 'memory', incremental_ingestion=True,
                           segment_chars=3000, segment_overlap=0, llm_workers=2, segment_workers=2)
         self.store = MemoryStore(self.cfg.db_path)
-        self.addCleanup(self.store.close)
+        self.addCleanup(lambda: self.store.close())
         self.backend = Backend()
         self.embedder = RecordingEmbedder()
 
@@ -233,10 +234,55 @@ class IncrementalIngestTests(unittest.TestCase):
         self.cfg.max_model_calls_per_run = 1
         first = self.run_ingest()
         self.assertEqual((first.budget_deferred, first.model_calls), (1, 1))
+        self.assertEqual(first.checkpointed_requests, 1)
         self.assertIsNone(self.store.get_session('codex:one'))
         second = self.run_ingest()
         self.assertEqual((second.distilled, second.model_calls), (1, 1))
         self.assertEqual(len(self.backend.calls), 2)
+
+    def test_bounded_scan_rotates_past_unfinished_large_source_across_restart(self):
+        import time
+        from agentic_memory.source_schedule import SCAN_CURSOR
+        other = write_rollout(self.home, 'two', items=[
+            message('user', 'A different durable question. ' * 20),
+            message('assistant', 'A different durable answer. ' * 20)])
+        items = []
+        for i in range(8):
+            items.extend([message('user', f'Long-session request {i}. ' * 20),
+                          message('assistant', f'Long-session answer {i}. ' * 20)])
+        large = write_rollout(self.home, 'zz-large', items=items)
+        for path in (self.path, other):
+            os.utime(path, (time.time()-3600, time.time()-3600))
+        self.cfg.max_model_calls_per_run = 1
+        self.run_ingest(limit=1)
+        self.assertEqual(self.store.get_meta(SCAN_CURSOR), str(self.path))
+        self.store.close()
+        self.store = MemoryStore(self.cfg.db_path)
+        self.run_ingest(limit=1)
+        self.assertEqual(self.store.get_meta(SCAN_CURSOR), str(other))
+        self.run_ingest(limit=1)
+        self.assertEqual(self.store.get_meta(SCAN_CURSOR), str(large))
+        self.assertTrue(all(self.store.source_progress(str(p)) is not None for p in (self.path, other, large)))
+        self.run_ingest(limit=1)
+        self.assertIsNotNone(self.store.get_session('codex:one'))
+
+    def test_targeted_session_run_does_not_change_background_cursor(self):
+        from agentic_memory.source_schedule import SCAN_CURSOR
+        with self.store.write_transaction():
+            self.store.set_meta(SCAN_CURSOR, '/retained/background/position')
+        self.run_ingest(limit=1, session_ids={'one'})
+        self.assertEqual(self.store.get_meta(SCAN_CURSOR), '/retained/background/position')
+
+    def test_reader_failure_advances_background_cursor(self):
+        from agentic_memory.source_schedule import SCAN_CURSOR
+        from agentic_memory.source_journal import SourceReadError
+        other = write_rollout(self.home, 'two')
+        with mock.patch('agentic_memory.incremental.CompletedSourceReader.read', side_effect=SourceReadError('unreadable source')):
+            self.assertEqual(self.run_ingest(limit=1).errors, 1)
+        self.assertEqual(self.store.get_meta(SCAN_CURSOR), str(self.path))
+        self.run_ingest(limit=1)
+        self.assertIsNotNone(self.store.get_session('codex:two'))
+        self.assertEqual(self.store.get_meta(SCAN_CURSOR), str(other))
 
     def test_project_move_and_source_archive_preserve_paid_data_and_queue_rollups(self):
         self.run_ingest()

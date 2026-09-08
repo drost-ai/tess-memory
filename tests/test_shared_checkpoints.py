@@ -38,12 +38,14 @@ class SharedCheckpointTests(unittest.TestCase):
             release.set()
             self.assertEqual(len({f.result(timeout=5)['summary'] for f in futures}), 1)
             self.assertEqual((pool.calls, pool.shared_cache_hits), (1, 3))
+            self.assertEqual(pool.checkpointed_requests, 1)
             self.assertEqual(pool._request_locks, {})
             for session in sessions:
                 self.assertIn(DistillationCheckpoints.key(session.namespace, backend.name, 'system', 'identical'), session.keys)
         with self.pool(backend) as pool:
             pool.session('new fork').submit('system', 'identical', 'segment stable').result()
             self.assertEqual(pool.calls, 0)
+            self.assertEqual(pool.checkpointed_requests, 0)
         self.assertEqual(len(backend.calls), 1)
 
     def test_distinct_prompts_still_run_concurrently(self):

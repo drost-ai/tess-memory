@@ -318,6 +318,7 @@ class DistillationPool:
         self.cache_hits = 0
         self.shared_cache_hits = 0
         self.cache_promotions = 0
+        self.checkpointed_requests = 0
         self.active_calls = 0
         self.peak_calls = 0
 
@@ -482,6 +483,8 @@ class SessionCalls:
                 continue
             if pool.cache:
                 pool.cache.put(key, data)
+                with pool._lock:
+                    pool.checkpointed_requests += 1
                 if pool.share_requests:
                     pool.cache.put(common, data)
             with self._lock:

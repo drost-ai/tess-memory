@@ -11,7 +11,8 @@ from unittest import mock
 
 from agentic_memory.scheduler_config import ServiceConfig, ScheduledStore, load_service
 from agentic_memory.scheduler_queue import WorkQueue
-from agentic_memory.scheduler import worker, service_status, serve, owned_worker, stop_run
+from agentic_memory.scheduler import worker, service_status, serve, owned_worker, stop_run, run_outcome
+from agentic_memory.ingest import IngestStats
 from agentic_memory.provider_limits import ProviderGate
 from agentic_memory.scheduler_install import build_plist, owned_plist, service_control
 from test_codex import RecordingEmbedder, write_rollout
@@ -169,6 +170,14 @@ class SchedulerQueueTests(unittest.TestCase):
 
 
 class WorkerOwnershipTests(unittest.TestCase):
+    def test_retained_checkpoint_progress_is_partial_despite_an_unrelated_source_error(self):
+        stats = IngestStats(errors=1, distilled=0, budget_deferred=15, checkpointed_requests=100)
+        self.assertEqual(run_outcome(stats, 128, 'ingest'), 'partial')
+        stats.checkpointed_requests = 0
+        self.assertEqual(run_outcome(stats, 128, 'ingest'), 'error')
+        stats.distilled = 1
+        self.assertEqual(run_outcome(stats, 128, 'ingest'), 'partial')
+
     def test_probe_timeout_or_os_failure_is_unknown_instead_of_unowned(self):
         for error in (subprocess.TimeoutExpired('ps', 3), OSError('probe unavailable')):
             with mock.patch('agentic_memory.scheduler.process_alive', return_value=True), \

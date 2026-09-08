@@ -15,6 +15,7 @@ from .distill import CallBudgetExceeded, DistillationPool, SESSION_SYSTEM, REDUC
 from .ingest import IngestStats, _extractive_digest, _log, _refresh_aggregates, _session_rows
 from .readers import CompletedSourceReader, content_key, source_signature
 from .source_journal import SourceChanged
+from .source_schedule import SCAN_CURSOR, source_scan_order
 from .stable_distill import STABLE_MAP_PROMPT, stable_digest
 from .time_utils import week_start
 from .transcript import chunk_session
@@ -122,7 +123,11 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                 found.append((modified, ds, path, ds.resolve_project(source_project), parent))
             except OSError:
                 stats.deferred_active += 1
-    found.sort(key=lambda row: row[0], reverse=True)
+    fair_scan = limit is not None and session_ids is None and not retry_extractive
+    scan = source_scan_order(found, limit=limit if fair_scan else None,
+                             cursor=store.get_meta(SCAN_CURSOR),
+                             known_paths={r[0] for r in store.db.execute('SELECT path FROM ingest_sources')},
+                             now=time.time())
     stats.scanned = len(found)
     if reader.catalog:
         stats.errors += len(reader.catalog.errors)
@@ -164,20 +169,15 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             max_calls=cfg.max_model_calls_per_run, share_requests=True) if llm else None
     futures = {}
     attempted = 0
-    visited = 0
-    iterator = iter(found)
+    iterator = iter(scan)
     exhausted = False
     seen_sessions = {}
     try:
         with ThreadPoolExecutor(max_workers=max(1, cfg.llm_workers)) as coordinators:
             while futures or not exhausted:
                 while not exhausted and len(futures) < max(1, cfg.codex.batch_size):
-                    if limit is not None and attempted >= limit:
-                        exhausted = True
-                        break
                     try:
-                        _, ds, path, project, parent = next(iterator)
-                        visited += 1
+                        (_, ds, path, project, parent), advance_cursor = next(iterator)
                     except StopIteration:
                         exhausted = True
                         break
@@ -214,7 +214,19 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 seen_sessions.setdefault(progress['session_id'], str(path))
                             stats.unchanged += 1
                             continue
+                        if limit is not None and attempted >= limit:
+                            # Finish the cheap metadata checks even after the
+                            # read budget is spent. A rotated scan's suffix can
+                            # contain already-indexed files, not just backlog.
+                            stats.sources_remaining += 1
+                            continue
                         attempted += 1
+                        if advance_cursor:
+                            # This records an attempt, never successful coverage.
+                            # Persist before slow work so errors and restarts
+                            # cannot keep the scan pinned to the same large file.
+                            with store.write_transaction():
+                                store.set_meta(SCAN_CURSOR, str(path))
                         snapshot = reader.read(ds, path, project, parent)
                         stats.parsed_records += snapshot.parsed_records
                         signature = content_key([snapshot.observed_signature, policy])
@@ -368,6 +380,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             stats.request_cache_hits = pool.cache_hits
             stats.shared_cache_hits = pool.shared_cache_hits
             stats.cache_promotions = pool.cache_promotions
+            stats.checkpointed_requests = getattr(pool, 'checkpointed_requests', 0)
     if llm is not None and refresh_aggregates is not False:
         interval = 0 if refresh_aggregates is True else cfg.aggregate_refresh_seconds
         class Counted:
@@ -386,7 +399,6 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             store.set_meta('incremental:last_cache_prune', str(now))
     stats.aggregates_pending = len(store.pending_aggregates(float('inf')))
     stats.source_reads = attempted
-    stats.sources_remaining = max(0, stats.scanned - visited)
     stats.duration_seconds = round(time.monotonic() - started, 3)
     store.commit()
     return stats
