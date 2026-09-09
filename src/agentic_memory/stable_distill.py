@@ -40,6 +40,10 @@ def digest_data(digest) -> dict:
     return result
 
 
+PARTIAL_MAP_PROMPT = STABLE_MAP_PROMPT.replace('A completed persisted-message unit',
+    'An incomplete persisted-message snapshot') + '\nThis snapshot is incomplete. Preserve unanswered requests and unresolved tool work; never invent a missing result or completion.\n'
+
+
 def stable_map_prompts(cfg, snapshot, *, seed_units: int = 0):
     """Generate exact map inputs, also usable for cache-only migration."""
     for item in stable_map_items(cfg, snapshot, seed_units=seed_units):
@@ -60,10 +64,11 @@ def stable_map_items(cfg, snapshot, *, seed_units: int = 0):
             step = cfg.segment_chars - cfg.segment_overlap
             for offset in range(0, len(text), step):
                 piece = text[offset:offset + cfg.segment_chars]
-                prompt = STABLE_MAP_PROMPT.format(project=st.project,
+                template = PARTIAL_MAP_PROMPT if snapshot.unit_kinds[index] == 'incomplete_snapshot' else STABLE_MAP_PROMPT
+                prompt = template.format(project=st.project,
                                                  boundary=snapshot.unit_kinds[index], segment=piece)
                 yield MapItem(prompt, st.project, snapshot.unit_kinds[index], index, piece,
-                              rendered if len(text) <= cfg.segment_chars else None, previous_context)
+                              rendered if len(text) <= cfg.segment_chars and template == STABLE_MAP_PROMPT else None, previous_context)
                 if offset + cfg.segment_chars >= len(text):
                     break
         previous_context = rendered[-cfg.segment_overlap:] if cfg.segment_overlap else ""

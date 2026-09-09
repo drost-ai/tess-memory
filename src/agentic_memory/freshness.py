@@ -79,6 +79,9 @@ def session_freshness(store, session_id, cfg=None):
             'quiet_until': state.get('quiet_until'),
             'source_changed': changed, 'source_available': available,
             'boundary_kinds': dict(Counter(kinds)),
+            'recovery_notes': state.get('recovery_notes', []),
+            'recovery_only': state.get('recovery_only', False),
+            'incomplete_snapshot_recovered': bool(state.get('recovery_signature') and state.get('pending_tail')),
             'coverage': 'eligible persisted prefix; task completion is not inferred',
             'last_error': safe_error(progress['last_error']), 'retry_at': progress['retry_at'] if 'retry_at' in progress.keys() else 0}
 
@@ -110,6 +113,8 @@ def hit_freshness(store, row, cfg=None):
 def describe(freshness):
     status = freshness.get('status', 'unknown').replace('_', ' ')
     text = 'Memory freshness: ' + status
+    if freshness.get('incomplete_snapshot_recovered'):
+        text += '; available incomplete history recovered; task completion is not inferred'
     if freshness.get('indexed_through'):
         text += '; source events through ' + str(freshness['indexed_through'])
     if freshness.get('pending_units'):

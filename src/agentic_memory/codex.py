@@ -443,6 +443,11 @@ class _Normalizer:
         if not isinstance(p, dict):
             raise CodexParseError(f"{self.source.path}:{position}: expected an item object")
         kind = p.get("type")
+        if p == {"type": "other"} and channel == 'snapshot':
+            # Old compaction snapshots contain empty placeholders for omitted
+            # items. There is no payload to recover; canonical events still win.
+            self.report.ignored_records += 1
+            return
         if kind in _IGNORED_ITEMS:
             return
         identity = str(p["id"]) if p.get("id") else None
@@ -698,6 +703,7 @@ class CodexCatalog:
         self.journal = journal
         self.sources: dict[Path, Source] = {}
         self.by_id: dict[str, Source] = {}
+        self.by_segment_id: dict[str, list[Source]] = defaultdict(list)
         self.errors: dict[str, str] = {}
         self.skipped_subagents = 0
         self.warnings: list[str] = []
@@ -740,6 +746,12 @@ class CodexCatalog:
                             self.skipped_subagents += 1
                             continue
                         _ = source.parent_id  # validate references before discovery returns them
+                        # New shared-history files retain the logical session id
+                        # in metadata but reference physical segment UUIDs. Keep
+                        # all in-scope segments even when only the newest is listed.
+                        suffix = re.search(r'_([0-9a-f-]{36})$', resolved.stem)
+                        segment_id = suffix.group(1) if suffix else source.session_id
+                        self.by_segment_id[segment_id].append(source)
                         old = self.by_id.get(source.session_id)
                         if old:
                             self.warnings.append(f"duplicate session id {source.session_id}: selecting the most recently modified source")
@@ -755,26 +767,44 @@ class CodexCatalog:
         return [(s.path, s.project, memory_session_id(s.parent_id) if s.parent_id else None)
                 for s in self.sources.values() if s.store is store]
 
+    def _parent(self, source: Source) -> Source | None:
+        if not source.metadata.get('history_base'):
+            return self.by_id.get(source.parent_id)
+        candidates = [s for s in self.by_segment_id.get(source.parent_id, []) if s.path != source.path]
+        if len(candidates) == 1:
+            return candidates[0]
+        if len(candidates) > 1:
+            # Never guess between divergent copies of a referenced segment.
+            raise CodexParseError(f'{source.path}: ambiguous shared-history segment {source.parent_id}')
+        parent = self.by_id.get(source.parent_id)
+        return parent if parent and parent.path != source.path else None
+
     def policy_fingerprint(self, path: Path, project: str) -> str:
         """Revisit unchanged files when options or parent evidence change."""
         source = self.sources[path.resolve()]
         parents = []
-        visited = {source.session_id}
-        parent_id = source.parent_id
-        while parent_id and parent_id not in visited and len(visited) <= 32:
-            visited.add(parent_id)
-            parent = self.by_id.get(parent_id)
+        visited = {source.path}
+        current = source
+        while current.parent_id and len(visited) <= 256:
+            parent_id = current.parent_id
+            parent = self._parent(current)
             if parent is None:
                 parents.append((parent_id, "missing"))
                 break
+            if parent.path in visited:
+                parents.append((parent_id, 'cycle'))
+                break
+            visited.add(parent.path)
             stat = parent.path.stat()
             parents.append((parent_id, str(parent.path), stat.st_size, stat.st_mtime_ns))
-            parent_id = parent.parent_id
+            current = parent
         return _digest(json.dumps({"version": NORMALIZER_VERSION, "options": vars(self.options),
                                    "project": project, "parents": parents}, sort_keys=True))
 
     def _read(self, source: Source, end_byte: int | None = None, end_ordinal: int | None = None) -> Normalized:
         stat = source.path.stat()
+        if end_byte is not None and end_byte > stat.st_size:
+            raise CodexParseError(f'{source.path}: shared-history boundary exceeds available parent bytes; retain the last good memory')
         key = (source.path, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, end_byte, end_ordinal)
         meta_revision = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
         if self.journal is not None and source.metadata_revision != meta_revision:
@@ -842,7 +872,7 @@ class CodexCatalog:
 
     def _resolve(self, source: Source, chain: tuple[str, ...] = (),
                  end_byte: int | None = None, end_ordinal: int | None = None) -> Resolved:
-        if source.session_id in chain or len(chain) >= 32:
+        if str(source.path) in chain or len(chain) >= 256:
             raise CodexParseError(f"{source.path}: cyclic or excessive parent history")
         normalized = self._read(source, end_byte, end_ordinal)
         # Reports are per invocation; cached source normalization stays intact.
@@ -855,7 +885,7 @@ class CodexCatalog:
         inherited: list[Event] = []
         revisions = list(normalized.revisions)
         if parent_id:
-            parent = self.by_id.get(parent_id)
+            parent = self._parent(source)
             if parent is None:
                 if base:
                     raise CodexParseError(f"{source.path}: shared parent {parent_id} is missing from configured sources")
@@ -868,9 +898,22 @@ class CodexCatalog:
                             raise CodexParseError(f"{source.path}: invalid shared-history boundary {key}")
                     if base.get("end_byte_offset") is None and base.get("end_ordinal_exclusive") is None:
                         raise CodexParseError(f"{source.path}: shared history has no recorded boundary")
-                parent_view = self._resolve(parent, (*chain, source.session_id),
+                parent_view = self._resolve(parent, (*chain, str(source.path)),
                                             base.get("end_byte_offset") if base else None,
                                             base.get("end_ordinal_exclusive") if base else None)
+                if base and parent.session_id == source.session_id:
+                    # A physical continuation belongs to the same logical
+                    # conversation. Retain its earlier units, not just one
+                    # inherited task, when publishing the combined memory.
+                    shift = max([e.position for e in parent_view.local] +
+                                [b['position'] for b in parent_view.boundaries] + [0]) + 1
+                    continued = [replace(e, position=e.position + shift) for e in local]
+                    boundaries = parent_view.boundaries + [dict(b, position=b['position'] + shift)
+                                                           for b in normalized.boundaries]
+                    report.warnings.extend(parent_view.report.warnings)
+                    return Resolved(parent_view.local + continued, parent_view.history + continued,
+                                    report, parent_view.parent_id, boundaries,
+                                    parent_view.revisions + revisions)
                 inherited = parent_view.history
                 revisions.extend(parent_view.revisions)
                 ids = {e.identity for e in inherited if e.identity}
@@ -911,7 +954,7 @@ class CodexCatalog:
         return Resolved(local, inherited + local, report, parent_id, normalized.boundaries, revisions)
 
     def inspect(self, path: Path, project: str | None = None, min_chars: int = 200,
-                *, upto_position: int | None = None) -> tuple[SessionTranscript | None, ParseReport]:
+                *, upto_position: int | None = None, allow_orphan: bool = False) -> tuple[SessionTranscript | None, ParseReport]:
         source = self.sources.get(path.resolve())
         if source is None:
             raise CodexParseError(f"{path}: not a discovered source inside configured roots")
@@ -943,9 +986,9 @@ class CodexCatalog:
         st.ended_at = max(times) if times else st.started_at
         if not source.cwd:
             resolved.report.warnings.append("no reliable workspace: using the configured project or codex-unattributed")
-        if local and st.n_user == 0 and resolved.parent_id:
+        if local and st.n_user == 0 and resolved.parent_id and not allow_orphan:
             raise CodexParseError(f"{source.path}: continuation has no recoverable task at its parent boundary")
-        if not local or st.n_user == 0 or st.content_chars < min_chars:
+        if not local or (st.n_user == 0 and not allow_orphan) or st.content_chars < min_chars:
             return None, resolved.report
         # Compare full cleaned content before clipping. Numeric differences and
         # changes in the middle of a result still invalidate derived memory.

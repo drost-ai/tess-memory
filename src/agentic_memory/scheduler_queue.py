@@ -8,7 +8,7 @@ import uuid
 
 from .provider_limits import process_alive
 
-KINDS = ('ingest', 'profiles', 'digests', 'detect')
+KINDS = ('ingest', 'profiles', 'digests', 'detect', 'recovery')
 
 
 class WorkQueue:
@@ -42,7 +42,12 @@ class WorkQueue:
                     db.execute('INSERT INTO scheduled_stores VALUES(?,?,?) ON CONFLICT(name) DO UPDATE SET settings=excluded.settings',
                                (store.name, store.enabled, str(store.settings)))
                     for kind in KINDS:
-                        db.execute('INSERT OR IGNORE INTO jobs(instance,kind,due) VALUES(?,?,?)', (store.name, kind, time.time()))
+                        if kind == 'recovery' and store.recovery_hour is None:
+                            continue
+                        due = store.next_recovery(time.time()) if kind == 'recovery' else time.time()
+                        # Existing overdue work survives restarts and sleep for
+                        # one catch-up pass; initialization never moves its due time.
+                        db.execute('INSERT OR IGNORE INTO jobs(instance,kind,due) VALUES(?,?,?)', (store.name, kind, due))
         finally:
             db.close()
 
@@ -61,7 +66,7 @@ class WorkQueue:
             with db:
                 db.execute('UPDATE scheduled_stores SET enabled=? WHERE name=?', (bool(enabled), instance))
                 if enabled:
-                    db.execute("UPDATE jobs SET due=? WHERE instance=? AND state!='running'", (time.time(), instance))
+                    db.execute("UPDATE jobs SET due=? WHERE instance=? AND state!='running' AND kind!='recovery'", (time.time(), instance))
         finally:
             db.close()
 
@@ -102,6 +107,8 @@ class WorkQueue:
                     if kind and row['kind'] != kind:
                         continue
                     if not explicit and (not row['enabled'] or row['due'] > now):
+                        continue
+                    if row['kind'] == 'recovery' and self.config.store(row['instance']).recovery_hour is None:
                         continue
                     identifier = uuid.uuid4().hex
                     db.execute("UPDATE jobs SET state='running',run_id=?,pid=NULL,started=?,heartbeat=?,requested=0 WHERE instance=? AND kind=?",
@@ -168,11 +175,16 @@ class WorkQueue:
                     return False
                 store = self.config.store(row['instance'])
                 interval = {'ingest': store.poll_seconds, 'detect': store.poll_seconds,
-                            'profiles': store.profile_seconds, 'digests': store.digest_seconds}[row['kind']]
+                            'profiles': store.profile_seconds, 'digests': store.digest_seconds,
+                            'recovery': 86400}[row['kind']]
                 completed = outcome in ('success', 'partial')
                 attempts = 0 if completed else row['attempts'] + 1
                 delay = (self.config.backlog_seconds if remaining else interval) if completed else min(self.config.max_retry_seconds, self.config.retry_seconds * 2 ** min(attempts - 1, 10))
                 due = now if row['requested'] else now + delay
+                if row['kind'] == 'recovery' and store.recovery_hour is not None:
+                    # A nightly budget is not a license for a 15-second paid
+                    # loop. Both failures and unfinished work resume next night.
+                    due = store.next_recovery(now)
                 if row['kind'] == 'detect' and completed and not row['requested']:
                     # Start-to-start cadence, coalescing a missed tick. This
                     # clock is independent of paid job completion/backlog.

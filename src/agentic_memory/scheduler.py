@@ -57,6 +57,13 @@ def service_status(config):
                 store.close()
     for row in result['jobs']:
         row['last_error'] = safe_error(row['last_error'])
+        if row['kind'] == 'recovery':
+            scheduled = config.store(row['instance'])
+            row['schedule'] = {'hour': scheduled.recovery_hour, 'timezone': scheduled.recovery_timezone,
+                               'model_calls_per_night': scheduled.recovery_model_calls_per_run,
+                               'source_reads_per_night': scheduled.recovery_sources_per_run,
+                               'minimum_idle_seconds': scheduled.recovery_min_age_seconds,
+                               'unfinished_work': 'retained for the next nightly pass'}
     for row in result['recent_runs']:
         row['error'] = safe_error(row['error'])
     return result
@@ -68,7 +75,7 @@ def run_outcome(stats, model_calls, kind):
     # Retained map/reduction results are progress even before a large session
     # can publish. An unrelated malformed source must not turn that into a
     # total worker failure and exponentially postpone all remaining sources.
-    if kind == 'ingest' and model_calls and not stats.distilled and not getattr(stats, 'checkpointed_requests', 0):
+    if kind in ('ingest', 'recovery') and model_calls and not stats.distilled and not getattr(stats, 'checkpointed_requests', 0):
         return 'error'
     return 'partial'
 
@@ -82,7 +89,9 @@ def worker(config_path: Path, run_id: str) -> int:
     scheduled = config.store(run['instance'])
     queue.start(run_id, os.getpid())
     gate = _gate(config)
-    maximum = scheduled.model_calls_per_run if run['kind'] == 'ingest' else scheduled.aggregate_calls_per_run
+    is_recovery = run['kind'] == 'recovery'
+    is_ingest = run['kind'] in ('ingest', 'recovery')
+    maximum = scheduled.recovery_model_calls_per_run if is_recovery else scheduled.model_calls_per_run if is_ingest else scheduled.aggregate_calls_per_run
     # Stop admission before the supervisor's soft deadline. A request already
     # running can finish and checkpoint; neither a model-budget boundary nor
     # SIGTERM should throw away its paid output.
@@ -131,7 +140,8 @@ def worker(config_path: Path, run_id: str) -> int:
                       llm_workers=workers, segment_workers=workers,
                       codex=replace(cfg.codex, batch_size=max(cfg.codex.batch_size, min(workers, scheduled.sources_per_run))),
                       max_model_calls_per_run=maximum, ingestion_hold_texts=held,
-                      source_retry_backoff=not run['force_retry'])
+                      source_retry_backoff=not run['force_retry'],
+                      recovery_ingestion=is_recovery, recovery_min_age_seconds=scheduled.recovery_min_age_seconds)
         store = MemoryStore(cfg.db_path)
         embedder = make_embedder(cfg)
         if cfg.embed_provider != 'local' and isinstance(embedder, LocalEmbedder):
@@ -147,15 +157,22 @@ def worker(config_path: Path, run_id: str) -> int:
         if cfg.agent_core_fallback_profile:
             backend = AgentCoreBackend.for_role(cfg, 'fallback')
             fallback = LimitedBackend(backend, gate, budget, provider=provider_key(cfg, cfg.agent_core_fallback_profile), owner=run_id, instance=scheduled.name)
-        levels = None if run['kind'] == 'ingest' else ('project',) if run['kind'] == 'profiles' else ('digest',)
+        levels = None if is_ingest else ('project',) if run['kind'] == 'profiles' else ('digest',)
         if levels:
             store.bootstrap_aggregate_tracking(levels)
         from .model_usage import request_metadata
         with request_metadata(phase=run['kind']):
             stats = ingest(cfg, store, embedder, llm, fallback,
-                           limit=scheduled.sources_per_run if run['kind'] == 'ingest' else None,
-                           refresh_aggregates=False if run['kind'] == 'ingest' else True,
-                           aggregates_only=run['kind'] != 'ingest', aggregate_levels=levels)
+                           limit=scheduled.recovery_sources_per_run if is_recovery else scheduled.sources_per_run if is_ingest else None,
+                           refresh_aggregates=False if is_ingest else True,
+                           aggregates_only=not is_ingest, aggregate_levels=levels)
+            if is_recovery:
+                # Share the same nightly admission budget with aggregate repair.
+                # Reserving separate scheduled aggregate jobs prevents a large
+                # tail backlog from starving them if this budget is exhausted.
+                from .ingest import _refresh_aggregates
+                store.bootstrap_aggregate_tracking(('project', 'digest'))
+                _refresh_aggregates(cfg, store, embedder, llm, fallback, stats, 0)
         result = asdict(stats)
         result['model_calls'] = budget.calls
         result['deadline_drained'] = budget.draining.is_set()
@@ -167,8 +184,8 @@ def worker(config_path: Path, run_id: str) -> int:
             result[name] = sum(values) if values else None
         result['held_sources'] = store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status='held'").fetchone()[0]
         result['failed_sources'] = store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status='error'").fetchone()[0]
-        if run['kind'] == 'ingest':
-            remaining = stats.sources_remaining + store.db.execute("SELECT COUNT(*) FROM ingest_sources WHERE status IN ('pending_work','budget_pending','source_changed','processing')").fetchone()[0]
+        if is_ingest:
+            remaining = stats.sources_remaining + stats.sources_pending
         else:
             remaining = sum(r['level'] in levels for r in store.pending_aggregates(float('inf')))
         outcome = run_outcome(stats, budget.calls, run['kind'])

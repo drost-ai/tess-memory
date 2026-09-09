@@ -456,7 +456,7 @@ def main(argv: list[str] | None = None) -> int:
         command = commands.add_parser(action)
         command.add_argument('--instance', required=True)
         if action in ('retry', 'run'):
-            command.add_argument('--kind', choices=['ingest', 'profiles', 'digests', 'detect'], default='ingest')
+            command.add_argument('--kind', choices=['ingest', 'profiles', 'digests', 'detect', 'recovery'], default='ingest')
         command.set_defaults(fn=cmd_scheduler)
     command = commands.add_parser('stop-run')
     command.add_argument('--run-id', required=True)

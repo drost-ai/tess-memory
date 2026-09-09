@@ -73,6 +73,11 @@ class IngestStats:
     sources_remaining: int = 0
     retries_deferred: int = 0
     quiet_deferred: int = 0
+    sources_pending: int = 0  # selected source backlog, excluding nightly-only recovery
+    recovery_pending: int = 0
+    recovered_partial: int = 0
+    recovery_held: int = 0
+    recovery_unavailable: int = 0
 
 
 _LOG_LOCK = threading.Lock()

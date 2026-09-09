@@ -91,6 +91,25 @@ class ModelSelectionTests(unittest.TestCase):
             self.assertFalse(options["sessionPersistence"])
         self.assertEqual(self.settings.read_bytes(), self.original_settings)
 
+    def test_cleanup_failure_preserves_paid_response_without_masking_provider_failure(self):
+        from agentic_memory.model_usage import UsageObserver, observe_usage
+        backend=AgentCoreBackend(self.cfg,probe=False)
+        bootstrap=backend._bootstrap_runtime
+        async def failing_cleanup():
+            raise RuntimeError('synthetic cleanup timeout')
+        async def runtime(args):
+            result=await bootstrap(args)
+            result['close']=failing_cleanup
+            return result
+        backend._bootstrap_runtime=runtime
+        records=[]
+        with observe_usage(UsageObserver(records.append)):
+            self.assertEqual(backend.complete(system='Test',prompt='Test'),'OK')
+        self.assertEqual(len(self.configs),1)
+        self.assertEqual(records[-1]['cleanup_error'],'RuntimeError')
+        backend._run_agent_prompt=mock.AsyncMock(side_effect=ValueError('provider failed'))
+        with self.assertRaises(Exception):backend.complete(system='Test',prompt='Test')
+
     def test_deepseek_max_survives_the_custom_host_effort_filter(self):
         backend = AgentCoreBackend.for_role(self.cfg, "fallback")
         backend.complete(system="Test", prompt="Test")

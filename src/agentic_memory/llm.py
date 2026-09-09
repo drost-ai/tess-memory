@@ -162,6 +162,7 @@ class AgentCoreBackend:
         runtime = await self._bootstrap_runtime(
             {"session": session, "config": config, "cwd": cwd}
         )
+        result = None
         try:
             daemon = runtime.get("daemon")
             def emit(event, data):
@@ -216,9 +217,19 @@ class AgentCoreBackend:
         finally:
             close = runtime.get("close")
             if close:
-                maybe = close()
-                if hasattr(maybe, "__await__"):
-                    await maybe
+                try:
+                    maybe = close()
+                    if hasattr(maybe, "__await__"):
+                        await maybe
+                except Exception as exc:
+                    if result is None:
+                        raise
+                    # Cleanup is not a failed model request. Return the paid
+                    # result for ordinary refusal/schema validation and cache
+                    # publication, with a content-free diagnostic receipt.
+                    result['memoryCleanupError'] = type(exc).__name__
+                    import logging
+                    logging.getLogger(__name__).warning('Runtime cleanup failed after completion (%s); retaining provider result', type(exc).__name__)
 
     def complete(self, *, system: str, prompt: str) -> str:
         import asyncio

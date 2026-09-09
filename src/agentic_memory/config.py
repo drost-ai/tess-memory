@@ -167,6 +167,8 @@ class Config:
     incremental_batch_unit_chars: int = 12000
     ingestion_hold_texts: list[str] = field(default_factory=list)  # operator-supplied export holds; never logged
     source_retry_backoff: bool = False  # scheduled workers opt in; explicit manual retries remain immediate
+    recovery_ingestion: bool = False  # scheduler-only stable incomplete source recovery
+    recovery_min_age_seconds: float = 900
     chunk_chars: int = 6_000             # window cap within an exchange-aligned chunk
     tool_result_snippet: int = 400       # tool-result truncation in rendered turns
     min_session_chars: int = 200         # skip sessions with less dialogue than this

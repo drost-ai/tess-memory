@@ -96,6 +96,7 @@ class UsageObserver:
         self.requested_model = self.requested_effort = None
         self.auth_source = None
         self.final_usage = {}
+        self.cleanup_error = None
 
     def configured(self, config):
         self.observed = True
@@ -135,6 +136,7 @@ class UsageObserver:
         self.attempts[-1].update({k: v for k, v in usage_counts(raw).items() if v is not None})
 
     def finish(self, result):
+        self.cleanup_error = result.get('memoryCleanupError')
         self.runtime_model = result.get('model') or self.runtime_model
         self.final_usage = usage_counts(result.get('usage'))
         self.persist(self.data())
@@ -146,6 +148,7 @@ class UsageObserver:
             values = [a[key] for a in known if key in a]
             totals[key] = sum(values) if values else self.final_usage.get(key)
         return {**totals, 'requested_model': self.requested_model, 'requested_effort': self.requested_effort,
+                'cleanup_error': self.cleanup_error,
                 'auth_source': self.auth_source,
                 'runtime_model': self.runtime_model, 'response_model': self.response_model,
                 'wire_attempts': len(self.attempts) if self.observed else None,

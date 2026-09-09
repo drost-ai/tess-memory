@@ -1,7 +1,7 @@
 """Incremental source adapters producing eligible, source-labelled message units."""
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from bisect import bisect_right
 import hashlib
 import json
@@ -29,6 +29,7 @@ class ParsedSource:
     pending_tail: bool
     observed_signature: str
     parsed_records: int
+    recovery_notes: list[str] = field(default_factory=list)
 
     def unit_keys(self) -> list[str]:
         if self.transcript is None:
@@ -38,6 +39,35 @@ class ParsedSource:
             result.append(content_key([asdict(t) for t in self.transcript.turns[start:end]]))
             start = end
         return result
+
+    def boundary_records(self):
+        return [{'end': end, 'key': key, 'kind': kind} for end, key, kind in
+                zip(self.unit_ends, self.unit_keys(), self.unit_kinds, strict=True)]
+
+    def retain_boundaries(self, records):
+        """Reuse an incomplete unit after a later append closes that turn.
+
+        Each earlier unit must still match exact ordered content. Edits discard
+        the remaining layout; they never bless an unverified prefix.
+        """
+        if not self.transcript or not records:
+            return self
+        start, kept = 0, {}
+        for row in records:
+            end = row['end']
+            if end <= start or end > len(self.transcript.turns):
+                break
+            key = content_key([asdict(t) for t in self.transcript.turns[start:end]])
+            if row['key'] != key:
+                break
+            kept[end] = row['kind']
+            start = end
+        boundaries = {end: kind for end, kind in zip(self.unit_ends, self.unit_kinds)
+                      if end > start}
+        boundaries.update(kept)
+        self.unit_ends = sorted(boundaries)
+        self.unit_kinds = [boundaries[end] for end in self.unit_ends]
+        return self
 
 
 def source_signature(path: Path, ds: DataStore, cfg: Config, *, catalog=None) -> str:
@@ -69,8 +99,11 @@ class CompletedSourceReader:
         source = catalog.sources[path.resolve()]
         view = catalog._resolve(source)
         boundary = view.boundaries[-1]["position"] if view.boundaries else 0
-        st, _ = catalog.inspect(path, project, min_chars=0, upto_position=boundary)
-        eligible = [e for e in view.local if e.position <= boundary]
+        recovery = self.cfg.recovery_ingestion
+        st, _ = catalog.inspect(path, project, min_chars=0,
+                                upto_position=None if recovery else boundary,
+                                allow_orphan=recovery)
+        eligible = [e for e in view.local if recovery or e.position <= boundary]
         extra = len(st.turns) - len(eligible) if st else 0  # inherited task context
         ends, kinds = [], []
         positions = [e.position for e in eligible]
@@ -81,12 +114,19 @@ class CompletedSourceReader:
                 kinds.append(closed["kind"])
         if st and st.turns and (not ends or ends[-1] != len(st.turns)):
             ends.append(len(st.turns))
-            kinds.append("assistant_message")
+            kinds.append("incomplete_snapshot" if recovery else "assistant_message")
         pending = (any(e.position > boundary for e in view.local) or
                    any(r.partial_record for r in view.revisions))
+        notes = []
+        if recovery and pending:
+            notes.append('Incomplete persisted history; no task completion is implied.')
+        if recovery and any(r.partial_record for r in view.revisions):
+            notes.append('An incomplete final record remains in the original source for later recovery.')
+        if recovery and st and st.n_user == 0:
+            notes.append('No user request is recoverable; available assistant/tool evidence is preserved without inventing one.')
         return ParsedSource(st, ends, kinds, view.revisions, pending,
                             source_signature(path, ds, self.cfg, catalog=catalog),
-                            sum(r.parsed_records for r in view.revisions))
+                            sum(r.parsed_records for r in view.revisions), notes)
 
     @staticmethod
     def _initial():
@@ -162,7 +202,7 @@ class CompletedSourceReader:
             if flavor == "claude":
                 records = state["records"]
             else:
-                messages = state["committed"] if state["has_commit"] else state["messages"]
+                messages = state["committed"] if state["has_commit"] and not self.cfg.recovery_ingestion else state["messages"]
                 records = [messages[k] for k in sorted(messages, key=int)]
         else:
             state = self._initial()
@@ -217,11 +257,25 @@ class CompletedSourceReader:
         eligible = ends[-1] if ends else 0
         pending = (eligible < len(st.turns) or any(r.partial_record for r in revisions)
                    or bool(flavor == "sidecar" and state["has_commit"] and state["uncommitted"]))
+        notes = []
+        if self.cfg.recovery_ingestion:
+            if eligible < len(st.turns):
+                ends.append(len(st.turns))
+                kinds.append('incomplete_snapshot')
+                eligible = len(st.turns)
+            if pending:
+                notes.append('Incomplete persisted history; no task completion is implied.')
+            if flavor == 'sidecar' and state['uncommitted']:
+                notes.append('Persisted messages lack a final commit; this is an uncommitted snapshot.')
+            if any(r.partial_record for r in revisions):
+                notes.append('An incomplete final record remains in the original source for later recovery.')
+            if st.turns and not st.n_user:
+                notes.append('No user request is recoverable; preserve available evidence without inventing one.')
         st.turns = st.turns[:eligible]
         times = [t.ts for t in st.turns if t.ts]
         st.started_at = min(times) if times else meta.get("createdAt")
         st.ended_at = max(times) if times else meta.get("updatedAt")
-        if not st.turns or not st.n_user:
+        if not st.turns or (not st.n_user and not self.cfg.recovery_ingestion):
             st = None
         return ParsedSource(st, ends, kinds, revisions, pending, source_signature(path, ds, self.cfg),
-                            sum(r.parsed_records for r in revisions))
+                            sum(r.parsed_records for r in revisions), notes)

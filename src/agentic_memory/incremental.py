@@ -15,7 +15,8 @@ from .checkpoints import DistillationCheckpoints
 from .distill import CallBudgetExceeded, DistillationPool, SESSION_SYSTEM, REDUCE_PROMPT
 from .ingest import IngestStats, _extractive_digest, _log, _refresh_aggregates, _session_rows
 from .readers import CompletedSourceReader, content_key, source_signature
-from .source_journal import SourceChanged
+from .source_journal import SourceChanged, SourceReadError
+from .codex import CodexParseError
 from .source_activity import require_quiet, SourceNotQuiet
 from .model_usage import source_namespace, guard_source_requests, check_source_admission
 from .source_schedule import SCAN_CURSOR, source_scan_order
@@ -136,8 +137,10 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             except OSError:
                 stats.deferred_active += 1
     fair_scan = limit is not None and session_ids is None and not retry_extractive
+    recovery = cfg.recovery_ingestion
+    scan_cursor = 'recovery:scan_cursor' if recovery else SCAN_CURSOR
     scan = source_scan_order(found, limit=limit if fair_scan else None,
-                             cursor=store.get_meta(SCAN_CURSOR),
+                             cursor=store.get_meta(scan_cursor),
                              known_paths={r[0] for r in store.db.execute('SELECT path FROM ingest_sources')},
                              now=time.time())
     stats.scanned = len(found)
@@ -158,7 +161,17 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
         stats.quiet_deferred += 1
 
     def source_guard(ds, path):
-        return partial(require_quiet, path, ds.type, cfg.quiet_seconds) if fair_scan and cfg.quiet_seconds else None
+        quiet = max(cfg.quiet_seconds, cfg.recovery_min_age_seconds) if recovery else cfg.quiet_seconds
+        return partial(require_quiet, path, ds.type, quiet) if (fair_scan or recovery) and quiet else None
+
+    def recovered_state(snapshot, signature):
+        return {'recovered_boundaries': snapshot.boundary_records(),
+                'recovery_notes': snapshot.recovery_notes,
+                'recovery_signature': signature, 'recovery_version': 1,
+                'recovery_only': False}
+
+    def read_source(ds, path, project, parent, state):
+        return reader.read(ds, path, project, parent).retain_boundaries(state.get('recovered_boundaries'))
 
     def work(snapshot, seed, pool, guard):
         if llm is None:
@@ -211,6 +224,16 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                     signature = None
                     try:
                         signature = content_key([source_signature(path, ds, cfg, catalog=reader.catalog if ds.type == 'codex' else None), policy])
+                        if recovery:
+                            if progress and state.get('recovery_signature') == signature and state.get('recovery_version') == 1:
+                                stats.unchanged += 1
+                                continue
+                            if progress and progress['status'] in {'indexed', 'shadowed', 'superseded'} and progress['observed_signature'] == signature:
+                                stats.unchanged += 1
+                                continue
+                        elif cfg.source_retry_backoff and not retry_extractive and progress and progress['observed_signature'] == signature and state.get('recovery_only'):
+                            stats.retries_deferred += 1
+                            continue
                         if known_id:
                             if known_id in seen_sessions and seen_sessions[known_id] != str(path):
                                 state['shadowed_by'] = seen_sessions[known_id]
@@ -219,7 +242,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 continue
                             seen_sessions[known_id] = str(path)
                         old_status = store.file_status(str(path))
-                        if (cfg.source_retry_backoff and progress and progress['status'] == 'error' and progress['observed_signature'] == signature
+                        if (not recovery and cfg.source_retry_backoff and progress and progress['status'] == 'error' and progress['observed_signature'] == signature
                                 and progress['retry_at'] > time.time() and not retry_extractive):
                             stats.retries_deferred += 1
                             continue
@@ -229,8 +252,9 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         if (progress and progress['status'] == 'held' and progress['observed_signature'] == signature
                                 and state.get('hold_signature') == hold_signature):
                             stats.unchanged += 1
+                            stats.recovery_held += recovery
                             continue
-                        if (progress and progress['observed_signature'] == signature
+                        if (not recovery and progress and progress['observed_signature'] == signature
                                 and progress['project'] == project
                                 and progress['status'] in {'indexed', 'pending_tail', 'trivial'} and not retry_extractive):
                             if progress['session_id']:
@@ -254,8 +278,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             # Persist before slow work so errors and restarts
                             # cannot keep the scan pinned to the same large file.
                             with store.write_transaction():
-                                store.set_meta(SCAN_CURSOR, str(path))
-                        snapshot = reader.read(ds, path, project, parent)
+                                store.set_meta(scan_cursor, str(path))
+                        snapshot = read_source(ds, path, project, parent, state)
                         if guard:
                             guard()  # a source can advance during a slow parse
                         stats.parsed_records += snapshot.parsed_records
@@ -265,12 +289,22 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             state['hold_signature'] = hold_signature
                             record(ds, path, project, signature, 'held', state, st.session_id,
                                    error='source content matches an operator export hold')
+                            stats.recovery_held += recovery
                             continue
                         if st is None:
                             prior = store.session_for_file(str(path))
                             if not snapshot.pending_tail and prior is not None:
+                                if recovery:
+                                    state.update(recovered_state(snapshot, signature))
+                                    state['recovery_only'] = True
+                                    state['recovery_notes'] = ['The current source lacks previously indexed activity; the last good memory and original source are preserved.']
+                                    record(ds, path, project, signature, 'retained_snapshot', state, prior['id'])
+                                    stats.preserved += 1
+                                    continue
                                 raise SourceChanged('previously indexed source now has no eligible activity')
                             status = 'pending_tail' if snapshot.pending_tail else 'trivial'
+                            if recovery:
+                                state.update(recovered_state(snapshot, signature))
                             record(ds, path, project, signature, status, state, prior['id'] if prior else None)
                             stats.preserved += prior is not None
                             if status == 'pending_tail':
@@ -291,9 +325,12 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         if (old and snapshot.pending_tail and
                                 (st.n_user < (old['n_user'] or 0) or st.n_assistant < (old['n_assistant'] or 0))):
                             stats.preserved += 1
+                            if recovery:
+                                state.update(recovered_state(snapshot, signature))
+                                state['recovery_notes'].append('Previously indexed activity is absent from this partial source; the last good memory is retained.')
                             record(ds, path, project, signature, 'pending_tail', state, st.session_id)
                             continue
-                        if st.content_chars < cfg.min_session_chars:
+                        if st.content_chars < cfg.min_session_chars and not recovery:
                             if old is not None:
                                 raise SourceChanged('previously indexed source became trivial')
                             record(ds, path, project, signature, 'trivial', state, st.session_id)
@@ -304,6 +341,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         if (not retry_extractive and state.get('policy') == policy and state.get('indexed_units') == keys and old is not None):
                             state.update(pending_tail=snapshot.pending_tail,
                                          revisions=[asdict(r) for r in snapshot.revisions])
+                            if recovery:
+                                state.update(recovered_state(snapshot, signature))
                             adopt(ds, path, project, signature, state, st, old, snapshot.pending_tail, known_status)
                             stats.unchanged += 1
                             continue
@@ -330,9 +369,13 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             state = {"policy": policy, "indexed_units": keys, "seed": seed,
                                      "pending_tail": snapshot.pending_tail, "revisions": [asdict(r) for r in snapshot.revisions],
                                      "boundary_kinds": snapshot.unit_kinds}
+                            if recovery:
+                                state.update(recovered_state(snapshot, signature))
                             adopt(ds, path, project, signature, state, st, old, snapshot.pending_tail, known_status)
                             stats.unchanged += 1
                             continue
+                        if recovery:
+                            state['recovery_only'] = True
                         record(ds, path, project, signature, 'processing', state, st.session_id)
                         future = coordinators.submit(work, snapshot, seed, pool, guard)
                         futures[future] = (ds, path, project, parent, snapshot, old, previous, state, seed, signature)
@@ -340,6 +383,9 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         defer_quiet(ds, path, project, state, known_id, exc)
                     except Exception as exc:
                         stats.errors += 1
+                        if isinstance(exc, (CodexParseError, SourceReadError, SourceChanged)):
+                            state['recovery_only'] = True
+                            state['error_class'] = 'source_format'
                         record(ds, path, project, signature, 'error', state, error=str(exc)[:500])
                         _log(f"[incremental] source failed: {path.name}: {exc}")
                 if not futures:
@@ -350,13 +396,16 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                     st = snapshot.transcript
                     try:
                         digest, status, calls, seed = future.result()
+                        if snapshot.recovery_notes:
+                            digest.outcome = '[Partial source recovery] ' + ' '.join(snapshot.recovery_notes) + '\n' + digest.outcome
                         rows = _session_rows(st, digest, cfg.chunk_chars)
                         with guard_source_requests(source_guard(ds, path)):
                             stats.embedded_passages += _embed_changed(rows, previous, cache, embedder)
                         # Re-read through the same journal after slow provider
                         # work. Appends can advance the tail; earlier semantic
                         # units (including repair/fork changes) must still match.
-                        current = reader.read(ds, path, project, parent)
+                        current = read_source(ds, path, project, parent,
+                                              {'recovered_boundaries': snapshot.boundary_records()} if recovery or state.get('recovered_boundaries') else state)
                         stats.parsed_records += current.parsed_records
                         keys = snapshot.unit_keys()
                         if (current.transcript is None or current.unit_keys()[:len(keys)] != keys
@@ -370,6 +419,12 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                        "boundary_kinds": snapshot.unit_kinds,
                                        "indexed_through_at": st.ended_at, "revisions": [asdict(r) for r in snapshot.revisions],
                                        "request_keys": sorted(calls.keys) if calls else []}
+                        if recovery or state.get('recovered_boundaries'):
+                            publication.update(recovered_state(snapshot, signature))
+                            # Only a full nightly read certifies recovery of the
+                            # latest raw tail; a daytime completed-prefix read cannot.
+                            if not recovery:
+                                publication['recovery_signature'] = state.get('recovery_signature')
                         with store.write_transaction():
                             store.upsert_session(id=st.session_id, project=st.project, cwd=st.cwd, git_branch=st.git_branch,
                                                  title=digest.title, summary=digest.summary, outcome=digest.outcome,
@@ -401,6 +456,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         else:
                             stats.distilled += 1
                             stats.fallback += status == 'fallback'
+                        stats.recovered_partial += bool(recovery and snapshot.recovery_notes)
                         _log(f"[incremental] {st.session_id}: published {len(keys)} units ({status}); pending_tail={pending}")
                     except SourceNotQuiet as exc:
                         defer_quiet(ds, path, project, state, st.session_id, exc)
@@ -446,6 +502,16 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             store.set_meta('incremental:last_cache_prune', str(now))
     stats.aggregates_pending = len(store.pending_aggregates(float('inf')))
     stats.source_reads = attempted
+    selected = {str(row[2]) for row in found}
+    for row in store.db.execute('SELECT path,status,state FROM ingest_sources'):
+        state = json.loads(row['state'])
+        if row['path'] not in selected:
+            stats.recovery_unavailable += recovery and not Path(row['path']).exists()
+            continue
+        if row['status'] in {'pending_work', 'budget_pending', 'source_changed', 'processing'}:
+            stats.sources_pending += not state.get('recovery_only')
+        if row['status'] in {'error', 'held', 'budget_pending'} or (row['status'] == 'pending_tail' and not state.get('recovery_signature')):
+            stats.recovery_pending += 1
     stats.duration_seconds = round(time.monotonic() - started, 3)
     store.commit()
     return stats

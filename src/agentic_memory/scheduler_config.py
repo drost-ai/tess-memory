@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 import re
 import tomllib
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -20,6 +22,18 @@ class ScheduledStore:
     aggregate_calls_per_run: int = 4
     workers: int | None = None
     hold_text_file: Path | None = None
+    recovery_hour: int | None = None  # opt in to one bounded nightly recovery pass
+    recovery_timezone: str = 'America/Los_Angeles'
+    recovery_sources_per_run: int = 256
+    recovery_model_calls_per_run: int = 128
+    recovery_min_age_seconds: float = 900
+
+    def next_recovery(self, after: float) -> float:
+        local = datetime.fromtimestamp(after, ZoneInfo(self.recovery_timezone))
+        candidate = local.replace(hour=self.recovery_hour, minute=0, second=0, microsecond=0)
+        if candidate.timestamp() <= after:
+            candidate += timedelta(days=1)
+        return candidate.timestamp()
 
 
 @dataclass(frozen=True)
@@ -81,11 +95,15 @@ def load_service(path: Path) -> ServiceConfig:
             p = Path(values['hold_text_file']).expanduser()
             values['hold_text_file'] = p.resolve() if p.is_absolute() else (path.parent / p).resolve()
         store = ScheduledStore(**values)
-        for key in ('poll_seconds', 'profile_seconds', 'digest_seconds', 'sources_per_run', 'model_calls_per_run', 'aggregate_calls_per_run'):
+        if store.recovery_hour is not None and (isinstance(store.recovery_hour, bool)
+                or not isinstance(store.recovery_hour, int) or not 0 <= store.recovery_hour <= 23):
+            raise ValueError('recovery_hour must be an hour from 0 to 23')
+        ZoneInfo(store.recovery_timezone)
+        for key in ('poll_seconds', 'profile_seconds', 'digest_seconds', 'sources_per_run', 'model_calls_per_run', 'aggregate_calls_per_run', 'recovery_min_age_seconds'):
             value = getattr(store, key)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 < value < float('inf'):
                 raise ValueError(f'{key} must be positive and finite')
-        for key in ('sources_per_run', 'model_calls_per_run', 'aggregate_calls_per_run', 'workers'):
+        for key in ('sources_per_run', 'model_calls_per_run', 'aggregate_calls_per_run', 'workers', 'recovery_sources_per_run', 'recovery_model_calls_per_run'):
             value = getattr(store, key)
             if value is not None and (isinstance(value, bool) or not isinstance(value, int) or value < 1):
                 raise ValueError(f'{key} must be a positive integer')
