@@ -121,3 +121,15 @@ class AutobiographyTests(unittest.TestCase):
         self.store.db.execute("UPDATE autobio_meta SET value='999' WHERE key='version'")
         with self.assertRaises(PersonalError):AutobiographyStore(self.path,self.principal)
         self.assertEqual(self.store.get(self.store.list_records()['records'][0]['id'])['revision'],1)
+
+    def test_seed_import_requires_preview_and_is_inherited_retired_and_idempotent(self):
+        from agentic_memory.autobiography_import import preview_seeds,import_seeds
+        file=self.path.parent/'self.md';file.write_text('An inherited identity claim.')
+        files={'Self':str(file)};preview=preview_seeds(files)
+        operator=AutobiographyStore(self.path,replace(self.principal,role='operator'));self.addCleanup(operator.close)
+        receipt=import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='seed')
+        self.assertEqual(receipt,import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='seed'))
+        record=operator.get(receipt['edits'][0]['record_id'])
+        self.assertEqual((record['state'],record['origin'],record['attribution']),('retired','import','inherited'))
+        file.write_text('Changed after preview')
+        with self.assertRaises(PersonalError):import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='changed')
