@@ -25,6 +25,11 @@ class PersonalConfig:
     model_calls: int = 8
     max_seconds: int = 300
     lease_seconds: int = 600
+    extraction_interval: int = 300
+    daily_model_calls: int = 32
+    daily_token_budget: int = 500000
+    max_output_tokens: int = 4096
+    service_config: str | None = None
 
     def principal(self, *, role=None, session_id=None):
         if not self.enabled:
@@ -45,7 +50,7 @@ class PersonalConfig:
                     raise ValueError(f'personal.{key} must be a string array')
                 values[key]=tuple(values[key])
         result=cls(**values)
-        for key in ['context_budget','max_candidates','max_edits','model_calls','max_seconds','lease_seconds']:
+        for key in ['context_budget','max_candidates','max_edits','model_calls','max_seconds','lease_seconds','extraction_interval','daily_model_calls','daily_token_budget','max_output_tokens']:
             if type(getattr(result,key)) is not int or getattr(result,key)<=0:
                 raise ValueError(f'personal.{key} must be a positive integer')
         if not 256<=result.context_budget<=64000 or result.max_candidates>100 or result.max_edits>32:

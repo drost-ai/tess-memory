@@ -14,6 +14,8 @@ def preview_seeds(files):
         if not path.is_file() or path.stat().st_size>MAX_BODY:
             raise PersonalError('invalid','seed must be a bounded regular Markdown file')
         data=path.read_bytes();body=data.decode('utf-8')
+        from .personal_privacy import require_no_credentials
+        require_no_credentials(body)
         if not body.strip():raise PersonalError('invalid','seed body is empty')
         records.append({'segment':segment,'path':str(path),'body':body,
                         'source_id':'import:'+hashlib.sha256(str(path).encode()).hexdigest(),
@@ -42,6 +44,7 @@ def import_seeds(store,files,*,preview_hash,idempotency_key,activate=False):
             edits.append(store._write({'expected_revision':0,'segment':seed['segment'],'title':'Inherited '+seed['segment'],
                 'body':seed['body'],'reason':'Explicit previewed seed import; current claims remain subject to review.',
                 'attribution':'inherited','evidence':[evidence],'state':'active' if activate else 'retired'},commit_id,'import'))
+        store.validate_core_budget()
         receipt={'commit_id':commit_id,'edits':edits,'committed_at':store.clock(),'origin':'import'}
         store.db.execute('INSERT INTO autobio_commits VALUES(?,?,?,?,?,?,?)',
             (commit_id,p.owner,p.agent,store._request_key(idempotency_key),payload_hash,canonical(receipt),store.clock()))

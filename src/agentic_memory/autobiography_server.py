@@ -11,10 +11,18 @@ def register_personal_tools(server, config, *, principal=None):
     if (bound.owner,bound.agent,bound.audience)!=(config.personal.owner,config.personal.agent,config.personal.audience):
         raise PersonalError('forbidden','configured personal scope unavailable')
     opened=[]
+    operation_services=[]
     def store():
         if not opened:
-            opened.append(AutobiographyStore(config.db_path,bound))
+            opened.append(AutobiographyStore(config.db_path,bound,context_budget=config.personal.context_budget))
         return opened[0]
+    def operations():
+        if not operation_services:
+            import atexit
+            from .personal_operations import PersonalOperations
+            operation_services.append(PersonalOperations(config,store()))
+            atexit.register(operation_services[0].close)
+        return operation_services[0]
     def expose(fn):
         @wraps(fn)
         def operation(*args,**kwargs):
@@ -60,9 +68,10 @@ def register_personal_tools(server, config, *, principal=None):
             return PersonalExtraction(config,store()).prepare(limit=limit)
 
         @expose
-        def autobiography_extraction_publish(part_id: str, candidates: list[dict]) -> dict:
+        def autobiography_extraction_publish(part_id: str, candidates: list[dict], operation_id: str | None=None, operation_fence: int | None=None) -> dict:
             """Service operation: atomically publish source-grounded candidates and extraction progress."""
             from .autobiography_extract import PersonalExtraction
+            if bound.role=='extractor':operations()._operation(operation_id,operation_fence)
             return PersonalExtraction(config,store()).publish(part_id,candidates)
 
         @expose
@@ -71,6 +80,38 @@ def register_personal_tools(server, config, *, principal=None):
             from .autobiography_inbox import PersonalInbox
             PersonalInbox(store()).fail(part_id,code)
             return {'retained':True}
+
+    if bound.role in ('extractor','dream','operator'):
+        @expose
+        def autobiography_operation_claim(kind: str, manual: bool=False) -> dict:
+            """Service operation: claim a due personal job without overlapping another worker."""
+            return operations().claim(kind,manual=manual)
+
+        @expose
+        def autobiography_operation_finish(operation_id: str, fence: int, outcome: str='completed', result: dict | None=None) -> dict:
+            """Service operation: persist outcome and the next scheduled time."""
+            return operations().finish(operation_id,fence,outcome=outcome,result=result)
+
+        @expose
+        def autobiography_operation_status() -> dict:
+            """Service operation: read the schedule and conservative usage reservations."""
+            return operations().status()
+
+        @expose
+        def autobiography_model_reserve(operation_id: str, fence: int, work_id: str, identity: str, provider: str, model: str,
+                                        system: str, prompt: str, input_units: int, slots: int=1) -> dict:
+            """Service operation: enforce daily/job/provider admission or reuse an exact response checkpoint."""
+            return operations().reserve(operation_id,fence,work_id=work_id,identity=identity,provider=provider,model=model,system=system,prompt=prompt,input_units=input_units,slots=slots)
+
+        @expose
+        def autobiography_model_complete(operation_id: str, fence: int, request_id: str, response: dict | None=None, usage: dict | None=None, error: str | None=None) -> dict:
+            """Service operation: retain the paid result before subsequent publication or cleanup."""
+            return operations().complete_model(operation_id,fence,request_id,response=response,usage=usage,error=error)
+
+        @expose
+        def autobiography_model_reject(operation_id: str, fence: int, cache_key: str, code: str) -> dict:
+            """Service operation: invalidate a structurally rejected proposal without replaying it forever."""
+            return operations().reject_cache(operation_id,fence,cache_key,code)
 
     if bound.role in ('dream','operator'):
         @expose
@@ -133,7 +174,9 @@ def main():
     parser.add_argument('--settings',type=Path,required=True)
     parser.add_argument('--role',choices=['reader','author','extractor','dream','operator'])
     parser.add_argument('--session',default=None)
-    parser.add_argument('action',choices=['serve','export','status','preview-import','import','erase','restore'],default='serve',nargs='?')
+    parser.add_argument('action',choices=['serve','export','status','operations','retry','preview-import','import','erase','restore'],default='serve',nargs='?')
+    parser.add_argument('--kind',choices=['candidate','part','source'])
+    parser.add_argument('--target')
     parser.add_argument('--manifest',type=Path)
     parser.add_argument('--preview-hash')
     parser.add_argument('--key')
@@ -150,9 +193,18 @@ def main():
         register_personal_tools(server,cfg,principal=principal)
         server.run(transport='stdio')
     else:
-        store=AutobiographyStore(cfg.db_path,principal)
+        store=AutobiographyStore(cfg.db_path,principal,context_budget=cfg.personal.context_budget)
         try:
-            if args.action in ('preview-import','import'):
+            if args.action=='operations':
+                from .personal_operations import PersonalOperations
+                principal.require('operator')
+                ops=PersonalOperations(cfg,store)
+                try:result=ops.status()
+                finally:ops.close()
+            elif args.action=='retry':
+                from .personal_recovery import retry_failed
+                result=retry_failed(cfg,store,kind=args.kind,target=args.target,reason=args.reason)
+            elif args.action in ('preview-import','import'):
                 from .autobiography_import import preview_seeds,import_seeds
                 principal.require('operator')
                 if args.manifest is None:parser.error('--manifest is required')

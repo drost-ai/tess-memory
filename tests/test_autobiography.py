@@ -41,6 +41,13 @@ class AutobiographyTests(unittest.TestCase):
         with self.assertRaisesRegex(PersonalError,'different request'):self.create(body='Different content')
         self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM autobio_revisions').fetchone()[0],1)
 
+    def test_credentials_and_oversized_mandatory_core_cannot_strand_next_session(self):
+        for text,code in [('sk-'+'A'*24,'sensitive_content'),('x'*7000,'context_overflow')]:
+            with self.assertRaises(PersonalError) as error:self.create(body=text)
+            self.assertEqual(error.exception.code,code)
+            self.assertEqual(self.store.list_records()['records'],[])
+        self.create()
+
     def test_concurrent_stale_writer_cannot_overwrite_or_publish_partial_transaction(self):
         record_id=self.create()['edits'][0]['record_id']
         other=AutobiographyStore(self.path,replace(self.principal,session_id='root-2'));self.addCleanup(other.close)

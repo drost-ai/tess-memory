@@ -160,7 +160,7 @@ class AgentCoreBackend:
             observer.configured(config)
         session = await self._resolve_session({}, config, {"cwd": cwd, "originalCwd": cwd})
         runtime = await self._bootstrap_runtime(
-            {"session": session, "config": config, "cwd": cwd}
+            {"session": session, "config": config, "cwd": cwd, "detectWorkspaceIntegrations": False}
         )
         result = None
         try:
@@ -174,7 +174,7 @@ class AgentCoreBackend:
                     runtime['emitEvent'](event, data)
             bindings = self._create_bindings(
                 {
-                    "tools": runtime["tools"],
+                    "tools": [],
                     "emitEvent": emit,
                     "streamProviderMessages": bool(observer and config.get('provider') == 'openai'),
                     "daemon": {"state": "connected", "client": daemon}
@@ -186,7 +186,7 @@ class AgentCoreBackend:
                             "message": "No task supervisor daemon in embedded runs.",
                         },
                     },
-                    "refreshMcpToolRegistry": runtime["refreshMcpToolRegistry"],
+                    "refreshMcpToolRegistry": lambda: [],
                     "sessionBinding": runtime["getActiveBinding"](),
                     "questionPolicy": {
                         "interactive": False,

@@ -24,6 +24,8 @@ CREATE TABLE IF NOT EXISTS autobio_baseline_paths(path TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS autobio_source_errors(
  path TEXT PRIMARY KEY, signature TEXT NOT NULL, attempts INTEGER NOT NULL, state TEXT NOT NULL,
  retry_after REAL NOT NULL, error TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS autobio_model_errors(
+ id TEXT PRIMARY KEY,source_id TEXT NOT NULL,result TEXT NOT NULL,error TEXT NOT NULL,created REAL NOT NULL);
 '''
 
 
@@ -54,6 +56,8 @@ class PersonalInbox:
                 raise PersonalError('stale_source','source evidence changed or was suppressed')
             metadata=json.loads(source['metadata']);made=[]
             for proposal in proposals:
+                from .personal_privacy import require_no_credentials
+                require_no_credentials(canonical(proposal))
                 if not isinstance(proposal,dict) or set(proposal)-{'segment','title','body','attribution','quote','target_record_id'}:
                     raise PersonalError('invalid','invalid candidate fields')
                 if proposal.get('segment') not in SEGMENTS or proposal.get('attribution') not in ATTRIBUTIONS:
@@ -71,11 +75,14 @@ class PersonalInbox:
                 evidence=[{'source_id':source['id'],'generation':source['generation'],'start':start,'end':end,'attribution':proposal['attribution']}]
                 s._evidence(evidence)
                 key=digest([source['id'],source['generation'],start,end,proposal,1])
+                stored_proposal=dict(proposal)
+                stamp=next((r.get('source_event_time') for r in metadata.get('roles',[]) if r['start']<=start and r['end']>=end),None)
+                if stamp:stored_proposal['source_event_time']=stamp
                 cid=uuid.uuid4().hex
                 changed=s.db.execute('''INSERT OR IGNORE INTO autobio_candidates
                     (id,owner,agent,audience,source_id,generation,proposal,evidence,dedupe,state,created,updated)
                     VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?)''',
-                    (cid,p.owner,p.agent,p.audience,source['id'],source['generation'],canonical(proposal),canonical(evidence),key,s.clock(),s.clock())).rowcount
+                    (cid,p.owner,p.agent,p.audience,source['id'],source['generation'],canonical(stored_proposal),canonical(evidence),key,s.clock(),s.clock())).rowcount
                 if changed:made.append(cid)
             receipt={'published':True,'candidate_ids':made}
             s.db.execute("UPDATE autobio_extraction_parts SET state='published',result=?,receipt=?,updated=? WHERE id=?",
@@ -90,6 +97,10 @@ class PersonalInbox:
                 WHERE part.id=? AND src.owner=? AND src.agent=? AND src.audience=?''',(part_id,p.owner,p.agent,p.audience)).fetchone()
             if not row:raise PersonalError('not_found','source part unavailable')
             if row['state'] in ('published','stale'):return
+            if code in ('invalid','invalid_evidence','idempotency_mismatch','sensitive_content') and self.store.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_model_work'").fetchone():
+                for cached in self.store.db.execute('''SELECT c.* FROM autobio_model_cache c JOIN autobio_model_work w ON w.cache_key=c.id WHERE w.work_id=?''',(part_id,)).fetchall():
+                    self.store.db.execute('INSERT OR IGNORE INTO autobio_model_errors VALUES(?,?,?,?,?)',(cached['id'],cached['source_id'],cached['result'],code,self.store.clock()))
+                    self.store.db.execute('DELETE FROM autobio_model_cache WHERE id=?',(cached['id'],))
             attempts=row[0]+1
             self.store.db.execute('UPDATE autobio_extraction_parts SET attempts=?,state=?,retry_after=?,error=?,updated=? WHERE id=?',
                 (attempts,'failed' if attempts>=3 else 'pending',self.store.clock()+min(86400,300*2**attempts),str(code)[:120],self.store.clock(),part_id))

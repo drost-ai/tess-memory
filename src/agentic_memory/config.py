@@ -101,7 +101,6 @@ class CodexSettings:
 
 @dataclass
 class Config:
-    personal: PersonalConfig = field(default_factory=PersonalConfig)
     # -- data stores ---------------------------------------------------------
     data_stores: list[DataStore] = field(default_factory=_default_stores)
     codex: CodexSettings = field(default_factory=CodexSettings)
@@ -192,6 +191,7 @@ class Config:
     chunk_neighbor_chars: int = 1_000    # context added around an expanded chunk hit
     vector_cache_bytes: int = 64 * 1024 * 1024
     vector_batch_rows: int = 512
+    personal: PersonalConfig = field(default_factory=PersonalConfig)
 
     @property
     def db_path(self) -> Path:

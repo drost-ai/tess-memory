@@ -94,8 +94,9 @@ CREATE TABLE IF NOT EXISTS autobio_erasure_receipts(
 
 class AutobiographyStore:
     """One configured owner/agent scope; callers cannot override it in tool input."""
-    def __init__(self, path: Path, principal: PersonalPrincipal, *, clock=time.time):
+    def __init__(self, path: Path, principal: PersonalPrincipal, *, clock=time.time, context_budget=6000):
         self.path, self.principal, self.clock = Path(path), principal, clock
+        self.context_budget=context_budget
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.touch(mode=0o600, exist_ok=True)
         self.db = sqlite3.connect(self.path, timeout=10, isolation_level=None, check_same_thread=False)
@@ -241,6 +242,8 @@ class AutobiographyStore:
             raise PersonalError('invalid','a bounded revision reason is required')
         if not isinstance(title,str) or not title.strip() or len(title)>200:
             raise PersonalError('invalid','a bounded title is required')
+        from .personal_privacy import require_no_credentials
+        require_no_credentials(body+'\n'+title+'\n'+reason)
         attribution=edit.get('attribution','agent_reflection')
         if attribution not in ATTRIBUTIONS:
             raise PersonalError('invalid','unknown attribution')
@@ -296,6 +299,10 @@ class AutobiographyStore:
         identifier(request_key,'idempotency key')
         return digest([self.principal.audience,request_key])
 
+    def validate_core_budget(self):
+        from .autobiography_context import personal_context
+        personal_context(self,budget=self.context_budget)
+
     def update(self, *, idempotency_key, **edit):
         self.principal.require('author','operator')
         payload_hash=digest({'edit':edit,'actor':vars(self.principal),'origin':'interactive'})
@@ -304,6 +311,7 @@ class AutobiographyStore:
             if receipt:return receipt
             commit_id=uuid.uuid4().hex
             revision=self._write(edit,commit_id,'interactive')
+            self.validate_core_budget()
             receipt={'commit_id':commit_id,'edits':[revision],'committed_at':self.clock()}
             p=self.principal
             self.db.execute('INSERT INTO autobio_commits VALUES(?,?,?,?,?,?,?)',
@@ -374,10 +382,15 @@ class AutobiographyStore:
                     self.db.execute('DELETE FROM autobio_candidates WHERE source_id=? AND owner=? AND agent=?',(source,p.owner,p.agent))
                     self.db.execute('DELETE FROM autobio_extraction_parts WHERE source_id=?',(source,))
                     self.db.execute('DELETE FROM autobio_model_cache WHERE source_id=?',(source,))
+                    if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_model_errors'").fetchone():
+                        self.db.execute('DELETE FROM autobio_model_errors WHERE source_id=?',(source,))
                 self.db.execute('DELETE FROM autobio_sources WHERE id=? AND owner=? AND agent=?',(source,p.owner,p.agent))
             if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_model_cache'").fetchone():
                 for cached in self.db.execute('SELECT id,record_ids FROM autobio_model_cache').fetchall():
                     if record_id in json.loads(cached['record_ids']):self.db.execute('DELETE FROM autobio_model_cache WHERE id=?',(cached['id'],))
+                if 'source_ids' in {r[1] for r in self.db.execute('PRAGMA table_info(autobio_model_cache)')}:
+                    for cached in self.db.execute('SELECT id,source_ids FROM autobio_model_cache').fetchall():
+                        if sources.intersection(json.loads(cached['source_ids'])):self.db.execute('DELETE FROM autobio_model_cache WHERE id=?',(cached['id'],))
             if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_shadow_proposals'").fetchone():
                 for row in self.db.execute('SELECT id,context_manifest FROM autobio_cycles').fetchall():
                     if record_id in {r['record_id'] for r in json.loads(row['context_manifest']).get('records',[])}:

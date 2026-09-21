@@ -21,7 +21,8 @@ def personal_context(store, *, budget=6000, subjects=()):
         text=preamble
         for row in mandatory+optional:
             record=store._get(row['id'])
-            part=f"\n## {record['segment']}: {record['title']}\n{record['body']}\n"
+            availability='missing_or_changed' if record['evidence'] and not all(record['evidence_availability']) else 'available' if record['evidence'] else 'self_authored'
+            part=f"\n## {record['segment']}: {record['title']}\n[attribution: {record['attribution']}; evidence: {availability}; revision: {record['revision']}]\n{record['body']}\n"
             if len((text+part+suffix).encode())>budget:
                 if row['segment'] in ('Self','Principles'):
                     raise PersonalError('context_overflow','mandatory personal core exceeds the supplied budget; request a larger budget or author a compact core')
@@ -29,7 +30,7 @@ def personal_context(store, *, budget=6000, subjects=()):
                 continue
             text+=part
             selected.append({'record_id':row['id'],'revision':record['revision'],'segment':record['segment'],
-                             'subject':record['subject'],'attribution':record['attribution']})
+                             'subject':record['subject'],'attribution':record['attribution'],'evidence_status':availability})
         missing=[s for s in ('Self','Principles') if s not in {r['segment'] for r in mandatory}]
         manifest={'scope':[principal.owner,principal.agent],'audience':principal.audience,'records':selected,
                   'missing_core':missing,'omissions':omitted,'generated_at':store.clock(),

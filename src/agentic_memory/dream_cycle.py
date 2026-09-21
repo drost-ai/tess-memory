@@ -168,12 +168,14 @@ class DreamCycle:
                 s.db.execute('SAVEPOINT shadow_validation')
                 try:
                     for edit in prepared:s._write(edit,commit_id,'dream_cycle')
+                    s.validate_core_budget()
                 finally:
                     s.db.execute('ROLLBACK TO shadow_validation');s.db.execute('RELEASE shadow_validation')
                 s.db.execute('INSERT INTO autobio_shadow_proposals VALUES(?,?,?)',(commit_id,cycle_id,canonical({'edits':prepared,'outcomes':outcomes})))
                 receipt={'commit_id':commit_id,'cycle_id':cycle_id,'shadow':True,'proposed_edits':len(edits),'proposed_outcomes':len(outcomes),'edits':[],'committed_at':s.clock()}
             else:
                 revisions=[s._write(edit,commit_id,'dream_cycle') for edit in prepared]
+                s.validate_core_budget()
                 for outcome in outcomes:
                     cid=outcome['candidate_id'];action=outcome['action'];attempts=pending[cid]['attempts']+1
                     review_after=outcome.get('review_after',s.clock()+86400)
@@ -208,7 +210,14 @@ class DreamCycle:
             journal=json.loads(cycle['journal']);journal['remaining']=remaining
             if error:journal['error']=str(error)[:120]
             s.db.execute('UPDATE autobio_cycles SET state=?,updated=?,journal=? WHERE id=?',(status,s.clock(),canonical(journal),cycle_id))
-            s.db.execute("UPDATE autobio_candidates SET state='pending',cycle_id=NULL,fence=NULL,lease_until=NULL WHERE cycle_id=? AND state='claimed'",(cycle_id,))
+            if error in ('invalid','invalid_evidence','context_overflow','idempotency_mismatch','sensitive_content'):
+                # Rejected model proposals cannot consume the same allowance
+                # every night forever. Keep the evidence in a visible dead letter.
+                s.db.execute("""UPDATE autobio_candidates SET state=CASE WHEN attempts+1>=3 THEN 'failed' ELSE 'deferred' END,
+                    attempts=attempts+1,review_after=?,disposition=?,cycle_id=NULL,fence=NULL,lease_until=NULL,updated=?
+                    WHERE cycle_id=? AND state='claimed'""",(s.clock()+86400,str(error),s.clock(),cycle_id))
+            else:
+                s.db.execute("UPDATE autobio_candidates SET state='pending',cycle_id=NULL,fence=NULL,lease_until=NULL WHERE cycle_id=? AND state='claimed'",(cycle_id,))
             return {'cycle_id':cycle_id,'status':status,'journal':journal}
 
     def status(self,limit=10):

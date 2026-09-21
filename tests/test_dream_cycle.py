@@ -97,6 +97,21 @@ class DreamTests(unittest.TestCase):
         self.assertEqual(result['journal']['commits'],[receipt['commit_id']])
         self.assertEqual(self.store.get(receipt['edits'][0]['record_id'])['revision'],1)
 
+    def test_repeated_invalid_proposals_are_retained_for_explicit_recovery(self):
+        for _ in range(3):
+            cycle=self.dream.prepare()
+            self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'],status='failed',error='invalid')
+            self.now[0]+=86401
+        self.assertEqual(self.dream.prepare()['status'],'completed_no_change')
+        failed=PersonalInbox(self.store).list(state='failed')['candidates']
+        self.assertEqual(failed[0]['id'],self.cid)
+        self.assertEqual(failed[0]['attempts'],3)
+        from agentic_memory.personal_recovery import retry_failed
+        operator=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='operator'))
+        self.addCleanup(operator.close)
+        retry_failed(self.cfg,operator,kind='candidate',target=self.cid,reason='Fixed proposal schema.')
+        self.assertEqual(self.dream.prepare()['candidates'][0]['id'],self.cid)
+
     def test_dream_can_autonomously_author_every_segment_including_core_commitments(self):
         from agentic_memory.autobiography import SEGMENTS
         cycle=self.dream.prepare()

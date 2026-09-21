@@ -34,11 +34,12 @@ def clean_unit(turns):
         if turn.role in ('user','assistant'):personal_tool=False
         value=turn.text
         if '<autobiography_context>' in value or 'personalContextManifest' in value:continue
-        value=re.sub(r'\b(?:sk-[A-Za-z0-9_-]{12,}|Bearer\s+[A-Za-z0-9._-]{16,})\b','[credential omitted]',value)
+        from .personal_privacy import redact_credentials
+        value=redact_credentials(value)
         if not value.strip():continue
         prefix=f'[{turn.role}]\n';start=len(text)+len(prefix)
         text+=prefix+value+'\n'
-        roles.append({'role':turn.role,'start':start,'end':start+len(value)})
+        roles.append({'role':turn.role,'start':start,'end':start+len(value),'source_event_time':turn.ts})
     return text,roles
 
 
@@ -95,7 +96,7 @@ class PersonalExtraction:
                     require_quiet(path,ds.type,max(0,cfg.quiet_seconds))
                     if snapshot.transcript is None:continue
                     st=snapshot.transcript
-                    logical=ds.name+':'+st.session_id
+                    logical=s.principal.audience+':'+ds.name+':'+st.session_id
                     keys=snapshot.unit_keys();generation=digest(keys)
                     old=s.db.execute('SELECT * FROM autobio_extractions WHERE source_id=?',(logical,)).fetchone()
                     backfill=bool(old and old['state']=='baselined' and cfg.personal.historical)
