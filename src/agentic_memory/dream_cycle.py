@@ -32,6 +32,13 @@ A merged no-change outcome may instead provide existing_revisions [{"record_id":
 Deferred outcomes may provide review_after (UTC epoch seconds). Do not claim edits were saved; storage validates and commits them.
 Only use supplied candidate/record/evidence IDs or IDs retrieved through the authorized memory tools.'''
 
+INITIALIZE_SYSTEM='''\nThis is a deliberate first-use core initialization, not historical extraction.
+Author only the missing Self and/or Principles segments from your current understanding and inherited identity context.
+Use concise original agent_reflection attribution. Distinguish inherited identity, intentions and beliefs from verified
+runtime capabilities. Preserve uncertainty; do not invent shared history or turn speculative ambitions into achievements.
+Do not copy long inherited documents. Keep each body under 2000 UTF-8 bytes. Existing authored segments must remain intact.
+Return edits for the missing core segments and an empty outcomes array. No human approval or acknowledgment is needed.'''
+
 
 class DreamCycle:
     def __init__(self,config,store):
@@ -58,7 +65,7 @@ class DreamCycle:
             raise PersonalError('fenced','cycle publication lease is no longer current')
         return row
 
-    def prepare(self,*,deadline=None):
+    def prepare(self,*,deadline=None,initialize=False):
         s=self.store;p=s.principal;p.require('dream','operator')
         cfg=self.config.personal
         if not cfg.enabled or not cfg.dream_enabled:return {'status':'disabled'}
@@ -66,6 +73,8 @@ class DreamCycle:
         with s.transaction():
             now=s.clock()
             context=personal_context(s,budget=cfg.context_budget,subjects=cfg.context_subjects)
+            if initialize and not context['manifest']['missing_core']:
+                return {'status':'already_initialized','manifest':context['manifest']}
             old=s.db.execute("SELECT * FROM autobio_cycles WHERE owner=? AND agent=? AND state='running'",(p.owner,p.agent)).fetchone()
             if old and old['lease_until']>now and old['deadline']>now:
                 return {'status':'busy'}
@@ -80,7 +89,7 @@ class DreamCycle:
             candidates=[];chars=len(context['text'])
             rows=s.db.execute('''SELECT * FROM autobio_candidates WHERE owner=? AND agent=? AND audience=? AND created<=?
                 AND (state='pending' OR (state='deferred' AND review_after<=?)) ORDER BY created,id LIMIT ?''',
-                (p.owner,p.agent,p.audience,now,now,cfg.max_candidates*4)).fetchall()
+                (p.owner,p.agent,p.audience,now,now,0 if initialize else cfg.max_candidates*4)).fetchall()
             for row in rows:
                 evidence=json.loads(row['evidence'])
                 if not all(s.evidence_available(e) for e in evidence):
@@ -98,15 +107,15 @@ class DreamCycle:
                 candidates.append(value);chars+=size
                 s.db.execute("UPDATE autobio_candidates SET state='claimed',cycle_id=?,fence=?,lease_until=?,updated=? WHERE id=?",
                     (cycle_id,fence,lease_until,now,row['id']))
-            status='running' if candidates else 'completed_no_change'
-            journal={'claimed':len(candidates),'commits':[],'outcomes':{},'shadow':cfg.shadow}
+            status='running' if candidates or initialize else 'completed_no_change'
+            journal={'claimed':len(candidates),'commits':[],'outcomes':{},'shadow':cfg.shadow,'initialization':initialize}
             s.db.execute('''INSERT INTO autobio_cycles
                 (id,owner,agent,audience,actor_session,state,fence,lease_token,lease_until,cutoff,started,deadline,updated,read_heads,context_manifest,journal,shadow)
                 VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)''',
                 (cycle_id,p.owner,p.agent,p.audience,p.session_id,status,fence,token,lease_until,now,now,deadline,now,
                  canonical(self._heads()),canonical(context['manifest']),canonical(journal),int(cfg.shadow)))
             return {'status':status,'cycle_id':cycle_id,'fence':fence,'lease_token':token,'deadline':deadline,
-                    'system':DREAM_SYSTEM,'core':context,'candidates':candidates,'shadow':cfg.shadow,
+                    'system':DREAM_SYSTEM+(INITIALIZE_SYSTEM if initialize else ''),'core':context,'candidates':candidates,'shadow':cfg.shadow,
                     'limits':{'edits':cfg.max_edits,'model_calls':cfg.model_calls,'seconds':cfg.max_seconds}}
 
     def renew(self,cycle_id,fence,lease_token):
@@ -128,6 +137,10 @@ class DreamCycle:
             receipt=s._receipt(idempotency_key,payload_hash)
             if receipt:return receipt
             cycle=self._cycle(cycle_id,fence,lease_token)
+            if json.loads(cycle['journal']).get('initialization'):
+                missing=set(json.loads(cycle['context_manifest'])['missing_core'])
+                if outcomes or any(not isinstance(e,dict) or e.get('segment') not in missing or e.get('record_id') or e.get('expected_revision')!=0 for e in edits):
+                    raise PersonalError('invalid','initialization can only author missing core segments')
             if self._heads()!=json.loads(cycle['read_heads']):
                 raise PersonalError('conflict','autobiography changed during reflection; reread and reconsider')
             if cycle['edits']+len(edits)>cfg.max_edits:

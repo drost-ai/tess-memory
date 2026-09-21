@@ -127,11 +127,11 @@ def register_personal_tools(server, config, *, principal=None):
 
     if bound.role in ('dream','operator'):
         @expose
-        def autobiography_cycle_prepare(operation_id: str | None=None, operation_fence: int | None=None) -> dict:
+        def autobiography_cycle_prepare(operation_id: str | None=None, operation_fence: int | None=None, initialize: bool=False) -> dict:
             """Service operation: claim a bounded reflection batch with a fenced lease."""
             from .dream_cycle import DreamCycle
             deadline=operations()._operation(operation_id,operation_fence)['deadline'] if operation_id else None
-            return DreamCycle(config,store()).prepare(deadline=deadline)
+            return DreamCycle(config,store()).prepare(deadline=deadline,initialize=initialize)
 
         @expose
         def autobiography_cycle_renew(cycle_id: str, fence: int, lease_token: str) -> dict:

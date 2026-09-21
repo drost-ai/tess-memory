@@ -125,6 +125,19 @@ class DreamTests(unittest.TestCase):
         result=self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'],status='failed',error='deadline')
         self.assertEqual(result['status'],'failed')
 
+    def test_initialization_leaves_candidates_pending_and_only_creates_missing_core(self):
+        cycle=self.dream.prepare(initialize=True)
+        self.assertEqual(cycle['candidates'],[])
+        self.assertEqual(PersonalInbox(self.store).list()['candidates'][0]['id'],self.cid)
+        with self.assertRaisesRegex(PersonalError,'only author missing core'):
+            self.commit(cycle,edits=self.proposal()['edits'],outcomes=[])
+        edits=[{'expected_revision':0,'segment':segment,'title':segment,'body':'My deliberate current reflection.',
+                'reason':'Initialize my authored core.','attribution':'agent_reflection'} for segment in ('Self','Principles')]
+        self.commit(cycle,edits=edits,outcomes=[])
+        self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'])
+        self.assertEqual(self.dream.prepare(initialize=True)['status'],'already_initialized')
+        self.assertEqual(PersonalInbox(self.store).list()['candidates'][0]['id'],self.cid)
+
     def test_dream_can_autonomously_author_every_segment_including_core_commitments(self):
         from agentic_memory.autobiography import SEGMENTS
         cycle=self.dream.prepare()
