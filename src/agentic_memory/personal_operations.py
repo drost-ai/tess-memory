@@ -85,6 +85,7 @@ class PersonalOperations:
 
     def claim(self,kind,*,manual=False):
         self._role(kind);s=self.store;p=s.principal;cfg=self.config.personal
+        s.repair_index(limit=8,max_seconds=.5)
         enabled=cfg.extraction_enabled if kind=='extractor' else cfg.dream_enabled
         if not cfg.enabled or not enabled:return {'status':'disabled'}
         now=s.clock()
@@ -242,7 +243,7 @@ class PersonalOperations:
             JOIN autobio_sources src ON src.id=part.source_id WHERE src.owner=? AND src.agent=? AND src.audience=? AND part.state='failed' LIMIT 20''',(p.owner,p.agent,p.audience))]
         sources=[dict(r) for r in self.store.db.execute("SELECT path,state,attempts,error FROM autobio_source_errors ORDER BY path LIMIT 20")]
         return {'schedule':[dict(r) for r in self.store.db.execute('SELECT kind,due,operation_id,lease_until,outcome FROM autobio_schedule')],
-                'candidate_states':candidates,'extraction_states':parts,
+                'candidate_states':candidates,'extraction_states':parts,'index':self.store.index_status(),
                 'oldest_candidate_age_seconds':max(0,self.store.clock()-oldest) if oldest else None,
                 'failed_parts':failures,'source_errors':sources,
                 'day':day,'model_turns':row[0],'reserved_provider_calls':row[1],'reserved_token_estimate':row[2],

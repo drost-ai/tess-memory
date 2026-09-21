@@ -174,7 +174,9 @@ def main():
     parser.add_argument('--settings',type=Path,required=True)
     parser.add_argument('--role',choices=['reader','author','extractor','dream','operator'])
     parser.add_argument('--session',default=None)
-    parser.add_argument('action',choices=['serve','export','status','operations','retry','preview-import','import','erase','restore'],default='serve',nargs='?')
+    parser.add_argument('action',choices=['serve','export','status','index-status','repair-index','operations','retry','preview-import','import','erase','restore'],default='serve',nargs='?')
+    parser.add_argument('--limit',type=int,default=16)
+    parser.add_argument('--retry-now',action='store_true')
     parser.add_argument('--kind',choices=['candidate','part','source'])
     parser.add_argument('--target')
     parser.add_argument('--manifest',type=Path)
@@ -195,7 +197,12 @@ def main():
     else:
         store=AutobiographyStore(cfg.db_path,principal,context_budget=cfg.personal.context_budget)
         try:
-            if args.action=='operations':
+            if args.action=='index-status':
+                result=store.index_status(limit=args.limit)
+            elif args.action=='repair-index':
+                principal.require('operator')
+                result=store.repair_index(limit=args.limit,retry_now=args.retry_now)
+            elif args.action=='operations':
                 from .personal_operations import PersonalOperations
                 principal.require('operator')
                 ops=PersonalOperations(cfg,store)

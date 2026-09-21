@@ -79,6 +79,8 @@ CREATE TABLE IF NOT EXISTS autobio_commits(
  payload_hash TEXT NOT NULL, receipt TEXT NOT NULL, created REAL NOT NULL,
  UNIQUE(owner,agent,request_key));
 CREATE TABLE IF NOT EXISTS autobio_index_state(record_id TEXT PRIMARY KEY, revision INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS autobio_index_errors(record_id TEXT PRIMARY KEY REFERENCES autobio_records(id) ON DELETE CASCADE,
+ revision INTEGER NOT NULL,attempts INTEGER NOT NULL,error TEXT NOT NULL,retry_after REAL NOT NULL,updated REAL NOT NULL);
 CREATE VIRTUAL TABLE IF NOT EXISTS autobio_search USING fts5(record_id UNINDEXED, body, tokenize='unicode61');
 CREATE TABLE IF NOT EXISTS autobio_sources(
  id TEXT PRIMARY KEY, owner TEXT NOT NULL, agent TEXT NOT NULL, audience TEXT NOT NULL,
@@ -325,20 +327,20 @@ class AutobiographyStore:
                            state=old['state'],reason=reason,attribution=old['attribution'],evidence=old['evidence'],idempotency_key=idempotency_key)
 
     def index_record(self, record_id):
-        try:
-            with self.transaction():
-                record=self._get(record_id)
-                self.db.execute('DELETE FROM autobio_search WHERE record_id=?',(record_id,))
-                if record['state']=='active':
-                    self.db.execute('INSERT INTO autobio_search(record_id,body) VALUES(?,?)',(record_id,record['title']+'\n'+record['body']))
-                self.db.execute('INSERT OR REPLACE INTO autobio_index_state VALUES(?,?)',(record_id,record['revision']))
-            return True
-        except (sqlite3.Error,PersonalError):
-            return False  # acknowledged authored state survives index failure
+        from .autobiography_index import index_record
+        return index_record(self,record_id)
+
+    def index_status(self, *, limit=20):
+        from .autobiography_index import index_status
+        return index_status(self,limit=limit)
+
+    def repair_index(self, **options):
+        from .autobiography_index import repair_index
+        return repair_index(self,**options)
 
     def search(self, query, *, segment=None, limit=12):
         tokens=re.findall(r'\w+',str(query),flags=re.UNICODE)[:16]
-        if not tokens:return {'records':[],'mode':'lexical'}
+        if not tokens:return {'records':[],'mode':'lexical','index':self.index_status()}
         expression=' OR '.join('"'+t+'"' for t in tokens)
         p=self.principal
         with self.transaction(write=False):
@@ -347,7 +349,7 @@ class AutobiographyStore:
                 WHERE autobio_search MATCH ? AND r.owner=? AND r.agent=? AND r.audience=? AND r.state='active'
                 AND (? IS NULL OR r.segment=?) ORDER BY rank,r.id LIMIT ?''',
                 (expression,p.owner,p.agent,p.audience,segment,segment,max(1,min(int(limit),50)))).fetchall()
-            return {'records':[self._get(r[0]) for r in rows],'mode':'lexical'}
+            return {'records':[self._get(r[0]) for r in rows],'mode':'lexical','index':self.index_status()}
 
     def export(self):
         self.principal.require('operator','author')
