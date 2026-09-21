@@ -3,6 +3,7 @@ from datetime import datetime,timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 import json
+import math
 import os
 import queue
 import threading
@@ -65,6 +66,9 @@ class PersonalOperations:
             if 'source_ids' not in columns:store.db.execute("ALTER TABLE autobio_model_cache ADD COLUMN source_ids TEXT NOT NULL DEFAULT '[]'")
             if 'work_id' not in {r[1] for r in store.db.execute('PRAGMA table_info(autobio_model_work)')}:
                 store.db.execute('ALTER TABLE autobio_model_work ADD COLUMN work_id TEXT')
+            for table,column in [('autobio_operations','finish_receipt'),('autobio_model_work','completion_receipt'),('autobio_model_work','response_hash')]:
+                if column not in {r[1] for r in store.db.execute('PRAGMA table_info('+table+')')}:
+                    store.db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' TEXT')
         if config.personal.service_config:
             from .scheduler_config import load_service
             service=load_service(Path(config.personal.service_config).expanduser())
@@ -83,8 +87,10 @@ class PersonalOperations:
         if kind not in ('extractor','dream'):raise PersonalError('invalid','unknown personal operation')
         self.store.principal.require(kind,'operator')
 
-    def claim(self,kind,*,manual=False):
+    def claim(self,kind,*,manual=False,request_deadline=None):
         self._role(kind);s=self.store;p=s.principal;cfg=self.config.personal
+        if request_deadline is not None and (type(request_deadline) not in (int,float) or not math.isfinite(request_deadline) or request_deadline<=s.clock()):
+            raise PersonalError('deadline','host job deadline has expired')
         s.repair_index(limit=8,max_seconds=.5)
         enabled=cfg.extraction_enabled if kind=='extractor' else cfg.dream_enabled
         if not cfg.enabled or not enabled:return {'status':'disabled'}
@@ -97,7 +103,9 @@ class PersonalOperations:
             if row['due']>now and not manual:return {'status':'not_due','due':row['due']}
             if row['operation_id']:
                 s.db.execute("UPDATE autobio_operations SET state='interrupted',result=? WHERE id=?",(canonical({'reason':'lease_expired'}),row['operation_id']))
-            op=uuid.uuid4().hex;fence=row['fence']+1;deadline=now+cfg.max_seconds
+                s.db.execute("UPDATE autobio_model_work SET state='interrupted' WHERE operation_id=? AND state IN ('waiting','running')",(row['operation_id'],))
+            op=uuid.uuid4().hex;fence=row['fence']+1;deadline=min(now+cfg.max_seconds,request_deadline or float('inf'))
+            if deadline<=now:raise PersonalError('deadline','host job deadline has expired')
             s.db.execute('INSERT INTO autobio_operations(id,kind,owner,agent,audience,actor_session,fence,state,started,deadline) VALUES(?,?,?,?,?,?,?,\'running\',?,?)',
                          (op,kind,p.owner,p.agent,p.audience,p.session_id,fence,now,deadline))
             s.db.execute('UPDATE autobio_schedule SET operation_id=?,actor_session=?,fence=?,lease_until=?,updated=? WHERE kind=?',
@@ -105,16 +113,26 @@ class PersonalOperations:
             return {'status':'running','operation_id':op,'fence':fence,'deadline':deadline,
                     'limits':{'model_calls':cfg.model_calls,'max_output_tokens':cfg.max_output_tokens,'max_seconds':cfg.max_seconds}}
 
-    def _operation(self,operation_id,fence):
+    def _operation(self,operation_id,fence,*,allow_expired=False):
         s=self.store;p=s.principal
         with s.lock:
             row=s.db.execute('SELECT * FROM autobio_operations WHERE id=? AND owner=? AND agent=? AND audience=?',
                              (operation_id,p.owner,p.agent,p.audience)).fetchone()
         if not row:raise PersonalError('not_found','operation unavailable')
         self._role(row['kind'])
-        if row['actor_session']!=p.session_id or row['fence']!=fence or row['state']!='running' or row['deadline']<=s.clock():
+        if row['actor_session']!=p.session_id or row['fence']!=fence or row['state']!='running' or (not allow_expired and row['deadline']<=s.clock()):
             raise PersonalError('fenced','personal operation lease expired or was replaced')
         return row
+
+    def get_operation(self,operation_id):
+        s=self.store;p=s.principal
+        with s.snapshot():
+            row=s.db.execute('SELECT * FROM autobio_operations WHERE id=? AND owner=? AND agent=? AND audience=?',
+                (operation_id,p.owner,p.agent,p.audience)).fetchone()
+            if not row:raise PersonalError('not_found','operation unavailable')
+            self._role(row['kind'])
+            return {'operation_id':row['id'],'kind':row['kind'],'state':row['state'],'result':json.loads(row['result']),
+                    'receipt':json.loads(row['finish_receipt']) if row['finish_receipt'] else None,'deadline':row['deadline']}
 
     def reserve(self,operation_id,fence,*,work_id,identity,provider,model,system,prompt,input_units,slots=1):
         s=self.store;p=s.principal;cfg=self.config.personal
@@ -191,8 +209,17 @@ class PersonalOperations:
 
     def complete_model(self,operation_id,fence,request_id,*,response=None,usage=None,error=None):
         s=self.store
+        with s.snapshot():
+            prior=s.db.execute('''SELECT w.* FROM autobio_model_work w JOIN autobio_operations o ON o.id=w.operation_id
+                WHERE w.id=? AND o.id=? AND o.owner=? AND o.agent=? AND o.audience=? AND o.actor_session=? AND o.fence=?''',
+                (request_id,operation_id,s.principal.owner,s.principal.agent,s.principal.audience,s.principal.session_id,fence)).fetchone()
+            if prior and prior['completion_receipt']:
+                if response is not None and prior['response_hash']!=digest(response):
+                    raise PersonalError('idempotency_mismatch','completion already checkpointed a different response')
+                return json.loads(prior['completion_receipt'])
         if request_id not in self.leases:raise PersonalError('fenced','model reservation is not owned by this service instance')
         context,call_id=self.leases.pop(request_id)
+        failed=True
         try:
             with s.transaction():
                 op=s.db.execute('SELECT * FROM autobio_operations WHERE id=?',(operation_id,)).fetchone()
@@ -206,7 +233,10 @@ class PersonalOperations:
                     require_no_credentials(canonical(response))
                     s.db.execute('INSERT OR IGNORE INTO autobio_model_cache(id,result,source_id,record_ids,created,source_ids) VALUES(?,?,?,?,?,?)',
                         (row['cache_key'],canonical(response),json.loads(row['source_ids'])[0] if op['kind']=='extractor' else None,row['record_ids'],s.clock(),row['source_ids']))
-                s.db.execute('UPDATE autobio_model_work SET state=?,usage=? WHERE id=?',('complete' if response is not None else 'failed',canonical(clean_usage),request_id))
+                receipt={'checkpointed':response is not None,'telemetry_error':None}
+                s.db.execute('UPDATE autobio_model_work SET state=?,usage=?,completion_receipt=?,response_hash=? WHERE id=?',
+                    ('complete' if response is not None else 'failed',canonical(clean_usage),canonical(receipt),digest(response) if response is not None else None,request_id))
+                failed=response is None
             db=None;telemetry_error=False
             try:
                 db=self.gate.connect()
@@ -216,21 +246,32 @@ class PersonalOperations:
             except Exception:telemetry_error=True
             finally:
                 if db:db.close()
-            return {'checkpointed':response is not None,'telemetry_error':telemetry_error}
+            receipt['telemetry_error']=telemetry_error
+            try:
+                with s.transaction():s.db.execute('UPDATE autobio_model_work SET completion_receipt=? WHERE id=?',(canonical(receipt),request_id))
+            except Exception:receipt['telemetry_error']=True
+            return receipt
         finally:
-            failed=response is None
             context.__exit__(RuntimeError if failed else None,RuntimeError('personal model failed') if failed else None,None)
 
     def finish(self,operation_id,fence,*,outcome='completed',result=None):
         s=self.store
         if outcome not in ('completed','partial','failed','cancelled'):raise PersonalError('invalid','invalid operation outcome')
         with s.transaction():
-            op=self._operation(operation_id,fence)
+            prior=s.db.execute('SELECT * FROM autobio_operations WHERE id=? AND owner=? AND agent=? AND audience=? AND actor_session=? AND fence=?',
+                (operation_id,s.principal.owner,s.principal.agent,s.principal.audience,s.principal.session_id,fence)).fetchone()
+            if prior and prior['finish_receipt']:
+                self._role(prior['kind'])
+                if prior['state']!=outcome or json.loads(prior['result'])!=(result or {}):
+                    raise PersonalError('idempotency_mismatch','operation already finished with a different outcome')
+                return json.loads(prior['finish_receipt'])
+            op=self._operation(operation_id,fence,allow_expired=True)
             due=self.next_night(s.clock()) if op['kind']=='dream' else s.clock()+self.config.personal.extraction_interval
-            s.db.execute('UPDATE autobio_operations SET state=?,result=? WHERE id=?',(outcome,canonical(result or {}),operation_id))
+            receipt={'outcome':outcome,'next_due':due}
+            s.db.execute('UPDATE autobio_operations SET state=?,result=?,finish_receipt=? WHERE id=?',(outcome,canonical(result or {}),canonical(receipt),operation_id))
             s.db.execute('UPDATE autobio_schedule SET due=?,operation_id=NULL,lease_until=NULL,outcome=?,updated=? WHERE kind=? AND fence=?',
                          (due,outcome,s.clock(),op['kind'],fence))
-            return {'outcome':outcome,'next_due':due}
+            return receipt
 
     def status(self):
         day=datetime.fromtimestamp(self.store.clock(),ZoneInfo(self.config.personal.timezone)).date().isoformat()
@@ -242,11 +283,18 @@ class PersonalOperations:
         failures=[dict(r) for r in self.store.db.execute('''SELECT part.id,part.state,part.attempts,part.error FROM autobio_extraction_parts part
             JOIN autobio_sources src ON src.id=part.source_id WHERE src.owner=? AND src.agent=? AND src.audience=? AND part.state='failed' LIMIT 20''',(p.owner,p.agent,p.audience))]
         sources=[dict(r) for r in self.store.db.execute("SELECT path,state,attempts,error FROM autobio_source_errors ORDER BY path LIMIT 20")]
+        usages=[json.loads(r[0]) for r in self.store.db.execute("SELECT usage FROM autobio_model_work WHERE day=? AND state!='not_dispatched'",(day,))]
+        observed={key:sum(u[key] for u in usages if key in u) if any(key in u for u in usages) else None
+                  for key in ('input_tokens','output_tokens','reasoning_tokens','cache_read_tokens')}
+        observed['complete_usage_turns']=sum('input_tokens' in u and 'output_tokens' in u for u in usages)
+        observed['incomplete_usage_turns']=len(usages)-observed['complete_usage_turns']
         return {'schedule':[dict(r) for r in self.store.db.execute('SELECT kind,due,operation_id,lease_until,outcome FROM autobio_schedule')],
                 'candidate_states':candidates,'extraction_states':parts,'index':self.store.index_status(),
                 'oldest_candidate_age_seconds':max(0,self.store.clock()-oldest) if oldest else None,
                 'failed_parts':failures,'source_errors':sources,
                 'day':day,'model_turns':row[0],'reserved_provider_calls':row[1],'reserved_token_estimate':row[2],
+                'observed_usage':observed,'remaining_reservations':{'provider_calls':max(0,self.config.personal.daily_model_calls-row[1]),
+                    'tokens':max(0,self.config.personal.daily_token_budget-row[2])},
                 'limits':{'daily_provider_calls':self.config.personal.daily_model_calls,'daily_token_reservation_budget':self.config.personal.daily_token_budget},
                 'note':'Conservative reservations include potential logical provider calls; transport retries and billed cost remain separately observed.'}
 

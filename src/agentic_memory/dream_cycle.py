@@ -48,17 +48,17 @@ class DreamCycle:
         return [[r[0],r[1]] for r in self.store.db.execute('SELECT id,revision FROM autobio_records WHERE owner=? AND agent=? AND audience=? ORDER BY id',
                                                        (p.owner,p.agent,p.audience))]
 
-    def _cycle(self,cycle_id,fence,lease_token):
+    def _cycle(self,cycle_id,fence,lease_token,*,allow_expired=False):
         p=self.store.principal
         row=self.store.db.execute('SELECT * FROM autobio_cycles WHERE id=? AND owner=? AND agent=? AND audience=?',
                                   (cycle_id,p.owner,p.agent,p.audience)).fetchone()
         if not row:raise PersonalError('not_found','cycle unavailable')
         if (row['state']!='running' or row['fence']!=fence or row['lease_token']!=lease_token
-                or row['actor_session']!=p.session_id or row['lease_until']<=self.store.clock() or row['deadline']<=self.store.clock()):
+                or row['actor_session']!=p.session_id or (not allow_expired and (row['lease_until']<=self.store.clock() or row['deadline']<=self.store.clock()))):
             raise PersonalError('fenced','cycle publication lease is no longer current')
         return row
 
-    def prepare(self):
+    def prepare(self,*,deadline=None):
         s=self.store;p=s.principal;p.require('dream','operator')
         cfg=self.config.personal
         if not cfg.enabled or not cfg.dream_enabled:return {'status':'disabled'}
@@ -75,7 +75,8 @@ class DreamCycle:
                 s.db.execute("UPDATE autobio_candidates SET state='pending',cycle_id=NULL,fence=NULL,lease_until=NULL WHERE cycle_id=? AND state='claimed'",(old['id'],))
             prior=s.db.execute('SELECT MAX(fence) FROM autobio_cycles').fetchone()[0] or 0
             cycle_id=uuid.uuid4().hex;fence=prior+1;token=uuid.uuid4().hex
-            deadline=now+cfg.max_seconds;lease_until=min(deadline,now+cfg.lease_seconds)
+            deadline=min(now+cfg.max_seconds,deadline if deadline is not None else float('inf'));lease_until=min(deadline,now+cfg.lease_seconds)
+            if deadline<=now:raise PersonalError('deadline','reflection deadline has expired')
             candidates=[];chars=len(context['text'])
             rows=s.db.execute('''SELECT * FROM autobio_candidates WHERE owner=? AND agent=? AND audience=? AND created<=?
                 AND (state='pending' OR (state='deferred' AND review_after<=?)) ORDER BY created,id LIMIT ?''',
@@ -197,6 +198,7 @@ class DreamCycle:
                     action=outcome['action'];journal['outcomes'][action]=journal['outcomes'].get(action,0)+1
             s.db.execute('UPDATE autobio_cycles SET edits=edits+?,read_heads=?,journal=?,updated=? WHERE id=?',
                 (0 if cycle['shadow'] else len(edits),canonical(self._heads()),canonical(journal),s.clock(),cycle_id))
+            self._cycle(cycle_id,fence,lease_token)
         for revision in receipt['edits']:s.index_record(revision['record_id'])
         return receipt
 
@@ -204,7 +206,7 @@ class DreamCycle:
         s=self.store;p=s.principal;p.require('dream','operator')
         if status not in ('completed','partial','failed','cancelled'):raise PersonalError('invalid','invalid cycle outcome')
         with s.transaction():
-            cycle=self._cycle(cycle_id,fence,lease_token)
+            cycle=self._cycle(cycle_id,fence,lease_token,allow_expired=True)
             remaining=s.db.execute("SELECT COUNT(*) FROM autobio_candidates WHERE cycle_id=? AND state='claimed'",(cycle_id,)).fetchone()[0]
             if status=='completed':status='partial' if remaining and not cycle['shadow'] else 'completed' if cycle['edits'] else 'completed_no_change'
             journal=json.loads(cycle['journal']);journal['remaining']=remaining

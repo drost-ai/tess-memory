@@ -166,7 +166,7 @@ class PersonalExtraction:
                           'text':r['text'],'start':r['start'],'end':r['end']} for r in rows]
         return report
 
-    def publish(self,part_id,proposals):
+    def publish(self,part_id,proposals,*,admission=None):
         # Revalidate original source prefixes before acknowledging candidates.
         from .source_journal import SourceRevision
         s=self.store
@@ -176,4 +176,4 @@ class PersonalExtraction:
         if not row:raise PersonalError('not_found','source part unavailable')
         for revision in json.loads(row[0]).get('source_revisions',[]):
             if not SourceRevision(**revision).verify():raise PersonalError('stale_source','source prefix changed during extraction')
-        return self.inbox.publish(part_id,proposals)
+        return self.inbox.publish(part_id,proposals,admission=admission)

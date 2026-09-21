@@ -106,3 +106,36 @@ class PersonalOperationTests(unittest.TestCase):
         self.assertEqual(self.ops.status()['extraction_states'],{'pending':1})
         self.assertEqual(operator.db.execute('SELECT COUNT(*) FROM autobio_recovery_receipts').fetchone()[0],1)
         with self.assertRaises(PersonalError):retry_failed(self.cfg,self.store,kind='part',target=self.part['id'],reason='Not an operator')
+
+    def test_completion_receipt_survives_lost_ack_and_new_service_instance(self):
+        op=self.ops.claim('extractor');reserved=self.reserve(op)
+        receipt=self.complete(op,reserved)
+        reopened=PersonalOperations(self.cfg,self.store);self.addCleanup(reopened.close)
+        self.assertEqual(reopened.complete_model(op['operation_id'],op['fence'],reserved['request_id'],error='lost_ack'),receipt)
+        with self.assertRaisesRegex(PersonalError,'different response'):
+            reopened.complete_model(op['operation_id'],op['fence'],reserved['request_id'],response={'different':True})
+        self.assertEqual(self.ops.status()['observed_usage']['input_tokens'],10)
+        self.assertEqual(self.ops.status()['observed_usage']['complete_usage_turns'],1)
+        self.assertEqual(self.ops.status()['remaining_reservations']['provider_calls'],1)
+
+    def test_finish_is_replayable_and_expired_owner_can_only_finalize(self):
+        op=self.ops.claim('extractor',request_deadline=self.now[0]+1)
+        self.now[0]+=2
+        with self.assertRaises(PersonalError):self.reserve(op)
+        receipt=self.ops.finish(op['operation_id'],op['fence'],outcome='partial',result={'commits':1})
+        self.assertEqual(self.ops.finish(op['operation_id'],op['fence'],outcome='partial',result={'commits':1}),receipt)
+        self.assertEqual(self.ops.get_operation(op['operation_id'])['result'],{'commits':1})
+        with self.assertRaisesRegex(PersonalError,'different outcome'):
+            self.ops.finish(op['operation_id'],op['fence'],outcome='failed')
+
+    def test_host_deadline_only_shortens_and_late_publication_rolls_back(self):
+        op=self.ops.claim('extractor',request_deadline=self.now[0]+5)
+        self.assertEqual(op['deadline'],self.now[0]+5)
+        checks=[]
+        def admission():
+            checks.append(True)
+            if len(checks)==2:self.now[0]+=6
+            self.ops._operation(op['operation_id'],op['fence'])
+        with self.assertRaises(PersonalError):
+            PersonalExtraction(self.cfg,self.store).publish(self.part['id'],[],admission=admission)
+        self.assertEqual(self.store.db.execute('SELECT state FROM autobio_extraction_parts WHERE id=?',(self.part['id'],)).fetchone()[0],'pending')

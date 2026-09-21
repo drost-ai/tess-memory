@@ -112,6 +112,19 @@ class DreamTests(unittest.TestCase):
         retry_failed(self.cfg,operator,kind='candidate',target=self.cid,reason='Fixed proposal schema.')
         self.assertEqual(self.dream.prepare()['candidates'][0]['id'],self.cid)
 
+    def test_expiry_during_validation_rolls_back_revisions_and_dispositions(self):
+        from unittest.mock import patch
+        cycle=self.dream.prepare(deadline=self.now[0]+1)
+        original=self.store._write
+        def slow_write(*args):
+            result=original(*args);self.now[0]+=2;return result
+        with patch.object(self.store,'_write',side_effect=slow_write):
+            with self.assertRaisesRegex(PersonalError,'lease is no longer current'):self.commit(cycle)
+        self.assertEqual(self.store.list_records()['records'],[])
+        self.assertEqual(PersonalInbox(self.store).list(state='claimed')['candidates'][0]['id'],self.cid)
+        result=self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'],status='failed',error='deadline')
+        self.assertEqual(result['status'],'failed')
+
     def test_dream_can_autonomously_author_every_segment_including_core_commitments(self):
         from agentic_memory.autobiography import SEGMENTS
         cycle=self.dream.prepare()

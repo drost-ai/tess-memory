@@ -38,12 +38,13 @@ class PersonalInbox:
             for statement in INBOX_SCHEMA.split(';'):
                 if statement.strip():self.store.db.execute(statement)
 
-    def publish(self,part_id,proposals):
+    def publish(self,part_id,proposals,*,admission=None):
         self.store.principal.require('extractor','operator')
         if not isinstance(proposals,list) or len(proposals)>8:
             raise PersonalError('invalid','return at most eight candidates for a source part')
         s=self.store;p=s.principal
         with s.transaction():
+            if admission:admission()
             part=s.db.execute('SELECT * FROM autobio_extraction_parts WHERE id=?',(part_id,)).fetchone()
             if not part:raise PersonalError('not_found','source part unavailable')
             source=s.db.execute('SELECT * FROM autobio_sources WHERE id=? AND owner=? AND agent=? AND audience=?',
@@ -87,6 +88,7 @@ class PersonalInbox:
             receipt={'published':True,'candidate_ids':made}
             s.db.execute("UPDATE autobio_extraction_parts SET state='published',result=?,receipt=?,updated=? WHERE id=?",
                 (canonical(proposals),canonical(receipt),s.clock(),part_id))
+            if admission:admission()
             return receipt
 
     def fail(self,part_id,code):

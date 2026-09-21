@@ -71,8 +71,9 @@ def register_personal_tools(server, config, *, principal=None):
         def autobiography_extraction_publish(part_id: str, candidates: list[dict], operation_id: str | None=None, operation_fence: int | None=None) -> dict:
             """Service operation: atomically publish source-grounded candidates and extraction progress."""
             from .autobiography_extract import PersonalExtraction
-            if bound.role=='extractor':operations()._operation(operation_id,operation_fence)
-            return PersonalExtraction(config,store()).publish(part_id,candidates)
+            admission=(lambda:operations()._operation(operation_id,operation_fence)) if bound.role=='extractor' else None
+            if admission:admission()
+            return PersonalExtraction(config,store()).publish(part_id,candidates,admission=admission)
 
         @expose
         def autobiography_extraction_fail(part_id: str, code: str) -> dict:
@@ -83,9 +84,14 @@ def register_personal_tools(server, config, *, principal=None):
 
     if bound.role in ('extractor','dream','operator'):
         @expose
-        def autobiography_operation_claim(kind: str, manual: bool=False) -> dict:
+        def autobiography_operation_claim(kind: str, manual: bool=False, request_deadline: float | None=None) -> dict:
             """Service operation: claim a due personal job without overlapping another worker."""
-            return operations().claim(kind,manual=manual)
+            return operations().claim(kind,manual=manual,request_deadline=request_deadline)
+
+        @expose
+        def autobiography_operation_get(operation_id: str) -> dict:
+            """Service operation: recover a durable job outcome after a lost acknowledgment."""
+            return operations().get_operation(operation_id)
 
         @expose
         def autobiography_operation_finish(operation_id: str, fence: int, outcome: str='completed', result: dict | None=None) -> dict:
@@ -115,10 +121,11 @@ def register_personal_tools(server, config, *, principal=None):
 
     if bound.role in ('dream','operator'):
         @expose
-        def autobiography_cycle_prepare() -> dict:
+        def autobiography_cycle_prepare(operation_id: str | None=None, operation_fence: int | None=None) -> dict:
             """Service operation: claim a bounded reflection batch with a fenced lease."""
             from .dream_cycle import DreamCycle
-            return DreamCycle(config,store()).prepare()
+            deadline=operations()._operation(operation_id,operation_fence)['deadline'] if operation_id else None
+            return DreamCycle(config,store()).prepare(deadline=deadline)
 
         @expose
         def autobiography_cycle_renew(cycle_id: str, fence: int, lease_token: str) -> dict:
