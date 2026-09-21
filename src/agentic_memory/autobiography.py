@@ -187,9 +187,18 @@ class AutobiographyStore:
 
     def evidence_available(self, evidence):
         p = self.principal
-        source = self.db.execute('SELECT generation FROM autobio_sources WHERE id=? AND owner=? AND agent=? AND audience=?',
+        source = self.db.execute('SELECT generation,metadata FROM autobio_sources WHERE id=? AND owner=? AND agent=? AND audience=?',
             (evidence.get('source_id'),p.owner,p.agent,p.audience)).fetchone()
-        return bool(source and source[0] == evidence.get('generation'))
+        if not source or source[0]!=evidence.get('generation') or self.is_suppressed(evidence.get('source_id')):
+            return False
+        try:
+            metadata=json.loads(source['metadata'])
+            if metadata.get('kind')=='inherited_document':
+                return hashlib.sha256(Path(metadata['path']).read_bytes()).hexdigest()==source[0]
+            from .source_journal import SourceRevision
+            return all(SourceRevision(**r).verify() for r in metadata.get('source_revisions',[]))
+        except (OSError,ValueError,TypeError):
+            return False
 
     def _evidence(self, evidence):
         if not isinstance(evidence,list) or len(evidence)>MAX_EVIDENCE:
@@ -201,7 +210,7 @@ class AutobiographyStore:
             p=self.principal
             row=self.db.execute('SELECT * FROM autobio_sources WHERE id=? AND owner=? AND agent=? AND audience=?',
                 (e.get('source_id'),p.owner,p.agent,p.audience)).fetchone()
-            if (not row or row['generation']!=e.get('generation') or self.is_suppressed(e.get('source_id'))
+            if (not row or not self.evidence_available(e)
                 or type(e.get('start')) is not int or type(e.get('end')) is not int
                 or not 0<=e['start']<e['end']<=row['span_count'] or e.get('attribution') not in ATTRIBUTIONS):
                 raise PersonalError('invalid_evidence','evidence unavailable or changed')
@@ -348,6 +357,14 @@ class AutobiographyStore:
             p=self.principal
             for source in sources:
                 self.db.execute('INSERT OR IGNORE INTO autobio_suppressions VALUES(?,?,?,?)',(p.owner,p.agent,source,self.clock()))
+                if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_candidates'").fetchone():
+                    self.db.execute('DELETE FROM autobio_candidates WHERE source_id=? AND owner=? AND agent=?',(source,p.owner,p.agent))
+                    self.db.execute('DELETE FROM autobio_extraction_parts WHERE source_id=?',(source,))
+                    self.db.execute('DELETE FROM autobio_model_cache WHERE source_id=?',(source,))
+                self.db.execute('DELETE FROM autobio_sources WHERE id=? AND owner=? AND agent=?',(source,p.owner,p.agent))
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_model_cache'").fetchone():
+                for cached in self.db.execute('SELECT id,record_ids FROM autobio_model_cache').fetchall():
+                    if record_id in json.loads(cached['record_ids']):self.db.execute('DELETE FROM autobio_model_cache WHERE id=?',(cached['id'],))
             self.db.execute('DELETE FROM autobio_search WHERE record_id=?',(record_id,))
             self.db.execute('DELETE FROM autobio_index_state WHERE record_id=?',(record_id,))
             self.db.execute('DELETE FROM autobio_records WHERE id=?',(record_id,))

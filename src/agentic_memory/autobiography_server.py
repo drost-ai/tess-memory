@@ -52,6 +52,26 @@ def register_personal_tools(server, config, *, principal=None):
         from .autobiography_inbox import PersonalInbox
         return PersonalInbox(store()).list(state=state,limit=limit,after=after)
 
+    if bound.role in ('extractor','operator'):
+        @expose
+        def autobiography_extraction_prepare(limit: int=8) -> dict:
+            """Service operation: prepare changed source parts without editing authored state."""
+            from .autobiography_extract import PersonalExtraction
+            return PersonalExtraction(config,store()).prepare(limit=limit)
+
+        @expose
+        def autobiography_extraction_publish(part_id: str, candidates: list[dict]) -> dict:
+            """Service operation: atomically publish source-grounded candidates and extraction progress."""
+            from .autobiography_extract import PersonalExtraction
+            return PersonalExtraction(config,store()).publish(part_id,candidates)
+
+        @expose
+        def autobiography_extraction_fail(part_id: str, code: str) -> dict:
+            """Service operation: retain failed work with bounded retry and dead-letter state."""
+            from .autobiography_inbox import PersonalInbox
+            PersonalInbox(store()).fail(part_id,code)
+            return {'retained':True}
+
     if bound.role in ('author','operator'):
         @expose
         def autobiography_update(expected_revision: int, title: str, body: str, reason: str, idempotency_key: str,
