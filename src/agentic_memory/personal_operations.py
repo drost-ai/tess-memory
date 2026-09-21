@@ -147,6 +147,10 @@ class PersonalOperations:
         tokens=slots*(input_units+cfg.max_output_tokens+8192)+max(0,slots-1)*32768
         with s.transaction():
             op=self._operation(operation_id,fence)
+            if op['kind']=='dream' and slots==1:
+                # A one-completion synthesis cannot read more context. Do not
+                # replay its deliberate deferrals as a later agentic result.
+                key=digest([p.owner,p.agent,p.audience,identity,system,prompt,'single_call'])
             if op['kind']=='extractor':
                 source=s.db.execute('''SELECT src.id FROM autobio_sources src JOIN autobio_extraction_parts part ON src.id=part.source_id
                     WHERE part.id=? AND part.state='pending' AND src.owner=? AND src.agent=? AND src.audience=? AND src.generation=part.generation''',

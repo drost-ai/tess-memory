@@ -139,3 +139,19 @@ class PersonalOperationTests(unittest.TestCase):
         with self.assertRaises(PersonalError):
             PersonalExtraction(self.cfg,self.store).publish(self.part['id'],[],admission=admission)
         self.assertEqual(self.store.db.execute('SELECT state FROM autobio_extraction_parts WHERE id=?',(self.part['id'],)).fetchone()[0],'pending')
+
+    def test_single_call_reflection_cache_does_not_replace_later_agentic_work(self):
+        from agentic_memory.dream_cycle import DreamCycle
+        cfg=replace(self.cfg,personal=replace(self.cfg.personal,model_calls=8,daily_model_calls=16,daily_token_budget=500000))
+        PersonalExtraction(cfg,self.store).publish(self.part['id'],[{'segment':'Experiences','title':'Event',
+            'body':'An event was reported.','attribution':'user_statement','quote':'A new meaningful event.'}])
+        operator=AutobiographyStore(cfg.db_path,replace(self.store.principal,role='operator'),clock=lambda:self.now[0]);self.addCleanup(operator.close)
+        ops=PersonalOperations(cfg,operator);self.addCleanup(ops.close)
+        operation=ops.claim('dream',manual=True);cycle=DreamCycle(cfg,operator).prepare()
+        request=dict(work_id=cycle['cycle_id'],identity='fixture',provider='fixture',model='fixture',system='reflect',prompt='unchanged',input_units=100)
+        first=ops.reserve(operation['operation_id'],operation['fence'],**request,slots=1)
+        ops.complete_model(operation['operation_id'],operation['fence'],first['request_id'],response={'edits':[],'outcomes':[]})
+        self.assertEqual(ops.reserve(operation['operation_id'],operation['fence'],**request,slots=1)['status'],'cached')
+        later=ops.reserve(operation['operation_id'],operation['fence'],**request,slots=3)
+        self.assertEqual(later['status'],'reserved')
+        ops.complete_model(operation['operation_id'],operation['fence'],later['request_id'],response={'edits':[],'outcomes':[]})
