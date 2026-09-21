@@ -62,6 +62,12 @@ def register_personal_tools(server, config, *, principal=None):
 
     if bound.role in ('extractor','operator'):
         @expose
+        def autobiography_extraction_get(part_id: str) -> dict:
+            """Service operation: recover a publication receipt after a lost acknowledgment."""
+            from .autobiography_inbox import PersonalInbox
+            return PersonalInbox(store()).part_status(part_id)
+
+        @expose
         def autobiography_extraction_prepare(limit: int=8) -> dict:
             """Service operation: prepare changed source parts without editing authored state."""
             from .autobiography_extract import PersonalExtraction

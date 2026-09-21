@@ -35,8 +35,20 @@ class PersonalInbox:
 
     def initialize(self):
         with self.store.transaction():
+            p=self.store.principal
+            bound=self.store.db.execute("SELECT value FROM autobio_meta WHERE key='operational_audience'").fetchone()
+            if bound and bound[0]!=p.audience:
+                raise PersonalError('operational_audience','v1 producers are bound to one operational audience per store')
             for statement in INBOX_SCHEMA.split(';'):
                 if statement.strip():self.store.db.execute(statement)
+            # Older enabled stores acquire the binding from their durable work,
+            # rather than allowing a different configuration to take it over.
+            previous={r[0] for r in self.store.db.execute('SELECT DISTINCT audience FROM autobio_candidates')}
+            if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_operations'").fetchone():
+                previous.update(r[0] for r in self.store.db.execute('SELECT DISTINCT audience FROM autobio_operations'))
+            if previous-{p.audience}:
+                raise PersonalError('operational_audience','existing work belongs to a different operational audience')
+            self.store.db.execute("INSERT OR IGNORE INTO autobio_meta VALUES('operational_audience',?)",(p.audience,))
 
     def publish(self,part_id,proposals,*,admission=None):
         self.store.principal.require('extractor','operator')
@@ -106,6 +118,15 @@ class PersonalInbox:
             attempts=row[0]+1
             self.store.db.execute('UPDATE autobio_extraction_parts SET attempts=?,state=?,retry_after=?,error=?,updated=? WHERE id=?',
                 (attempts,'failed' if attempts>=3 else 'pending',self.store.clock()+min(86400,300*2**attempts),str(code)[:120],self.store.clock(),part_id))
+
+    def part_status(self,part_id):
+        self.store.principal.require('extractor','operator');p=self.store.principal
+        with self.store.snapshot():
+            row=self.store.db.execute('''SELECT part.state,part.receipt FROM autobio_extraction_parts part
+                JOIN autobio_sources src ON src.id=part.source_id WHERE part.id=? AND src.owner=? AND src.agent=? AND src.audience=?''',
+                (part_id,p.owner,p.agent,p.audience)).fetchone()
+            if not row:raise PersonalError('not_found','source part unavailable')
+            return {'state':row['state'],'receipt':json.loads(row['receipt']) if row['receipt'] else None}
 
     def list(self,*,state='pending',limit=20,after=''):
         if state not in ('pending','claimed','accepted','merged','dismissed','deferred','stale','failed'):

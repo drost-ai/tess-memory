@@ -404,4 +404,5 @@ class AutobiographyStore:
             self.db.execute('INSERT INTO autobio_erasure_receipts VALUES(?,?,?,?,?,?)',
                 (receipt,p.owner,p.agent,canonical([record_id]),canonical(sorted(sources)),self.clock()))
             return {'erasure_id':receipt,'erased_record_ids':[record_id],'suppressed_source_ids':sorted(sources),
-                    'external_copies':'Raw transcripts, downloaded exports and backups are outside this erase transaction.'}
+                    'erasure_scope':'logical_application_state','forensic_erasure':False,
+                    'external_copies':'SQLite WAL/freelist artifacts, filesystem snapshots, raw transcripts, downloaded exports and backups are not forensically erased by this transaction.'}
