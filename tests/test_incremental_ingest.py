@@ -208,6 +208,9 @@ class IncrementalIngestTests(unittest.TestCase):
     def test_existing_paid_session_bootstraps_without_model_or_embedding_calls(self):
         self.cfg.incremental_ingestion = False
         self.run_ingest()
+        # Unchanged adoption must preserve this even across a clock boundary.
+        self.store.db.execute("UPDATE files SET ingested_at='2000-01-01 00:00:00'")
+        self.store.commit()
         before = self.paid_rows()
         calls = len(self.backend.calls), len(self.embedder.calls)
         self.cfg.incremental_ingestion = True

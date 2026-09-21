@@ -260,8 +260,11 @@ class MemoryStore:
 
     def mark_file(self, path: str, mtime: float, size: int, session_id: str, status: str) -> None:
         self.db.execute(
-            "INSERT OR REPLACE INTO files(path, mtime, size, session_id, status) "
-            "VALUES(?,?,?,?,?)",
+            """INSERT INTO files(path,mtime,size,session_id,status) VALUES(?,?,?,?,?)
+            ON CONFLICT(path) DO UPDATE SET mtime=excluded.mtime,size=excluded.size,
+                session_id=excluded.session_id,status=excluded.status,ingested_at=datetime('now')
+            WHERE NOT (files.mtime IS excluded.mtime AND files.size IS excluded.size
+                AND files.session_id IS excluded.session_id AND files.status IS excluded.status)""",
             (path, mtime, size, session_id, status),
         )
 

@@ -72,6 +72,37 @@ def register_personal_tools(server, config, *, principal=None):
             PersonalInbox(store()).fail(part_id,code)
             return {'retained':True}
 
+    if bound.role in ('dream','operator'):
+        @expose
+        def autobiography_cycle_prepare() -> dict:
+            """Service operation: claim a bounded reflection batch with a fenced lease."""
+            from .dream_cycle import DreamCycle
+            return DreamCycle(config,store()).prepare()
+
+        @expose
+        def autobiography_cycle_renew(cycle_id: str, fence: int, lease_token: str) -> dict:
+            """Service operation: renew a live claim without extending the cycle deadline."""
+            from .dream_cycle import DreamCycle
+            return DreamCycle(config,store()).renew(cycle_id,fence,lease_token)
+
+        @expose
+        def autobiography_cycle_commit(cycle_id: str, fence: int, lease_token: str, idempotency_key: str, edits: list[dict], outcomes: list[dict]) -> dict:
+            """Service operation: atomically validate and commit autonomous revisions and candidate dispositions."""
+            from .dream_cycle import DreamCycle
+            return DreamCycle(config,store()).commit(cycle_id,fence,lease_token,idempotency_key=idempotency_key,edits=edits,outcomes=outcomes)
+
+        @expose
+        def autobiography_cycle_finish(cycle_id: str, fence: int, lease_token: str, status: str='completed', error: str | None=None) -> dict:
+            """Service operation: report committed work and release any unfinished candidates."""
+            from .dream_cycle import DreamCycle
+            return DreamCycle(config,store()).finish(cycle_id,fence,lease_token,status=status,error=error)
+
+        @expose
+        def autobiography_cycle_status(limit: int=10) -> dict:
+            """Service operation: inspect actual cycle outcomes and commit receipts."""
+            from .dream_cycle import DreamCycle
+            return {'cycles':DreamCycle(config,store()).status(limit)}
+
     if bound.role in ('author','operator'):
         @expose
         def autobiography_update(expected_revision: int, title: str, body: str, reason: str, idempotency_key: str,

@@ -8,7 +8,7 @@ def personal_context(store, *, budget=6000, subjects=()):
     if not isinstance(subjects,(list,tuple)) or len(subjects)>16 or any(not isinstance(s,str) for s in subjects):
         raise PersonalError('invalid','select at most 16 subjects')
     principal=store.principal
-    with store.transaction(write=False):
+    with store.snapshot():
         rows=store.db.execute('''SELECT id,segment,subject FROM autobio_records WHERE owner=? AND agent=?
             AND audience=? AND state='active' ORDER BY CASE segment WHEN 'Self' THEN 0 WHEN 'Principles' THEN 1
             WHEN 'People' THEN 2 WHEN 'Relationships' THEN 3 ELSE 4 END,subject,id''',

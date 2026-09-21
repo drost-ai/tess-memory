@@ -128,6 +128,15 @@ class AutobiographyStore:
         self.db.close()
 
     @contextmanager
+    def snapshot(self):
+        with self.lock:
+            owns=not self.db.in_transaction
+            if owns:self.db.execute('BEGIN')
+            try:yield
+            finally:
+                if owns:self.db.rollback()
+
+    @contextmanager
     def transaction(self, *, write=True):
         with self.lock:
             if self.db.in_transaction:
@@ -275,13 +284,17 @@ class AutobiographyStore:
         return {'record_id':record_id,'revision':revision}
 
     def _receipt(self, request_key, payload_hash):
-        identifier(request_key,'idempotency key')
+        request_key=self._request_key(request_key)
         p=self.principal
         row=self.db.execute('SELECT * FROM autobio_commits WHERE owner=? AND agent=? AND request_key=?',
                             (p.owner,p.agent,request_key)).fetchone()
         if row and row['payload_hash']!=payload_hash:
             raise PersonalError('idempotency_mismatch','idempotency key belongs to a different request')
         return json.loads(row['receipt']) if row else None
+
+    def _request_key(self, request_key):
+        identifier(request_key,'idempotency key')
+        return digest([self.principal.audience,request_key])
 
     def update(self, *, idempotency_key, **edit):
         self.principal.require('author','operator')
@@ -294,7 +307,7 @@ class AutobiographyStore:
             receipt={'commit_id':commit_id,'edits':[revision],'committed_at':self.clock()}
             p=self.principal
             self.db.execute('INSERT INTO autobio_commits VALUES(?,?,?,?,?,?,?)',
-                (commit_id,p.owner,p.agent,idempotency_key,payload_hash,canonical(receipt),self.clock()))
+                (commit_id,p.owner,p.agent,self._request_key(idempotency_key),payload_hash,canonical(receipt),self.clock()))
         self.index_record(revision['record_id'])
         return receipt
 
@@ -365,6 +378,10 @@ class AutobiographyStore:
             if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_model_cache'").fetchone():
                 for cached in self.db.execute('SELECT id,record_ids FROM autobio_model_cache').fetchall():
                     if record_id in json.loads(cached['record_ids']):self.db.execute('DELETE FROM autobio_model_cache WHERE id=?',(cached['id'],))
+            if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_shadow_proposals'").fetchone():
+                for row in self.db.execute('SELECT id,context_manifest FROM autobio_cycles').fetchall():
+                    if record_id in {r['record_id'] for r in json.loads(row['context_manifest']).get('records',[])}:
+                        self.db.execute('DELETE FROM autobio_shadow_proposals WHERE cycle_id=?',(row['id'],))
             self.db.execute('DELETE FROM autobio_search WHERE record_id=?',(record_id,))
             self.db.execute('DELETE FROM autobio_index_state WHERE record_id=?',(record_id,))
             self.db.execute('DELETE FROM autobio_records WHERE id=?',(record_id,))

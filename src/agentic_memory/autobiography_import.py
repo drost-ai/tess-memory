@@ -44,6 +44,6 @@ def import_seeds(store,files,*,preview_hash,idempotency_key,activate=False):
                 'attribution':'inherited','evidence':[evidence],'state':'active' if activate else 'retired'},commit_id,'import'))
         receipt={'commit_id':commit_id,'edits':edits,'committed_at':store.clock(),'origin':'import'}
         store.db.execute('INSERT INTO autobio_commits VALUES(?,?,?,?,?,?,?)',
-            (commit_id,p.owner,p.agent,idempotency_key,payload_hash,canonical(receipt),store.clock()))
+            (commit_id,p.owner,p.agent,store._request_key(idempotency_key),payload_hash,canonical(receipt),store.clock()))
     for edit in edits:store.index_record(edit['record_id'])
     return receipt
