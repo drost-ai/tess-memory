@@ -129,6 +129,7 @@ class DreamTests(unittest.TestCase):
         cycle=self.dream.prepare(initialize=True)
         self.assertEqual(cycle['candidates'],[])
         self.assertEqual(PersonalInbox(self.store).list()['candidates'][0]['id'],self.cid)
+
         with self.assertRaisesRegex(PersonalError,'only author missing core'):
             self.commit(cycle,edits=self.proposal()['edits'],outcomes=[])
         edits=[{'expected_revision':0,'segment':segment,'title':segment,'body':'My deliberate current reflection.',
@@ -137,6 +138,17 @@ class DreamTests(unittest.TestCase):
         self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'])
         self.assertEqual(self.dream.prepare(initialize=True)['status'],'already_initialized')
         self.assertEqual(PersonalInbox(self.store).list()['candidates'][0]['id'],self.cid)
+
+    def test_core_snapshot_supplies_identifiers_for_a_bounded_existing_record_update(self):
+        author=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='author'));self.addCleanup(author.close)
+        rid=author.update(expected_revision=0,segment='Principles',title='Principles',body='An earlier communication principle.',reason='Earlier authorship',idempotency_key='earlier')['edits'][0]['record_id']
+        cycle=self.dream.prepare()
+        self.assertIn('record_id: '+rid,cycle['core']['text'])
+        self.assertIn('revision: 1',cycle['core']['text'])
+        edit={'record_id':rid,'expected_revision':1,'title':'Principles','body':'Give concise updates and keep uncertainty visible.',
+              'reason':'Deliberate integration of the new preference.','attribution':'agent_reflection'}
+        self.commit(cycle,edits=[edit],outcomes=[{'candidate_id':self.cid,'action':'accepted','reason':'Integrated into the existing principle.','edit_indices':[0]}])
+        self.assertEqual(author.get(rid)['revision'],2)
 
     def test_dream_can_autonomously_author_every_segment_including_core_commitments(self):
         from agentic_memory.autobiography import SEGMENTS
