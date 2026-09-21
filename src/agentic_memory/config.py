@@ -14,6 +14,7 @@ import fnmatch
 import os
 import tomllib
 from dataclasses import dataclass, field
+from .autobiography_config import PersonalConfig
 from pathlib import Path
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -100,6 +101,7 @@ class CodexSettings:
 
 @dataclass
 class Config:
+    personal: PersonalConfig = field(default_factory=PersonalConfig)
     # -- data stores ---------------------------------------------------------
     data_stores: list[DataStore] = field(default_factory=_default_stores)
     codex: CodexSettings = field(default_factory=CodexSettings)
@@ -232,6 +234,7 @@ def load_config(path: Path | None = None) -> Config:
         raw = {}
 
     cfg = Config()
+    cfg.personal = PersonalConfig.parse(raw.get('personal', {}))
     cfg.codex = CodexSettings(**raw.get("codex", {}))
     planning = raw.get("planning", {})
     storage = raw.get("storage", {})

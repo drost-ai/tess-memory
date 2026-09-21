@@ -53,6 +53,8 @@ class PersonalPrincipal:
             identifier(getattr(self, field), field)
         if self.role not in ROLES:
             raise PersonalError('forbidden', 'unavailable personal role')
+        if self.role in ('author','dream') and self.session_id == 'unbound':
+            raise PersonalError('forbidden','authoring requires a trusted session binding')
 
     def require(self, *roles):
         if self.role not in roles:

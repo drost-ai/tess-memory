@@ -654,5 +654,10 @@ def run() -> None:
     mcp.run()  # stdio transport
 
 
+if CONFIG.personal.enabled:
+    from .autobiography_server import register_personal_tools
+    register_personal_tools(mcp, CONFIG)
+
+
 if __name__ == "__main__":
     run()
