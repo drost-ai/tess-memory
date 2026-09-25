@@ -265,6 +265,36 @@ class IncrementalIngestTests(unittest.TestCase):
         self.backend.cache_identity = 'explicitly-changed-model'
         self.assertGreater(self.run_ingest().model_calls, 0)
 
+    def test_explicit_profile_repair_preserves_verified_published_rows(self):
+        self.run_ingest();before=self.paid_rows()
+        policy=json.loads(self.store.source_progress(str(self.path))['state'])['policy']
+        self.cfg.adopt_published_policies=(policy,)
+        self.backend.cache_identity='repaired-profile'
+        counts=len(self.backend.calls),len(self.embedder.calls)
+        result=self.run_ingest()
+        self.assertEqual((result.unchanged,result.model_calls,result.embedded_passages),(1,0,0))
+        self.assertEqual(before,self.paid_rows())
+        self.assertEqual(counts,(len(self.backend.calls),len(self.embedder.calls)))
+        # The allowlist does not grant adoption for a subsequent unrelated change.
+        self.backend.cache_identity='another-explicit-model'
+        self.assertGreater(self.run_ingest().model_calls,0)
+
+    def test_explicit_profile_repair_processes_only_appended_units(self):
+        self.run_ingest();count=len(self.backend.calls)
+        self.cfg.adopt_published_policies=(json.loads(self.store.source_progress(str(self.path))['state'])['policy'],)
+        self.backend.cache_identity='repaired-profile';self.add_unit()
+        self.assertEqual(self.run_ingest().model_calls,2)
+        maps=[p for p in self.backend.calls[count:] if p.startswith('A completed persisted-message')]
+        self.assertEqual(len(maps),1)
+        self.assertNotIn('Remember the durable workspace decision',maps[0])
+
+    def test_profile_repair_cannot_adopt_changed_published_content(self):
+        self.run_ingest()
+        self.cfg.adopt_published_policies=(json.loads(self.store.source_progress(str(self.path))['state'])['policy'],)
+        self.backend.cache_identity='repaired-profile'
+        write_rollout(self.home,items=[message('user','Changed question '*20),message('assistant','Changed answer '*20)])
+        self.assertGreater(self.run_ingest().model_calls,0)
+
     def test_budget_deferred_run_resumes_without_repaying_for_completed_map(self):
         self.cfg.max_model_calls_per_run = 1
         first = self.run_ingest()

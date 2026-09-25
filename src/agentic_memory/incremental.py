@@ -354,10 +354,13 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         # A previous reader may have used different completed
                         # boundaries for identical content. Re-verify the paid
                         # prefix before discarding that seed and redistilling.
-                        # Explicit model/prompt policy changes still invalidate
-                        # tracked work, and ordinary appends retain map caches.
+                        # Policy changes invalidate tracked work by default.
+                        # A specifically authorized old policy may adopt only
+                        # an exactly verified paid prefix; request caches still
+                        # retain their original model identities.
                         if (not retry_extractive and
-                                (not indexed or (same_policy and (not tracking_matches or not seed_matches)))):
+                                (not indexed or (same_policy and (not tracking_matches or not seed_matches))
+                                 or state.get('policy') in cfg.adopt_published_policies)):
                             seed = _bootstrap(snapshot, old, previous, cfg)
                             if seed:
                                 seed['status'] = known_status

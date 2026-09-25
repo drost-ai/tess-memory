@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 from .autobiography_config import PersonalConfig
@@ -192,6 +193,7 @@ class Config:
     vector_cache_bytes: int = 64 * 1024 * 1024
     vector_batch_rows: int = 512
     personal: PersonalConfig = field(default_factory=PersonalConfig)
+    adopt_published_policies: tuple[str, ...] = ()  # explicit one-time policy transitions; never rewrite request caches
 
     @property
     def db_path(self) -> Path:
@@ -346,6 +348,11 @@ def load_config(path: Path | None = None) -> Config:
         if not isinstance(ing["incremental"], bool):
             raise ValueError("[ingest] incremental must be a boolean")
         cfg.incremental_ingestion = ing["incremental"]
+    if "adopt_published_policies" in ing:
+        values=ing["adopt_published_policies"]
+        if not isinstance(values,list) or any(not isinstance(v,str) or not re.fullmatch(r'[0-9a-f]{64}',v) for v in values):
+            raise ValueError('[ingest] adopt_published_policies must be a list of SHA-256 policy identities')
+        cfg.adopt_published_policies=tuple(dict.fromkeys(values))
     for key, minimum in (("incremental_reduce_fanout", 2), ("cache_retention_days", 1), ("max_model_calls_per_run", 0),
                          ('incremental_batch_chars', 0), ('incremental_batch_items', 2), ('incremental_batch_unit_chars', 1)):
         if key in ing:
