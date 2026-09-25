@@ -345,8 +345,8 @@ with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()
             core.mkdir(parents=True)
             core.joinpath('__init__.py').write_text('''async def unused(*a, **k):
     raise AssertionError("empty ingestion must not invoke a provider")
-resolve_config = resolve_session = bootstrap_runtime = run_agent_prompt = unused
-create_agent_runtime_bindings = is_task_supervisor_gateway = unused
+resolve_config = resolve_session = run_agent_prompt = start_runtime = unused
+SessionOptions = unused
 ''')
             providers = root / 'providers.json'
             providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused'}}}))

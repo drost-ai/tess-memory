@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import sys
 import tempfile
@@ -43,22 +44,78 @@ class ModelSelectionTests(unittest.TestCase):
         async def resolve_session(*args):
             return {"id": "test-session"}
 
-        async def bootstrap_runtime(args):
-            return {"tools": [], "emitEvent": mock.Mock(), "refreshMcpToolRegistry": mock.Mock(),
-                    "getActiveBinding": lambda: {}, "startTurn": mock.Mock(),
-                    "finishTurn": mock.Mock(), "failTurn": mock.Mock()}
-
         async def run_agent_prompt(args):
             self.configs.append(copy.deepcopy(args["config"]))
             return {"text": "OK", "stopReason": "end_turn", "model": args["config"]["model"]}
 
+        # The engine's runtime surface, faked: start_runtime -> sessions.open -> run_turn,
+        # resolving the config from the session options exactly as the manager does.
+        @dataclasses.dataclass(frozen=True)
+        class SessionOptions:
+            cwd: str | None = None
+            provider: str | None = None
+            model: str | None = None
+            effort: str | None = None
+            permission_mode: str | None = None
+            settings: str | None = None
+            system_prompt: str | None = None
+            adjust_config: object = None
+            stream_provider_messages: bool = False
+            extra: dict = dataclasses.field(default_factory=dict)
+
+            def config_overrides(self, home):
+                overrides = {"runtimeHome": home}
+                for key, value in (("provider", self.provider), ("model", self.model), ("effort", self.effort),
+                                   ("permissionMode", self.permission_mode), ("settings", self.settings), ("systemPrompt", self.system_prompt)):
+                    if value is not None:
+                        overrides[key] = value
+                overrides.update(self.extra)
+                return overrides
+
+        test = self
+
+        class FakeSession:
+            def __init__(self, runtime):
+                self.runtime = runtime
+
+            async def run_turn(self, prompt):
+                options = self.runtime.session_options("test-session", "client")
+                config = await resolve_config(options.config_overrides("home"), self.runtime.cwd)
+                if options.adjust_config is not None:
+                    config = await options.adjust_config(config)
+                session = await resolve_session({}, config, {})
+
+                def emit(event, data):
+                    self.runtime.listener.on_event("test-session", {"event": event, "data": data})
+
+                return await test.run_agent_prompt_hook({"session": session, "config": config, "prompt": prompt,
+                                                         "runtime": {"streamProviderMessages": options.stream_provider_messages, "emitEvent": emit}})
+
+        class FakeRuntime:
+            def __init__(self, cwd, session_options, listener):
+                self.cwd, self.session_options, self.listener = cwd, session_options, listener
+                self.sessions = types.SimpleNamespace(open=self.open)
+                self.stopped = False
+
+            async def open(self, session_id=None):
+                return FakeSession(self)
+
+            async def stop(self, grace=0.0):
+                self.stopped = True
+                return {}
+
+        async def start_runtime(runtime_home=None, *, cwd=None, daemon_enabled=True, session_options=None, listener=None, **_kw):
+            test.assertFalse(daemon_enabled)
+            return FakeRuntime(cwd, session_options, listener)
+
+        self.run_agent_prompt_hook = run_agent_prompt
+        self.fake_runtime_factory = FakeRuntime
         runtime = types.ModuleType("agent_core")
         runtime.resolve_config = resolve_config
         runtime.resolve_session = resolve_session
-        runtime.bootstrap_runtime = bootstrap_runtime
         runtime.run_agent_prompt = run_agent_prompt
-        runtime.create_agent_runtime_bindings = lambda args: args
-        runtime.is_task_supervisor_gateway = lambda _: False
+        runtime.start_runtime = start_runtime
+        runtime.SessionOptions = SessionOptions
         patches = [mock.patch.dict(sys.modules, {"agent_core": runtime}),
                    mock.patch.object(sys, "path", list(sys.path)),
                    mock.patch("agentic_memory.llm.tempfile.mkdtemp", return_value=str(self.root)),
@@ -94,20 +151,20 @@ class ModelSelectionTests(unittest.TestCase):
     def test_cleanup_failure_preserves_paid_response_without_masking_provider_failure(self):
         from agentic_memory.model_usage import UsageObserver, observe_usage
         backend=AgentCoreBackend(self.cfg,probe=False)
-        bootstrap=backend._bootstrap_runtime
-        async def failing_cleanup():
+        start=backend._start_runtime
+        async def failing_stop(grace=0.0):
             raise RuntimeError('synthetic cleanup timeout')
-        async def runtime(args):
-            result=await bootstrap(args)
-            result['close']=failing_cleanup
+        async def runtime(*args, **kwargs):
+            result=await start(*args, **kwargs)
+            result.stop=failing_stop
             return result
-        backend._bootstrap_runtime=runtime
+        backend._start_runtime=runtime
         records=[]
         with observe_usage(UsageObserver(records.append)):
             self.assertEqual(backend.complete(system='Test',prompt='Test'),'OK')
         self.assertEqual(len(self.configs),1)
         self.assertEqual(records[-1]['cleanup_error'],'RuntimeError')
-        backend._run_agent_prompt=mock.AsyncMock(side_effect=ValueError('provider failed'))
+        self.run_agent_prompt_hook=mock.AsyncMock(side_effect=ValueError('provider failed'))
         with self.assertRaises(Exception):backend.complete(system='Test',prompt='Test')
 
     def test_deepseek_max_survives_the_custom_host_effort_filter(self):
@@ -203,7 +260,7 @@ class ModelSelectionTests(unittest.TestCase):
                 'model': 'gpt-5.6-terra', 'output': 'private reasoning',
                 'usage': {'input_tokens': 10, 'output_tokens': 20, 'output_tokens_details': {'reasoning_tokens': 15}}}}})
             return {'text': 'OK', 'model': 'gpt-5.6-terra', 'usage': {'input_tokens': 10, 'output_tokens': 20}}
-        backend._run_agent_prompt = turn
+        self.run_agent_prompt_hook = turn
         with observe_usage(observer):
             self.assertEqual(backend.complete(system='s', prompt='p'), 'OK')
         self.assertEqual(observer.data()['reasoning_tokens'], 15)

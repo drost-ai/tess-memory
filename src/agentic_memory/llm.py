@@ -2,8 +2,8 @@
 
 agent-core-python is the only supported path. The runtime is imported from its
 checkout (it is dependency-free) and each completion runs one non-interactive
-turn through the same seams its own headless runner uses — resolve_config →
-resolve_session → bootstrap_runtime → run_agent_prompt — with a real system prompt,
+turn through the engine's runtime and session manager — start_runtime
+(daemon-less) → sessions.open → run_turn → stop — with a real system prompt,
 tools disabled, and no session persistence.
 
 Provider transport and credentials come from the runtime's own configuration:
@@ -59,25 +59,14 @@ class AgentCoreBackend:
         if str(root) not in sys.path:
             sys.path.insert(0, str(root))
         try:
-            # agent-core-python's native-Python conversion (v1-refactor)
-            # renamed the public functions to snake_case; the dict payload
-            # contract (camelCase keys) is unchanged.
-            from agent_core import (
-                bootstrap_runtime,
-                create_agent_runtime_bindings,
-                is_task_supervisor_gateway,
-                resolve_config,
-                resolve_session,
-                run_agent_prompt,
-            )
+            # The engine's runtime and session manager (agent-core-python
+            # v1-refactor, 2026-09): one daemon-less runtime per call, one
+            # session, one turn. The dict payload contract is unchanged.
+            from agent_core import SessionOptions, start_runtime
         except ImportError as e:
             raise RuntimeError(f"agent-core import failed: {e}") from e
-        self._run_agent_prompt = run_agent_prompt
-        self._create_bindings = create_agent_runtime_bindings
-        self._is_gateway = is_task_supervisor_gateway
-        self._resolve_config = resolve_config
-        self._bootstrap_runtime = bootstrap_runtime
-        self._resolve_session = resolve_session
+        self._start_runtime = start_runtime
+        self._session_options = SessionOptions
         self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-")
         atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
         self._settings_path = (
@@ -86,6 +75,7 @@ class AgentCoreBackend:
         if not self._settings_path and (self._model or self._reasoning_effort):
             raise RuntimeError("Explicit model/effort overrides require an existing provider settings file")
         self._profile = (profile or cfg.agent_core_profile) if self._settings_path else None
+        self._profile_kind = None
         settings_document = {}
         if self._profile:
             with open(self._settings_path) as fh:
@@ -95,6 +85,7 @@ class AgentCoreBackend:
                 raise RuntimeError(
                     f"profile '{self._profile}' not found in {self._settings_path}"
                 )
+            self._profile_kind = (profiles[self._profile] or {}).get("kind")
             self.name = f"agent-core:{self._profile}"
         if self._model:
             self.name += f":{self._model}"
@@ -132,104 +123,68 @@ class AgentCoreBackend:
                     raise RuntimeError('provider settings changed during memory work; retry with fresh configuration')
 
     async def _run_turn(self, *, system: str, prompt: str) -> dict:
+        """One daemon-less runtime, one session, one non-interactive turn.
+
+        The runtime is the engine's (start_runtime): it takes no lease and
+        owns no daemon, so any number may run beside each other in the
+        distillation workers and beside a host's own runtime. Nothing is
+        persisted (sessionPersistence off) and no tool is offered.
+        """
         cwd = self._workdir
-        options: dict = {
-            "tools": [],
-            "sessionPersistence": False,
-            "systemPrompt": system,
-            "inputFormat": "text",
-            "outputFormat": "json",
-        }
-        if self._profile:
-            # Reuse profile transport/auth; explicit per-instance overrides
-            # select the model and effort without rewriting the settings file.
-            options["settings"] = self._settings_path
-            options["provider"] = self._profile
-        else:
-            options["provider"] = "anthropic"
-        if self._model:
-            options["model"] = self._model
-        if self._reasoning_effort:
-            options["effort"] = self._reasoning_effort
-        config = await self._resolve_config(options, cwd)
-        config = await self._apply_codex_auth_override(config)
-        config = self._apply_reasoning_override(config)
         from .model_usage import current_observer
         observer = current_observer()
-        if observer:
-            observer.configured(config)
-        session = await self._resolve_session({}, config, {"cwd": cwd, "originalCwd": cwd})
-        runtime = await self._bootstrap_runtime(
-            {"session": session, "config": config, "cwd": cwd, "detectWorkspaceIntegrations": False}
+
+        async def adjust(config: dict) -> dict:
+            # The host's last word on the resolved config: this store's Codex
+            # account and the explicit reasoning effort, as before.
+            config = await self._apply_codex_auth_override(config)
+            config = self._apply_reasoning_override(config)
+            if observer:
+                observer.configured(config)
+            return config
+
+        class _Host:
+            # No ask_question: the turn is non-interactive. Raw stream events
+            # are enabled only for usage extraction and never forwarded.
+            def on_event(self, _session_id, envelope):
+                if observer:
+                    observer.event(envelope["event"], envelope["data"])
+
+        options = self._session_options(
+            cwd=cwd,
+            # Reuse profile transport/auth; explicit per-instance overrides
+            # select the model and effort without rewriting the settings file.
+            provider=self._profile or "anthropic",
+            model=self._model or None,
+            effort=self._reasoning_effort or None,
+            settings=self._settings_path if self._profile else None,
+            system_prompt=system,
+            adjust_config=adjust,
+            stream_provider_messages=bool(observer and self._profile_kind == "openai"),
+            extra={"tools": [], "sessionPersistence": False, "inputFormat": "text", "outputFormat": "json"},
+        )
+        runtime = await self._start_runtime(
+            None, cwd=cwd, daemon_enabled=False, session_options=lambda _sid, _reason: options, listener=_Host()
         )
         result = None
         try:
-            daemon = runtime.get("daemon")
-            def emit(event, data):
-                if observer:
-                    observer.event(event, data)
-                # Raw stream events are enabled only for usage extraction.
-                # Never forward their private content to runtime logs.
-                if event != 'provider.stream_event':
-                    runtime['emitEvent'](event, data)
-            bindings = self._create_bindings(
-                {
-                    "tools": [],
-                    "emitEvent": emit,
-                    "streamProviderMessages": bool(observer and config.get('provider') == 'openai'),
-                    "daemon": {"state": "connected", "client": daemon}
-                    if self._is_gateway(daemon)
-                    else {
-                        "state": "unavailable",
-                        "reason": {
-                            "code": "headless.daemon_unavailable",
-                            "message": "No task supervisor daemon in embedded runs.",
-                        },
-                    },
-                    "refreshMcpToolRegistry": lambda: [],
-                    "sessionBinding": runtime["getActiveBinding"](),
-                    "questionPolicy": {
-                        "interactive": False,
-                        "askQuestion": lambda *_a, **_k: "",
-                    },
-                }
-            )
-            runtime["startTurn"]({"prompt": prompt})
-            try:
-                from .model_usage import check_source_admission
-                check_source_admission()
-                result = await self._run_agent_prompt(
-                    {
-                        "session": session,
-                        "config": config,
-                        "runtime": bindings,
-                        "prompt": prompt,
-                    }
-                )
-                runtime["finishTurn"](
-                    {"kind": "completed", "stopReason": result.get("stopReason"),
-                     "model": result.get("model")}
-                )
-            except Exception as exc:
-                runtime["failTurn"](exc)
-                raise
+            session = await runtime.sessions.open()
+            from .model_usage import check_source_admission
+            check_source_admission()
+            result = await session.run_turn(prompt)
             return result
         finally:
-            close = runtime.get("close")
-            if close:
-                try:
-                    maybe = close()
-                    if hasattr(maybe, "__await__"):
-                        await maybe
-                except Exception as exc:
-                    if result is None:
-                        raise
-                    # Cleanup is not a failed model request. Return the paid
-                    # result for ordinary refusal/schema validation and cache
-                    # publication, with a content-free diagnostic receipt.
-                    result['memoryCleanupError'] = type(exc).__name__
-                    import logging
-                    logging.getLogger(__name__).warning('Runtime cleanup failed after completion (%s); retaining provider result', type(exc).__name__)
+            try:
+                await runtime.stop()
+            except Exception as exc:
+                if result is None:
+                    raise
+                # Cleanup is not a failed model request. Return the paid
+                # result for ordinary refusal/schema validation and cache
+                # publication, with a content-free diagnostic receipt.
+                result['memoryCleanupError'] = type(exc).__name__
+                import logging
+                logging.getLogger(__name__).warning('Runtime cleanup failed after completion (%s); retaining provider result', type(exc).__name__)
 
     def complete(self, *, system: str, prompt: str) -> str:
         import asyncio
