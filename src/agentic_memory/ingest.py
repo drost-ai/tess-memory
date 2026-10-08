@@ -367,6 +367,11 @@ def _ingest(
             _log(f"[ingest] preserving previous distillation for {st.session_id}; replacement remains pending")
             return
         rows = _session_rows(st, digest, cfg.chunk_chars)
+        source_store = cfg.data_store_for(st.source_path)
+        owner = store.owner_for(source_store.user if source_store else None)
+        team = source_store.team if source_store else None
+        for r in rows:
+            r.owner_user = owner
         vecs = embedder.embed_passages([r.content for r in rows])
         if len(vecs) != len(rows):
             raise ValueError("embedder returned a different number of vectors than session rows")
@@ -389,8 +394,9 @@ def _ingest(
                 title=digest.title, summary=digest.summary, outcome=digest.outcome,
                 started_at=st.started_at, ended_at=st.ended_at,
                 n_user=st.n_user, n_assistant=st.n_assistant, source_path=st.source_path,
-                parent_session=st.parent_session,
+                parent_session=st.parent_session, owner_user=owner,
             )
+            store.ensure_project(st.project, owner=owner, team=team)
             store.add_memories(rows)
             store.mark_file(st.source_path, st_info.st_mtime, st_info.st_size, st.session_id, status)
             if st.source_type == "codex":
@@ -523,6 +529,12 @@ def _refresh_aggregates(cfg, store, embedder, llm, fallback_llm, stats, interval
                     f"- {s['title']} | {(s['ended_at'] or '')[:10]} | {s['summary']} | {s['outcome']}"
                     for s in sessions
                 ]
+                if store.project_team(scope):
+                    # A team project's profile is read by the whole team: it is
+                    # built only from what the team may read, never from the
+                    # authors' private session summaries.
+                    lines = [f"- {m['kind']} | {(m['ts'] or '')[:10]} | {m['content']}"
+                             for m in store.shared_memories(scope, limit=cfg.profile_session_limit * 4)]
                 cwd = next((s["cwd"] for s in sessions if s["cwd"]), "")
 
                 def generate(backend):

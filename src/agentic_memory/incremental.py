@@ -428,11 +428,16 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             # latest raw tail; a daytime completed-prefix read cannot.
                             if not recovery:
                                 publication['recovery_signature'] = state.get('recovery_signature')
+                        owner = store.owner_for(ds.user)
+                        for row in rows:
+                            row.owner_user = owner
                         with store.write_transaction():
                             store.upsert_session(id=st.session_id, project=st.project, cwd=st.cwd, git_branch=st.git_branch,
                                                  title=digest.title, summary=digest.summary, outcome=digest.outcome,
                                                  started_at=st.started_at, ended_at=st.ended_at, n_user=st.n_user,
-                                                 n_assistant=st.n_assistant, source_path=str(path), parent_session=st.parent_session)
+                                                 n_assistant=st.n_assistant, source_path=str(path), parent_session=st.parent_session,
+                                                 owner_user=owner)
+                            store.ensure_project(st.project, owner=owner, team=ds.team)
                             store.replace_session_rows(st.session_id, rows)
                             info = path.stat()
                             store.mark_file(str(path), 0 if pending else info.st_mtime,

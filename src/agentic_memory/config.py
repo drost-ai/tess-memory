@@ -80,6 +80,11 @@ class DataStore:
         return any(fnmatch.fnmatch(project_slug, pat) for pat in self.exclude)
 
 
+def _default_policy():
+    from .principals import VisibilityPolicy
+    return VisibilityPolicy()
+
+
 def _default_stores() -> list[DataStore]:
     return [
         DataStore(name="claude-code", path=Path("~/.claude/projects").expanduser())
@@ -121,6 +126,8 @@ class Config:
     # Who reads and writes through this process, bound at start; never a
     # model argument. Unset = the instance's default owner, unrestricted.
     identity_user: str | None = None
+    # Default visibility by level/kind for rows with none of their own.
+    visibility: "VisibilityPolicy" = field(default_factory=lambda: _default_policy())
 
     # -- storage -------------------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path("~/.agentic-memory").expanduser())
@@ -204,6 +211,19 @@ class Config:
     personal: PersonalConfig = field(default_factory=PersonalConfig)
     adopt_published_policies: tuple[str, ...] = ()  # explicit one-time policy transitions; never rewrite request caches
 
+    def data_store_for(self, source_path) -> "DataStore | None":
+        """The configured store a session's source file lives under."""
+        if not source_path:
+            return None
+        path = Path(str(source_path)).expanduser()
+        for ds in self.data_stores:
+            try:
+                path.resolve().relative_to(ds.path.expanduser().resolve())
+                return ds
+            except (ValueError, OSError):
+                continue
+        return None
+
     @property
     def db_path(self) -> Path:
         return self.data_dir / "memory.db"
@@ -269,6 +289,15 @@ def load_config(path: Path | None = None) -> Config:
             )
             for d in raw["data_stores"]
         ]
+    visibility = raw.get("visibility", {})
+    if visibility:
+        from .principals import VisibilityPolicy
+        defaults = VisibilityPolicy()
+        cfg.visibility = VisibilityPolicy(
+            levels={**defaults.levels, **{str(k): str(v) for k, v in (visibility.get("levels") or {}).items()}},
+            memory_kinds={**defaults.memory_kinds, **{str(k): str(v) for k, v in (visibility.get("memory_kinds") or {}).items()}},
+            fallback=str(visibility.get("fallback", defaults.fallback)),
+        )
     identity = raw.get("identity", {})
     user = os.environ.get("AGENTIC_MEMORY_USER") or identity.get("user")
     if user:

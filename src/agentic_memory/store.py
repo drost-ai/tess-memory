@@ -18,6 +18,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -189,6 +190,8 @@ class MemoryRow:
     tags: list[str] = field(default_factory=list)
     vector: np.ndarray | None = None
     plan_id: int | None = None  # set on level='plan' mirror rows
+    owner_user: str | None = None   # None = the instance default owner
+    visibility: str | None = None   # None = the policy default for level/kind
 
 
 class MemoryStore:
@@ -360,8 +363,8 @@ class MemoryStore:
             key = (row.level, row.kind, row.content, json.dumps(row.tags), row.ts if row.level == 'chunk' else None)
             if available[key]:
                 old = available[key].popleft()
-                self.db.execute("UPDATE memories SET project=?,importance=?,ts=? WHERE id=?",
-                                (row.project, row.importance, row.ts, old['id']))
+                self.db.execute("UPDATE memories SET project=?,importance=?,ts=?,owner_user=COALESCE(?,owner_user) WHERE id=?",
+                                (row.project, row.importance, row.ts, row.owner_user, old['id']))
                 if old['vector'] is None and row.vector is not None:
                     self.db.execute("INSERT INTO embeddings VALUES (?,?)", (old['id'], row.vector.astype(np.float32).tobytes()))
                     self._emb_cache = None
@@ -375,7 +378,11 @@ class MemoryStore:
     def upsert_session(self, **kw) -> None:
         cols = ["id", "project", "cwd", "git_branch", "title", "summary", "outcome",
                 "started_at", "ended_at", "n_user", "n_assistant", "source_path",
-                "parent_session"]
+                "parent_session", "owner_user"]
+        if "owner_user" not in kw:
+            # INSERT OR REPLACE rewrites the row: keep the owner it had.
+            old = self.db.execute("SELECT owner_user FROM sessions WHERE id=?", (kw.get("id"),)).fetchone()
+            kw = {**kw, "owner_user": old["owner_user"] if old else None}
         vals = [kw.get(c) for c in cols]
         placeholders = ",".join("?" for _ in cols)
         self.db.execute(
@@ -548,9 +555,9 @@ class MemoryStore:
         for r in rows:
             cur = self.db.execute(
                 "INSERT INTO memories(session_id, project, level, kind, content, "
-                "importance, ts, tags, plan_id) VALUES(?,?,?,?,?,?,?,?,?)",
+                "importance, ts, tags, plan_id, owner_user, visibility) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (r.session_id, r.project, r.level, r.kind, r.content,
-                 r.importance, r.ts, json.dumps(r.tags), r.plan_id),
+                 r.importance, r.ts, json.dumps(r.tags), r.plan_id, r.owner_user, r.visibility),
             )
             mid = cur.lastrowid
             ids.append(mid)
@@ -630,13 +637,15 @@ class MemoryStore:
         self, *, project: str, kind: str, title: str, body: str,
         parent_id: int | None, priority: int, tags: list[str], now: str,
     ) -> int:
+        writer = self.writer()
         cur = self.db.execute(
             "INSERT INTO plan_items(project, kind, parent_id, title, body, "
-            "priority, tags, status, status_at, created_at, updated_at) "
-            "VALUES(?,?,?,?,?,?,?,'planned',?,?,?)",
+            "priority, tags, status, status_at, created_at, updated_at, created_by, updated_by) "
+            "VALUES(?,?,?,?,?,?,?,'planned',?,?,?,?,?)",
             (project, kind, parent_id, title, body, priority,
-             json.dumps(tags), now, now, now),
+             json.dumps(tags), now, now, now, writer, writer),
         )
+        self.ensure_project(project, owner=writer)
         return cur.lastrowid
 
     def plan_get(self, item_id: int) -> sqlite3.Row | None:
@@ -658,14 +667,14 @@ class MemoryStore:
     def plan_set(self, item_id: int, fields: dict, now: str) -> None:
         sets = ", ".join(f"{k}=?" for k in fields)  # keys are internal, never user input
         self.db.execute(
-            f"UPDATE plan_items SET {sets}, updated_at=? WHERE id=?",
-            (*fields.values(), now, item_id),
+            f"UPDATE plan_items SET {sets}, updated_at=?, updated_by=? WHERE id=?",
+            (*fields.values(), now, self.writer(), item_id),
         )
 
     def plan_log(self, item_id: int, event: str, detail: str, ts: str) -> None:
         self.db.execute(
-            "INSERT INTO plan_events(item_id, ts, event, detail) VALUES(?,?,?,?)",
-            (item_id, ts, event, detail),
+            "INSERT INTO plan_events(item_id, ts, event, detail, actor) VALUES(?,?,?,?,?)",
+            (item_id, ts, event, detail, self.writer()),
         )
 
     def plan_history(self, item_id: int) -> list[sqlite3.Row]:
@@ -680,6 +689,8 @@ class MemoryStore:
         )]
         self._delete_memory_ids(ids)
         row.plan_id = item_id
+        if row.owner_user is None:
+            row.owner_user = self.writer()
         self.add_memories([row])
 
     def attach_plan_embedding(self, item_id: int, expected: MemoryRow,
@@ -897,6 +908,39 @@ class MemoryStore:
             raise PermissionError(f"user {user!r} is disabled")
         teams = frozenset(r[0] for r in self.db.execute("SELECT team_id FROM team_members WHERE user_id=?", (user,)))
         return Principal(user, teams=teams, admin=bool(row and row["admin"]))
+
+    def owner_for(self, user: str | None) -> str | None:
+        """How a user is stamped on a row: None for the default owner."""
+        return None if not user or user == self.default_owner() else principal_id(user)
+
+    def ensure_project(self, project: str | None, *, owner: str | None = None, team: str | None = None) -> None:
+        """Record who a project belongs to (its first named writer) and its
+        team. Nothing is recorded for the default owner with no team, so a
+        single-user store gains no rows."""
+        if not project or (owner is None and team is None):
+            return
+        now = datetime.now(timezone.utc).isoformat(timespec="seconds")
+        if team:
+            principal_id(team, "team")
+            self.db.execute("INSERT OR IGNORE INTO teams(id, name, created_at) VALUES(?,?,?)", (team, team, now))
+        self.db.execute(
+            "INSERT INTO projects(key, owner_user, team_id, created_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(key) DO UPDATE SET team_id=COALESCE(projects.team_id, excluded.team_id)",
+            (project, owner, team, now))
+
+    def project_team(self, project: str | None) -> str | None:
+        if not project or not self._has_users_schema():
+            return None
+        row = self.db.execute("SELECT team_id FROM projects WHERE key=?", (project,)).fetchone()
+        return row["team_id"] if row else None
+
+    def shared_memories(self, project: str, limit: int = 60) -> list[sqlite3.Row]:
+        """A team project's distilled knowledge its team may read: what a
+        team-visible profile is built from (never private material)."""
+        visibility, args = self.policy.sql("m")
+        return self.db.execute(
+            f"SELECT m.* FROM memories m WHERE m.project=? AND m.level='memory' AND {visibility} IN ('team','org') "
+            "ORDER BY m.importance DESC, m.ts DESC, m.id LIMIT ?", (project, *args, limit)).fetchall()
 
     @property
     def restricted(self) -> bool:
