@@ -313,10 +313,18 @@ def cmd_observe(args: argparse.Namespace) -> int:
     return 0 if report['passed'] else 1
 
 
-def cmd_serve(args: argparse.Namespace) -> int:
-    from .server import run
+def _bind_user(cfg, user):
+    """A per-process identity (e.g. the host's per-session server)."""
+    if user:
+        from .principals import principal_id
+        cfg.identity_user = principal_id(user)
 
-    run()
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    from . import server
+
+    _bind_user(server.CONFIG, getattr(args, "user", None))
+    server.run()
     return 0
 
 
@@ -331,6 +339,7 @@ def cmd_codex_serve(args: argparse.Namespace) -> int:
         return 2
     from . import server, retrieval
 
+    _bind_user(cfg, getattr(args, "user", None))
     server.CONFIG = cfg
     retrieval.CONFIG = cfg
     server.run()
@@ -404,6 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_status)
 
     p = sub.add_parser("serve", help="Run the MCP server (stdio)")
+    p.add_argument("--user", default=None, help="read and write as this user (default: [identity] user, else the instance owner)")
     p.set_defaults(fn=cmd_serve)
 
     p = sub.add_parser("audit-sources", help="Read-only source inventory and stored coverage; no model calls")
@@ -434,6 +444,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("codex-serve", help="Serve an explicitly configured, dedicated Codex memory store")
     p.add_argument("--settings", required=True)
+    p.add_argument("--user", default=None, help="read and write as this user (default: the instance owner)")
     p.set_defaults(fn=cmd_codex_serve)
 
     p = sub.add_parser('scheduler', help='Manage persistent ingestion and aggregate queues')

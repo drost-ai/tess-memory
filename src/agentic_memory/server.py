@@ -139,7 +139,11 @@ def _outside_event_loop(fn, *args, **kwargs):
 def _get_store() -> MemoryStore:
     global _store
     if _store is None:
-        _store = MemoryStore(CONFIG.db_path)
+        store = MemoryStore(CONFIG.db_path)
+        # The caller is bound once, here; no tool argument can change it.
+        if CONFIG.identity_user:
+            store.principal = store.resolve_principal(CONFIG.identity_user)
+        _store = store
     return _store
 
 

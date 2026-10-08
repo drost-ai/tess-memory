@@ -64,6 +64,10 @@ class DataStore:
     # agent-core it overrides cwd-derived attribution while cwd stays as
     # provenance on the session row.
     project: str | None = None
+    # Whose sessions these are and the team they work in (Epic U); unset =
+    # the instance's default owner, as before.
+    user: str | None = None
+    team: str | None = None
 
     @property
     def attribution(self) -> ProjectAttribution:
@@ -112,6 +116,11 @@ class Config:
     # project behavior exactly as before.
     planning_default_project: str = ""
     planning_lock_writes_to_default: bool = False
+
+    # -- identity (Epic U) ---------------------------------------------------
+    # Who reads and writes through this process, bound at start; never a
+    # model argument. Unset = the instance's default owner, unrestricted.
+    identity_user: str | None = None
 
     # -- storage -------------------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path("~/.agentic-memory").expanduser())
@@ -255,9 +264,16 @@ def load_config(path: Path | None = None) -> Config:
                 type=str(d.get("type", "claude-code")),
                 exclude=[str(p) for p in d["exclude"]] if "exclude" in d else list(DEFAULT_EXCLUDES),
                 project=str(d["project"]) if d.get("project") else None,
+                user=str(d["user"]) if d.get("user") else None,
+                team=str(d["team"]) if d.get("team") else None,
             )
             for d in raw["data_stores"]
         ]
+    identity = raw.get("identity", {})
+    user = os.environ.get("AGENTIC_MEMORY_USER") or identity.get("user")
+    if user:
+        from .principals import principal_id
+        cfg.identity_user = principal_id(str(user).strip())
     cfg.planning_default_project = str(
         planning.get("default_project", cfg.planning_default_project)
     ).strip()
