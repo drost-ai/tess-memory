@@ -234,7 +234,7 @@ def search_memory(
         kinds=(kind,) if kind else None, after=after, before=before,
     ):
         from .freshness import project_coverage
-        coverage = project_coverage(store, project)
+        coverage = project_coverage(store, project) if not store.restricted else None
         return "No matching memories found (requested scope is empty)." + ('\n' + coverage if coverage else '')
     embedder = _get_embedder()
     llm = _get_search_llm(force=mode == "agentic") if mode != "static" else None
@@ -301,7 +301,7 @@ def get_project_context(
     store = _get_store()
     parts: list[str] = []
     from .freshness import describe, project_coverage, rollup_freshness, session_freshness
-    coverage = project_coverage(store, project)
+    coverage = project_coverage(store, project) if not store.restricted else None
     if coverage:
         parts.append('## Ingestion coverage\n' + coverage)
     profile = store.get_profile(project)
@@ -393,6 +393,11 @@ def get_session_transcript(
     or modify the transcript or memory database. Continue with `next_cursor`
     until `complete` is true.
     """
+    if CONFIG.identity_user:
+        store = _get_store()
+        if store.restricted and store.get_session(session_id) is None:
+            # A transcript is its author's (or an administrator's) to read.
+            return f"Unknown session id '{session_id}' or no source transcript path."
     try:
         source_path = get_session_source_path(CONFIG.db_path, session_id)
     except (OSError, ValueError, sqlite3.Error) as exc:
@@ -644,7 +649,12 @@ def memory_status() -> str:
     distinguishes published source coverage from worker/supervisor liveness.
     """
     from .freshness import store_status
-    return json.dumps(store_status(_get_store(), CONFIG), indent=2)
+    store = _get_store()
+    if store.restricted:
+        # Ingestion health (source paths, failures) is the instance's; a
+        # restricted caller sees counts of what it may read.
+        return json.dumps(store.counts(), indent=2)
+    return json.dumps(store_status(store, CONFIG), indent=2)
 
 
 def run() -> None:

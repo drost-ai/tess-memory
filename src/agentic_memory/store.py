@@ -23,7 +23,15 @@ from pathlib import Path
 
 import numpy as np
 
-from .principals import DEFAULT_OWNER, Principal, VisibilityPolicy, principal_id
+from .principals import (
+    DEFAULT_OWNER,
+    Principal,
+    VisibilityPolicy,
+    memory_access_sql,
+    principal_id,
+    project_access_sql,
+    session_access_sql,
+)
 from .time_utils import week_start
 
 USERS_SCHEMA_VERSION = 1
@@ -391,8 +399,9 @@ class MemoryStore:
         )
 
     def get_session(self, session_id: str) -> sqlite3.Row | None:
+        access, args = self._session_where("s")
         return self.db.execute(
-            "SELECT * FROM sessions WHERE id=?", (session_id,)
+            f"SELECT s.* FROM sessions s WHERE s.id=?{access}", (session_id, *args)
         ).fetchone()
 
     def update_session_source(self, session_id: str, source_path: str) -> None:
@@ -480,26 +489,30 @@ class MemoryStore:
             ]
 
     def sessions_for_project(self, project: str, limit: int = 50) -> list[sqlite3.Row]:
+        access, args = self._session_where("s")
         return self.db.execute(
-            "SELECT * FROM sessions WHERE project=? ORDER BY ended_at DESC LIMIT ?",
-            (project, limit),
+            f"SELECT s.* FROM sessions s WHERE s.project=?{access} ORDER BY s.ended_at DESC LIMIT ?",
+            (project, *args, limit),
         ).fetchall()
 
     def sessions_since(self, iso_ts: str) -> list[sqlite3.Row]:
+        access, args = self._session_where("s")
         return self.db.execute(
-            "SELECT * FROM sessions WHERE ended_at >= ? ORDER BY ended_at DESC",
-            (iso_ts,),
+            f"SELECT s.* FROM sessions s WHERE s.ended_at >= ?{access} ORDER BY s.ended_at DESC",
+            (iso_ts, *args),
         ).fetchall()
 
     def list_projects(self) -> list[dict]:
         """All known projects: with ingested sessions, plan boards, or both."""
+        session_access, session_args = self._session_where("s")
+        plan_access, plan_args = self._plan_where("i")
         sess = {r["project"]: r for r in self.db.execute(
-            "SELECT project, COUNT(*) AS n_sessions, MAX(ended_at) AS last_active "
-            "FROM sessions GROUP BY project"
+            "SELECT s.project, COUNT(*) AS n_sessions, MAX(s.ended_at) AS last_active "
+            f"FROM sessions s WHERE 1=1{session_access} GROUP BY s.project", session_args
         )}
         plans = {r["project"]: r for r in self.db.execute(
-            "SELECT project, COUNT(*) AS n_plan, MAX(updated_at) AS plan_updated "
-            "FROM plan_items GROUP BY project"
+            "SELECT i.project, COUNT(*) AS n_plan, MAX(i.updated_at) AS plan_updated "
+            f"FROM plan_items i WHERE 1=1{plan_access} GROUP BY i.project", plan_args
         )}
         out = []
         for project in set(sess) | set(plans):
@@ -516,9 +529,11 @@ class MemoryStore:
         return out
 
     def known_projects(self) -> set[str]:
+        session_access, session_args = self._session_where("s")
+        plan_access, plan_args = self._plan_where("i")
         rows = self.db.execute(
-            "SELECT DISTINCT project FROM sessions WHERE project IS NOT NULL "
-            "UNION SELECT DISTINCT project FROM plan_items"
+            f"SELECT DISTINCT s.project FROM sessions s WHERE s.project IS NOT NULL{session_access} "
+            f"UNION SELECT DISTINCT i.project FROM plan_items i WHERE 1=1{plan_access}", (*session_args, *plan_args)
         )
         return {r["project"] for r in rows}
 
@@ -574,20 +589,31 @@ class MemoryStore:
         if not ids:
             return []
         qmarks = ",".join("?" for _ in ids)
-        rows = self.db.execute(
-            f"SELECT m.*, s.title AS session_title FROM memories m "
-            f"LEFT JOIN sessions s ON s.id = m.session_id WHERE m.id IN ({qmarks})",
-            ids,
-        ).fetchall()
+        if self.restricted:
+            # A session's title is its author's: shown only where the session is.
+            access, args = self.access_sql("m")
+            session, session_args = session_access_sql(self.principal, self.default_owner(), "s")
+            rows = self.db.execute(
+                f"SELECT m.*, CASE WHEN {session} THEN s.title END AS session_title FROM memories m "
+                f"LEFT JOIN sessions s ON s.id = m.session_id WHERE m.id IN ({qmarks}) AND {access}",
+                (*session_args, *ids, *args),
+            ).fetchall()
+        else:
+            rows = self.db.execute(
+                f"SELECT m.*, s.title AS session_title FROM memories m "
+                f"LEFT JOIN sessions s ON s.id = m.session_id WHERE m.id IN ({qmarks})",
+                ids,
+            ).fetchall()
         by_id = {r["id"]: r for r in rows}
         return [by_id[i] for i in ids if i in by_id]
 
     def memories_for_session(self, session_id: str, levels: tuple[str, ...] = ("memory",)) -> list[sqlite3.Row]:
         qmarks = ",".join("?" for _ in levels)
+        access, args = self._access_where("m")
         return self.db.execute(
-            f"SELECT * FROM memories WHERE session_id=? AND level IN ({qmarks}) "
-            "ORDER BY importance DESC",
-            (session_id, *levels),
+            f"SELECT m.* FROM memories m WHERE m.session_id=? AND m.level IN ({qmarks}){access} "
+            "ORDER BY m.importance DESC",
+            (session_id, *levels, *args),
         ).fetchall()
 
     def expand_chunk(
@@ -603,10 +629,11 @@ class MemoryStore:
         """
         if session_id is None:
             return None
+        access, args = self._access_where("m")
         rows = self.db.execute(
-            "SELECT id, content FROM memories WHERE session_id=? AND level='chunk' "
-            "AND id BETWEEN ? AND ? ORDER BY id",
-            (session_id, memory_id - 1, memory_id + 1),
+            "SELECT m.id, m.content FROM memories m WHERE m.session_id=? AND m.level='chunk' "
+            f"AND m.id BETWEEN ? AND ?{access} ORDER BY m.id",
+            (session_id, memory_id - 1, memory_id + 1, *args),
         ).fetchall()
         if not rows:
             return None
@@ -621,14 +648,16 @@ class MemoryStore:
         return "\n".join(parts)
 
     def get_profile(self, project: str) -> sqlite3.Row | None:
+        access, args = self._access_where("m")
         return self.db.execute(
-            "SELECT * FROM memories WHERE level='project' AND project=?", (project,)
+            f"SELECT m.* FROM memories m WHERE m.level='project' AND m.project=?{access}", (project, *args)
         ).fetchone()
 
     def get_digests(self, limit: int = 8) -> list[sqlite3.Row]:
+        access, args = self._access_where("m")
         return self.db.execute(
-            "SELECT * FROM memories WHERE level='digest' ORDER BY ts DESC LIMIT ?",
-            (limit,),
+            f"SELECT m.* FROM memories m WHERE m.level='digest'{access} ORDER BY m.ts DESC LIMIT ?",
+            (*args, limit),
         ).fetchall()
 
     # ---------------- plan items (authored planning plane) ----------------
@@ -649,19 +678,22 @@ class MemoryStore:
         return cur.lastrowid
 
     def plan_get(self, item_id: int) -> sqlite3.Row | None:
+        access, args = self._plan_where("i")
         return self.db.execute(
-            "SELECT * FROM plan_items WHERE id=?", (item_id,)
+            f"SELECT i.* FROM plan_items i WHERE i.id=?{access}", (item_id, *args)
         ).fetchone()
 
     def plan_children(self, item_id: int) -> list[sqlite3.Row]:
+        access, args = self._plan_where("i")
         return self.db.execute(
-            "SELECT * FROM plan_items WHERE parent_id=? ORDER BY priority, id",
-            (item_id,),
+            f"SELECT i.* FROM plan_items i WHERE i.parent_id=?{access} ORDER BY i.priority, i.id",
+            (item_id, *args),
         ).fetchall()
 
     def plan_items_for(self, project: str) -> list[sqlite3.Row]:
+        access, args = self._plan_where("i")
         return self.db.execute(
-            "SELECT * FROM plan_items WHERE project=? ORDER BY id", (project,)
+            f"SELECT i.* FROM plan_items i WHERE i.project=?{access} ORDER BY i.id", (project, *args)
         ).fetchall()
 
     def plan_set(self, item_id: int, fields: dict, now: str) -> None:
@@ -722,9 +754,12 @@ class MemoryStore:
 
     # ---------------- search primitives ----------------
 
-    @staticmethod
-    def _memory_filters(project=None, levels=None, kinds=None, after=None, before=None):
+    def _memory_filters(self, project=None, levels=None, kinds=None, after=None, before=None):
         clauses, args = [], []
+        if self.restricted:
+            access, access_args = self.access_sql("m")
+            clauses.append(access)
+            args.extend(access_args)
         if project:
             clauses.append("m.project=?")
             args.append(project)
@@ -785,7 +820,7 @@ class MemoryStore:
 
     def has_vectors(self, project=None, levels=None, kinds=None, after=None, before=None):
         where, args = self._memory_filters(project, levels, kinds, after, before)
-        if not where:
+        if not where:  # unrestricted with no filters: today's fast path
             return self.db.execute('SELECT 1 FROM embeddings LIMIT 1').fetchone() is not None
         return self.db.execute('SELECT 1 FROM memories m JOIN embeddings e ON e.memory_id=m.id WHERE 1=1' + where + ' LIMIT 1', args).fetchone() is not None
 
@@ -804,7 +839,7 @@ class MemoryStore:
         before: str | None = None,
     ) -> set[int] | None:
         """Return the id-set matching the filters, or None if no filters given."""
-        if not any([project, levels, kinds, after, before]):
+        if not any([project, levels, kinds, after, before]) and not self.restricted:
             return None
         where, args = self._memory_filters(project, levels, kinds, after, before)
         return {r["id"] for r in self.db.execute("SELECT m.id FROM memories m WHERE 1=1" + where, args)}
@@ -946,6 +981,56 @@ class MemoryStore:
     def restricted(self) -> bool:
         return self.principal is not None and self.principal.restricted
 
+    def access_sql(self, alias: str = "m") -> tuple[str, list]:
+        """The predicate a memory row must pass for this store's principal."""
+        return memory_access_sql(self.principal, self.policy, self.default_owner(), alias)
+
+    def access_key(self) -> tuple:
+        return self.principal.key() if self.restricted else ("*",)
+
+    def _access_where(self, alias: str) -> tuple[str, list]:
+        if not self.restricted:
+            return "", []
+        sql, args = self.access_sql(alias)
+        return " AND " + sql, args
+
+    def _session_where(self, alias: str) -> tuple[str, list]:
+        if not self.restricted:
+            return "", []
+        sql, args = session_access_sql(self.principal, self.default_owner(), alias)
+        return " AND " + sql, args
+
+    def _plan_where(self, alias: str) -> tuple[str, list]:
+        """Plan boards are shared per project: readable with project access."""
+        if not self.restricted:
+            return "", []
+        sql, args = project_access_sql(self.principal, f"{alias}.project", self.default_owner())
+        return " AND " + sql, args
+
+    def can_write_project(self, project: str) -> bool:
+        """A restricted writer may write a project it has access to, or a new
+        one (which becomes theirs). An existing project nobody mapped is the
+        default owner's."""
+        if not self.restricted:
+            return True
+        sql, args = project_access_sql(self.principal, "?", self.default_owner())
+        if self.db.execute(f"SELECT {sql}", (project, *args)).fetchone()[0]:
+            return True
+        exists = self.db.execute(
+            "SELECT 1 FROM projects WHERE key=? UNION SELECT 1 FROM plan_items WHERE project=? "
+            "UNION SELECT 1 FROM sessions WHERE project=? LIMIT 1", (project, project, project)).fetchone()
+        return exists is None
+
+    def _restricted_counts(self) -> dict[str, int]:
+        access, args = self._access_where("m")
+        out = {level: n for level, n in self.db.execute(
+            f"SELECT m.level, COUNT(*) FROM memories m WHERE 1=1{access} GROUP BY m.level", args)}
+        session_access, session_args = self._session_where("s")
+        out["sessions"] = self.db.execute(f"SELECT COUNT(*) FROM sessions s WHERE 1=1{session_access}", session_args).fetchone()[0]
+        plan_access, plan_args = self._plan_where("i")
+        out["plan_items"] = self.db.execute(f"SELECT COUNT(*) FROM plan_items i WHERE 1=1{plan_access}", plan_args).fetchone()[0]
+        return out
+
     def writer(self) -> str | None:
         """The user a write is stamped with; None (= default owner) when the
         writer is the default owner, so single-user stores stay unstamped."""
@@ -956,6 +1041,8 @@ class MemoryStore:
     # ---------------- misc ----------------
 
     def counts(self) -> dict[str, int]:
+        if self.restricted:
+            return self._restricted_counts()
         out = {}
         for level, n in self.db.execute(
             "SELECT level, COUNT(*) FROM memories GROUP BY level"

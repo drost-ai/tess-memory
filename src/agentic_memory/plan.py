@@ -198,6 +198,8 @@ def add_item(
     clean_tags = [str(t).lower() for t in (tags or [])][:8]
     now = _now()
     with store.write_transaction():
+        if not store.can_write_project(project):
+            raise PermissionError(f"no access to project '{project}'")
         if parent_id is not None:
             _validate_parent(store, project, parent_id)
         item_id = store.plan_insert(

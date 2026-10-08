@@ -37,7 +37,10 @@ class ScopedVectorSearch:
             raise ValueError('query vector is invalid')
         self._trim(cache_bytes)
         revision = self.revision(store, project)
-        cacheable = cacheable and revision is not None and cache_bytes > 0
+        # A restricted reader's allowed rows move with memberships and project
+        # mappings, which no vector revision tracks: stream, never cache.
+        restricted = getattr(store, "restricted", False)
+        cacheable = cacheable and revision is not None and cache_bytes > 0 and not restricted
         key = (project, tuple(sorted(levels or ())), tuple(sorted(kinds or ())), after, before, revision)
         if cacheable and key in self.cache:
             self.hits += 1

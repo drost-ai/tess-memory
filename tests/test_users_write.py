@@ -83,7 +83,10 @@ class PlanAuthorTests(unittest.TestCase):
         embedder = RecordingEmbedder()
         self.store.principal = Principal("ana")
         item = plan.add_item(self.store, embedder, project="p", kind="epic", title="Ship it")
-        self.store.principal = Principal("ben")
+        with self.store.write_transaction():  # the project becomes the team's
+            self.store.db.execute("INSERT INTO teams(id) VALUES('core')")
+            self.store.db.execute("UPDATE projects SET team_id='core' WHERE key='p'")
+        self.store.principal = Principal("ben", teams=frozenset({"core"}))
         plan.update_item(self.store, embedder, item["id"], status="in_progress")
         row = self.store.plan_get(item["id"])
         self.assertEqual((row["created_by"], row["updated_by"]), ("ana", "ben"))
