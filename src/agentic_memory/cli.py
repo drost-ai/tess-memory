@@ -346,6 +346,52 @@ def cmd_codex_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_users(args: argparse.Namespace) -> int:
+    """Users, teams, project mappings and sharing, as the configured identity."""
+    from . import admin
+    from .store import MemoryStore
+
+    store = MemoryStore(CONFIG.db_path)
+    try:
+        if CONFIG.identity_user:
+            store.principal = store.resolve_principal(CONFIG.identity_user)
+        action = args.action
+        if action == "list":
+            result = admin.list_users(store)
+        elif action == "set-owner":
+            admin.set_default_owner(store, args.user)
+            result = {"default_owner": args.user}
+        elif action == "add":
+            admin.add_user(store, args.user, display_name=args.name, admin=args.admin)
+            result = {"added": args.user}
+        elif action == "disable":
+            admin.disable_user(store, args.user)
+            result = {"disabled": args.user}
+        elif action == "team-add":
+            admin.add_team(store, args.team, name=args.name)
+            result = {"team": args.team}
+        elif action == "member-add":
+            admin.add_member(store, args.team, args.user, role=args.role)
+            result = {"team": args.team, "member": args.user}
+        elif action == "member-remove":
+            admin.remove_member(store, args.team, args.user)
+            result = {"team": args.team, "removed": args.user}
+        elif action == "project-map":
+            admin.map_project(store, _to_slug(args.project), team=args.team, owner=args.owner)
+            result = {"project": _to_slug(args.project), "team": args.team, "owner": args.owner}
+        elif action == "share":
+            result = admin.share(store, args.target, None if args.visibility == "default" else args.visibility)
+        else:  # who-can-see
+            result = admin.who_can_see(store, args.memory_id)
+    except (PermissionError, LookupError, ValueError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    finally:
+        store.close()
+    print(json.dumps(result, indent=2))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="agentic-memory")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -411,6 +457,38 @@ def main(argv: list[str] | None = None) -> int:
 
     p = sub.add_parser("status", help="Show store statistics")
     p.set_defaults(fn=cmd_status)
+
+    p = sub.add_parser("users", help="Users, teams, project mappings and sharing (runs as [identity] user)")
+    actions = p.add_subparsers(dest="action", required=True)
+    actions.add_parser("list", help="users, admins and their teams")
+    a = actions.add_parser("set-owner", help="name the default owner (the user unowned rows belong to)")
+    a.add_argument("user")
+    a = actions.add_parser("add", help="add or update a user")
+    a.add_argument("user")
+    a.add_argument("--name", default=None)
+    a.add_argument("--admin", action="store_true")
+    a = actions.add_parser("disable", help="disable a user")
+    a.add_argument("user")
+    a = actions.add_parser("team-add", help="create a team")
+    a.add_argument("team")
+    a.add_argument("--name", default=None)
+    a = actions.add_parser("member-add", help="add a user to a team")
+    a.add_argument("team")
+    a.add_argument("user")
+    a.add_argument("--role", choices=["member", "admin"], default="member")
+    a = actions.add_parser("member-remove", help="remove a user from a team")
+    a.add_argument("team")
+    a.add_argument("user")
+    a = actions.add_parser("project-map", help="give a project to a team and/or name its owner")
+    a.add_argument("project")
+    a.add_argument("--team", default=None)
+    a.add_argument("--owner", default=None)
+    a = actions.add_parser("share", help="set visibility of memory:<id> or session:<id> (private|team|org|default)")
+    a.add_argument("target")
+    a.add_argument("visibility", choices=["private", "team", "org", "default"])
+    a = actions.add_parser("who-can-see", help="who may read one memory")
+    a.add_argument("memory_id", type=int)
+    p.set_defaults(fn=cmd_users)
 
     p = sub.add_parser("serve", help="Run the MCP server (stdio)")
     p.add_argument("--user", default=None, help="read and write as this user (default: [identity] user, else the instance owner)")

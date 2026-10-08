@@ -642,6 +642,28 @@ def plan_get(
 
 
 @mcp.tool()
+def memory_share(
+    target: Annotated[str, Field(description=(
+        "What to share: 'memory:<id>' for one memory, or 'session:<id>' for a "
+        "session's distilled output (its memories and summary, never raw chunks)."
+    ))],
+    visibility: Annotated[str, Field(description=(
+        "'team' (the project's team may read it), 'org' (everyone on this "
+        "instance), 'private' (only you), or 'default' (back to the policy)."
+    ))],
+) -> str:
+    """Change who may read one of YOUR memories or sessions.
+
+    Only the author (or an administrator) may change a row's visibility. Use it
+    when the user asks to share something with their team or take it back."""
+    from . import admin
+    if visibility not in ("private", "team", "org", "default"):
+        raise ValueError("visibility is private, team, org or default")
+    result = admin.share(_get_store(), target, None if visibility == "default" else visibility)
+    return f"{result['target']}: {result['rows']} rows now {result['visibility']}"
+
+
+@mcp.tool()
 def memory_status() -> str:
     """Report stored counts, source progress, failures and pending rollups.
 
