@@ -92,6 +92,13 @@ class PersonalExtraction:
                         if ds.is_excluded(to_slug(_session_cwd(metadata) or cfg.personal.agent)):continue
                         if (metadata.get('metadata') or {}).get('personalMemoryOrigin') in ('dream','extractor'):
                             continue
+                        if s.principal.reads:
+                            # Multi-audience: each audience extracts its own sessions.
+                            from .autobiography_config import session_audience
+                            if session_audience(metadata,cfg.personal)!=s.principal.audience:
+                                continue
+                    elif s.principal.reads and s.principal.audience!=cfg.personal.audience:
+                        continue  # sources without metadata belong to the owner's audience
                     snapshot=reader.read(ds,path,ds.resolve_project(project),parent)
                     require_quiet(path,ds.type,max(0,cfg.quiet_seconds))
                     if snapshot.transcript is None:continue

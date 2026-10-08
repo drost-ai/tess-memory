@@ -40,6 +40,9 @@ def identifier(value, name='identifier'):
     return value
 
 
+SHARED_SEGMENTS = ('Self', 'Principles')  # the agent's own identity: shared across audiences
+
+
 @dataclass(frozen=True)
 class PersonalPrincipal:
     owner: str
@@ -47,14 +50,31 @@ class PersonalPrincipal:
     audience: str = 'owner'
     role: str = 'reader'
     session_id: str = 'unbound'
+    # Epic U: '' = this audience only (single-audience stores, unchanged);
+    # '*' = every audience (the owner's, in a multi-audience store);
+    # otherwise the owner audience whose Self/Principles this audience shares.
+    reads: str = ''
 
     def __post_init__(self):
         for field in ('owner', 'agent', 'audience', 'session_id'):
             identifier(getattr(self, field), field)
+        if self.reads not in ('', '*'):
+            identifier(self.reads, 'reads')
         if self.role not in ROLES:
             raise PersonalError('forbidden', 'unavailable personal role')
         if self.role in ('author','dream') and self.session_id == 'unbound':
             raise PersonalError('forbidden','authoring requires a trusted session binding')
+
+    def audience_sql(self, alias=''):
+        """Which records this principal may READ (writes stay in its own audience)."""
+        column = f'{alias}.' if alias else ''
+        if self.reads == '*':
+            return '1=1', []
+        if self.reads:
+            shared = ','.join('?' for _ in SHARED_SEGMENTS)
+            return (f'({column}audience=? OR ({column}audience=? AND {column}segment IN ({shared})))',
+                    [self.audience, self.reads, *SHARED_SEGMENTS])
+        return f'{column}audience=?', [self.audience]
 
     def require(self, *roles):
         if self.role not in roles:
@@ -152,10 +172,11 @@ class AutobiographyStore:
                 self.db.rollback()
                 raise
 
-    def _head(self, record_id):
+    def _head(self, record_id, *, write=False):
         p = self.principal
-        row = self.db.execute('SELECT * FROM autobio_records WHERE id=? AND owner=? AND agent=? AND audience=?',
-                              (record_id, p.owner, p.agent, p.audience)).fetchone()
+        audience, args = ('audience=?', [p.audience]) if write else p.audience_sql()
+        row = self.db.execute(f'SELECT * FROM autobio_records WHERE id=? AND owner=? AND agent=? AND {audience}',
+                              (record_id, p.owner, p.agent, *args)).fetchone()
         if not row:
             raise PersonalError('not_found', 'personal record unavailable')
         return dict(row)
@@ -183,9 +204,10 @@ class AutobiographyStore:
         limit = max(1, min(int(limit), 100))
         p = self.principal
         with self.transaction(write=False):
-            rows = self.db.execute('''SELECT id FROM autobio_records WHERE owner=? AND agent=? AND audience=?
+            audience, args = p.audience_sql()
+            rows = self.db.execute(f'''SELECT id FROM autobio_records WHERE owner=? AND agent=? AND {audience}
                 AND id>? AND (? IS NULL OR segment=?) ORDER BY id LIMIT ?''',
-                (p.owner, p.agent, p.audience, after, segment, segment, limit+1)).fetchall()
+                (p.owner, p.agent, *args, after, segment, segment, limit+1)).fetchall()
             return {'records': [self._get(r['id']) for r in rows[:limit]],
                     'next_cursor': rows[limit-1]['id'] if len(rows)>limit else None}
 
@@ -262,7 +284,7 @@ class AutobiographyStore:
         if type(expected) is not int or expected<0:
             raise PersonalError('invalid','expected_revision must be a nonnegative integer')
         if record_id:
-            head=self._head(record_id)
+            head=self._head(record_id, write=True)  # only this audience's own records
             if expected!=head['revision']:
                 raise PersonalError('conflict','record revision changed; reread before proposing another edit')
             if edit.get('segment',head['segment'])!=head['segment'] or edit.get('subject',head['subject'])!=head['subject']:
@@ -344,11 +366,12 @@ class AutobiographyStore:
         expression=' OR '.join('"'+t+'"' for t in tokens)
         p=self.principal
         with self.transaction(write=False):
-            rows=self.db.execute('''SELECT r.id FROM autobio_search f JOIN autobio_records r ON r.id=f.record_id
+            audience, args = p.audience_sql('r')
+            rows=self.db.execute(f'''SELECT r.id FROM autobio_search f JOIN autobio_records r ON r.id=f.record_id
                 JOIN autobio_index_state i ON i.record_id=r.id AND i.revision=r.revision
-                WHERE autobio_search MATCH ? AND r.owner=? AND r.agent=? AND r.audience=? AND r.state='active'
+                WHERE autobio_search MATCH ? AND r.owner=? AND r.agent=? AND {audience} AND r.state='active'
                 AND (? IS NULL OR r.segment=?) ORDER BY rank,r.id LIMIT ?''',
-                (expression,p.owner,p.agent,p.audience,segment,segment,max(1,min(int(limit),50)))).fetchall()
+                (expression,p.owner,p.agent,*args,segment,segment,max(1,min(int(limit),50)))).fetchall()
             return {'records':[self._get(r[0]) for r in rows],'mode':'lexical','index':self.index_status()}
 
     def export(self):

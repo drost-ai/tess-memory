@@ -30,18 +30,28 @@ class PersonalConfig:
     daily_token_budget: int = 500000
     max_output_tokens: int = 4096
     service_config: str | None = None
+    # Epic U: one store, an audience per person (the host's people). Off =
+    # exactly one audience, as before.
+    multi_audience: bool = False
 
-    def principal(self, *, role=None, session_id=None):
+    def principal(self, *, role=None, session_id=None, audience=None):
+        """The principal for a session. Another audience than the configured
+        (owner's) one needs multi_audience; it then reads its own records
+        plus the agent's shared Self/Principles, and the owner reads all."""
         if not self.enabled:
             raise PersonalError('disabled','personal memory is disabled')
-        return PersonalPrincipal(self.owner,self.agent,self.audience,role or self.role,session_id or self.session_id)
+        audience = audience or self.audience
+        if audience != self.audience and not self.multi_audience:
+            raise PersonalError('forbidden','this store serves one audience (enable personal.multi_audience)')
+        reads = '' if not self.multi_audience else '*' if audience == self.audience else self.audience
+        return PersonalPrincipal(self.owner,self.agent,audience,role or self.role,session_id or self.session_id,reads)
 
     @classmethod
     def parse(cls, raw):
         if not isinstance(raw,dict) or set(raw)-{f.name for f in fields(cls)}:
             raise ValueError('unknown personal configuration fields')
         values=dict(raw)
-        for key in ['enabled','extraction_enabled','dream_enabled','shadow','historical']:
+        for key in ['enabled','extraction_enabled','dream_enabled','shadow','historical','multi_audience']:
             if key in values and type(values[key]) is not bool:
                 raise ValueError(f'personal.{key} must be a boolean')
         for key in ['context_subjects','source_names']:
@@ -62,3 +72,15 @@ class PersonalConfig:
         if result.enabled:
             result.principal()
         return result
+
+
+def session_audience(metadata, personal):
+    """The audience a session belongs to: the person the host named in its
+    metadata (personalAudience), else the configured (owner's) audience."""
+    from .autobiography import identifier
+    value = ((metadata or {}).get('metadata') or {}).get('personalAudience')
+    try:
+        return identifier(value, 'audience') if value else personal.audience
+    except PersonalError:
+        return personal.audience
+

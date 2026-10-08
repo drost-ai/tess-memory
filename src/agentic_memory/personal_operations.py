@@ -87,8 +87,15 @@ class PersonalOperations:
         if kind not in ('extractor','dream'):raise PersonalError('invalid','unknown personal operation')
         self.store.principal.require(kind,'operator')
 
+    def _schedule_key(self,kind):
+        """One schedule per job kind, and per audience in a multi-audience
+        store (the owner's audience keeps the plain key it always had)."""
+        audience=self.store.principal.audience
+        return kind if audience==self.config.personal.audience else f'{kind}@{audience}'
+
     def claim(self,kind,*,manual=False,request_deadline=None):
         self._role(kind);s=self.store;p=s.principal;cfg=self.config.personal
+        key=self._schedule_key(kind)
         if request_deadline is not None and (type(request_deadline) not in (int,float) or not math.isfinite(request_deadline) or request_deadline<=s.clock()):
             raise PersonalError('deadline','host job deadline has expired')
         s.repair_index(limit=8,max_seconds=.5)
@@ -97,8 +104,8 @@ class PersonalOperations:
         now=s.clock()
         with s.transaction():
             due=now if kind=='extractor' else self.next_night(now)
-            s.db.execute('INSERT OR IGNORE INTO autobio_schedule(kind,due,updated) VALUES(?,?,?)',(kind,due,now))
-            row=s.db.execute('SELECT * FROM autobio_schedule WHERE kind=?',(kind,)).fetchone()
+            s.db.execute('INSERT OR IGNORE INTO autobio_schedule(kind,due,updated) VALUES(?,?,?)',(key,due,now))
+            row=s.db.execute('SELECT * FROM autobio_schedule WHERE kind=?',(key,)).fetchone()
             if row['operation_id'] and row['lease_until']>now:return {'status':'busy','due':row['due']}
             if row['due']>now and not manual:return {'status':'not_due','due':row['due']}
             if row['operation_id']:
@@ -109,7 +116,7 @@ class PersonalOperations:
             s.db.execute('INSERT INTO autobio_operations(id,kind,owner,agent,audience,actor_session,fence,state,started,deadline) VALUES(?,?,?,?,?,?,?,\'running\',?,?)',
                          (op,kind,p.owner,p.agent,p.audience,p.session_id,fence,now,deadline))
             s.db.execute('UPDATE autobio_schedule SET operation_id=?,actor_session=?,fence=?,lease_until=?,updated=? WHERE kind=?',
-                         (op,p.session_id,fence,deadline,now,kind))
+                         (op,p.session_id,fence,deadline,now,key))
             return {'status':'running','operation_id':op,'fence':fence,'deadline':deadline,
                     'limits':{'model_calls':cfg.model_calls,'max_output_tokens':cfg.max_output_tokens,'max_seconds':cfg.max_seconds}}
 
@@ -274,7 +281,7 @@ class PersonalOperations:
             receipt={'outcome':outcome,'next_due':due}
             s.db.execute('UPDATE autobio_operations SET state=?,result=?,finish_receipt=? WHERE id=?',(outcome,canonical(result or {}),canonical(receipt),operation_id))
             s.db.execute('UPDATE autobio_schedule SET due=?,operation_id=NULL,lease_until=NULL,outcome=?,updated=? WHERE kind=? AND fence=?',
-                         (due,outcome,s.clock(),op['kind'],fence))
+                         (due,outcome,s.clock(),self._schedule_key(op['kind']),fence))
             return receipt
 
     def status(self):

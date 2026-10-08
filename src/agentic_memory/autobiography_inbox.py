@@ -37,6 +37,11 @@ class PersonalInbox:
         with self.store.transaction():
             p=self.store.principal
             bound=self.store.db.execute("SELECT value FROM autobio_meta WHERE key='operational_audience'").fetchone()
+            if p.reads:
+                # Multi-audience (Epic U): producers run once per audience.
+                for statement in INBOX_SCHEMA.split(';'):
+                    if statement.strip():self.store.db.execute(statement)
+                return
             if bound and bound[0]!=p.audience:
                 raise PersonalError('operational_audience','v1 producers are bound to one operational audience per store')
             for statement in INBOX_SCHEMA.split(';'):
@@ -84,7 +89,7 @@ class PersonalInbox:
                 if proposal['attribution']=='user_statement' and not any(
                     r['role']=='user' and r['start']<=start and r['end']>=end for r in metadata.get('roles',[])):
                     raise PersonalError('invalid_evidence','user-statement quote is not within a user message')
-                if proposal.get('target_record_id'):s._head(proposal['target_record_id'])
+                if proposal.get('target_record_id'):s._head(proposal['target_record_id'], write=True)
                 evidence=[{'source_id':source['id'],'generation':source['generation'],'start':start,'end':end,'attribution':proposal['attribution']}]
                 s._evidence(evidence)
                 key=digest([source['id'],source['generation'],start,end,proposal,1])
