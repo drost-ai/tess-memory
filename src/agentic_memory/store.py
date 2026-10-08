@@ -22,7 +22,32 @@ from pathlib import Path
 
 import numpy as np
 
+from .principals import DEFAULT_OWNER, Principal, VisibilityPolicy, principal_id
 from .time_utils import week_start
+
+USERS_SCHEMA_VERSION = 1
+USERS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS principals(
+    id TEXT PRIMARY KEY, display_name TEXT, kind TEXT NOT NULL DEFAULT 'user',
+    admin INTEGER NOT NULL DEFAULT 0, disabled INTEGER NOT NULL DEFAULT 0, created_at TEXT);
+CREATE TABLE IF NOT EXISTS teams(id TEXT PRIMARY KEY, name TEXT, org TEXT, created_at TEXT);
+CREATE TABLE IF NOT EXISTS team_members(
+    team_id TEXT NOT NULL REFERENCES teams(id), user_id TEXT NOT NULL,
+    role TEXT NOT NULL DEFAULT 'member', PRIMARY KEY(team_id, user_id));
+CREATE TABLE IF NOT EXISTS projects(key TEXT PRIMARY KEY, owner_user TEXT, team_id TEXT REFERENCES teams(id), created_at TEXT);
+CREATE TABLE IF NOT EXISTS visibility_events(
+    id INTEGER PRIMARY KEY, ts TEXT, actor TEXT, target TEXT NOT NULL, visibility TEXT, detail TEXT);
+"""
+# Additive and nullable: NULL is the instance default owner / the policy default.
+USERS_COLUMNS = (
+    ("sessions", "owner_user", "TEXT"),
+    ("memories", "owner_user", "TEXT"),
+    ("memories", "visibility", "TEXT"),
+    ("plan_items", "created_by", "TEXT"),
+    ("plan_items", "updated_by", "TEXT"),
+    ("plan_events", "actor", "TEXT"),
+    ("ingest_sources", "owner_user", "TEXT"),
+)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS files(
@@ -167,7 +192,8 @@ class MemoryRow:
 
 
 class MemoryStore:
-    def __init__(self, db_path: Path, *, readonly: bool = False):
+    def __init__(self, db_path: Path, *, readonly: bool = False,
+                 principal: Principal | None = None, policy: VisibilityPolicy | None = None):
         if not readonly:
             db_path.parent.mkdir(parents=True, exist_ok=True)
         # check_same_thread=False: MCP tool dispatch and the search agent may
@@ -189,6 +215,10 @@ class MemoryStore:
             self.db.executescript(SCHEMA)
             self._migrate()
         self.lock = threading.RLock()  # serializes multi-statement write groups
+        # Who reads and writes through this store; None = the default owner,
+        # unrestricted (every instance before Epic U, and any without identity).
+        self.principal = principal
+        self.policy = policy or VisibilityPolicy()
         self._emb_cache: tuple[np.ndarray, np.ndarray] | None = None  # (ids, matrix)
         self._emb_cache_data_version: int | None = None
         self._scoped_vectors = None
@@ -221,6 +251,18 @@ class MemoryStore:
                 raise
 
     def _migrate(self) -> None:
+        """Additive, idempotent, and safe when many processes open the store at
+        once: every check is repeated inside one IMMEDIATE transaction."""
+        self.db.commit()
+        self.db.execute("BEGIN IMMEDIATE")
+        try:
+            self._migrate_locked()
+            self.db.commit()
+        except BaseException:
+            self.db.rollback()
+            raise
+
+    def _migrate_locked(self) -> None:
         cols = {r["name"] for r in self.db.execute("PRAGMA table_info(sessions)")}
         if "parent_session" not in cols:
             self.db.execute("ALTER TABLE sessions ADD COLUMN parent_session TEXT")
@@ -242,7 +284,17 @@ class MemoryStore:
         source_columns = {r['name'] for r in self.db.execute('PRAGMA table_info(ingest_sources)')}
         if 'retry_at' not in source_columns:
             self.db.execute('ALTER TABLE ingest_sources ADD COLUMN retry_at REAL NOT NULL DEFAULT 0')
-        self.db.commit()
+        # Epic U: users, teams, projects and per-row owner/visibility.
+        for statement in USERS_SCHEMA.split(";"):
+            if statement.strip():
+                self.db.execute(statement)
+        for table, column, kind in USERS_COLUMNS:
+            if column not in {r["name"] for r in self.db.execute(f"PRAGMA table_info({table})")}:
+                self.db.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_memories_owner ON memories(owner_user)")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user)")
+        if self.db.execute("PRAGMA user_version").fetchone()[0] < USERS_SCHEMA_VERSION:
+            self.db.execute(f"PRAGMA user_version={USERS_SCHEMA_VERSION}")
 
     # ---------------- file tracking ----------------
 
@@ -816,6 +868,46 @@ class MemoryStore:
                 f"'{descriptor}'. Set AGENTIC_MEMORY_EMBED_PROVIDER to match, or "
                 f"delete the db and re-ingest to switch vector spaces."
             )
+
+    # ---------------- principals ----------------
+
+    def default_owner(self) -> str:
+        """The user NULL owners stand for, and the instance's first admin."""
+        if not self._has_users_schema():
+            return DEFAULT_OWNER
+        return self.get_meta("default_owner") or DEFAULT_OWNER
+
+    def _has_users_schema(self) -> bool:
+        if not hasattr(self, "_users_schema"):
+            self._users_schema = self.db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='principals'").fetchone() is not None
+        return self._users_schema
+
+    def resolve_principal(self, user: str | None) -> Principal:
+        """The principal for a configured user id; none or the default owner
+        is the unrestricted default owner."""
+        owner = self.default_owner()
+        if user is None or user == owner:
+            return Principal(owner, admin=True)
+        principal_id(user)
+        if not self._has_users_schema():
+            raise RuntimeError("this store predates users; open it once with a writable client to migrate it")
+        row = self.db.execute("SELECT admin, disabled FROM principals WHERE id=?", (user,)).fetchone()
+        if row is not None and row["disabled"]:
+            raise PermissionError(f"user {user!r} is disabled")
+        teams = frozenset(r[0] for r in self.db.execute("SELECT team_id FROM team_members WHERE user_id=?", (user,)))
+        return Principal(user, teams=teams, admin=bool(row and row["admin"]))
+
+    @property
+    def restricted(self) -> bool:
+        return self.principal is not None and self.principal.restricted
+
+    def writer(self) -> str | None:
+        """The user a write is stamped with; None (= default owner) when the
+        writer is the default owner, so single-user stores stay unstamped."""
+        if self.principal is None or self.principal.user == self.default_owner():
+            return None
+        return self.principal.user
 
     # ---------------- misc ----------------
 
