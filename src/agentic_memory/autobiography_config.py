@@ -74,8 +74,9 @@ class PersonalConfig:
         for key in OPTIONAL_LIMITS:
             if getattr(result,key) is not None and (type(getattr(result,key)) is not int or getattr(result,key)<=0):
                 raise ValueError(f'personal.{key} must be a positive integer when set')
-        if not 256<=result.context_budget<=64000:
-            raise ValueError('personal.context_budget must be 256..64000')
+        from .autobiography_context import MAX_CONTEXT_BYTES
+        if not 256<=result.context_budget<=MAX_CONTEXT_BYTES:
+            raise ValueError(f'personal.context_budget must be 256..{MAX_CONTEXT_BYTES} (UTF-8 bytes, ~4 per token)')
         if type(result.dream_hour) is not int or not 0<=result.dream_hour<=23:
             raise ValueError('personal.dream_hour must be 0..23')
         from zoneinfo import ZoneInfo

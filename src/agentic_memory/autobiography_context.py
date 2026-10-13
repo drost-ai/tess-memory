@@ -2,9 +2,14 @@
 from .autobiography import PersonalError, digest
 
 
+# The budget is UTF-8 bytes, an upper bound on tokens (~4 bytes per English
+# token): the ceiling allows about 128K tokens of personal context.
+MAX_CONTEXT_BYTES = 512_000
+
+
 def personal_context(store, *, budget=6000, subjects=()):
-    if type(budget) is not int or not 256<=budget<=64000:
-        raise PersonalError('budget','context budget must be between 256 and 64000')
+    if type(budget) is not int or not 256<=budget<=MAX_CONTEXT_BYTES:
+        raise PersonalError('budget',f'context budget must be between 256 and {MAX_CONTEXT_BYTES} bytes')
     if not isinstance(subjects,(list,tuple)) or len(subjects)>16 or any(not isinstance(s,str) for s in subjects):
         raise PersonalError('invalid','select at most 16 subjects')
     principal=store.principal

@@ -27,6 +27,12 @@ class LimitsConfigTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'positive integer'):
             PersonalConfig.parse({'model_calls':0})
 
+    def test_context_budget_allows_about_128k_tokens(self):
+        self.assertEqual(PersonalConfig.parse({'context_budget':512000}).context_budget,512000)
+        for bad in (255,512001):
+            with self.assertRaisesRegex(ValueError,'context_budget'):
+                PersonalConfig.parse({'context_budget':bad})
+
     def test_part_limit(self):
         self.assertEqual([_part_limit(None,None),_part_limit(5,None),_part_limit(None,3),_part_limit(5,3)],[-1,5,3,3])
 
