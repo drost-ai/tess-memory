@@ -45,10 +45,10 @@ def source_adapter(ds: DataStore, *, codex_catalog=None) -> tuple[list[Discovere
     if ds.type == "claude-code":
         return discover_transcripts(ds.path, ds.exclude), parse_transcript
     if ds.type == "agent-core":
-        return agent_core.discover_sessions(ds.path, ds.exclude), agent_core.parse_session
+        return agent_core.discover_sessions(ds.path, ds.exclude, ds.skip_copies_of), agent_core.parse_session
     if ds.type == "transcript":
         return (
-            agent_core.discover_transcript_files(ds.path, ds.exclude, ds.project),
+            agent_core.discover_transcript_files(ds.path, ds.exclude, ds.project, ds.skip_copies_of),
             agent_core.parse_transcript_file,
         )
     if ds.type == "codex":

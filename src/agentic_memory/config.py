@@ -68,6 +68,11 @@ class DataStore:
     # the instance's default owner, as before.
     user: str | None = None
     team: str | None = None
+    # Directories this store's sessions were copied from: a session whose
+    # file name also exists in one of them is a copy, already ingested from
+    # there, and is skipped (it would otherwise be distilled again under its
+    # new path). E.g. a runtime home copied from another agent's.
+    skip_copies_of: list[Path] = field(default_factory=list)
 
     @property
     def attribution(self) -> ProjectAttribution:
@@ -286,6 +291,7 @@ def load_config(path: Path | None = None) -> Config:
                 project=str(d["project"]) if d.get("project") else None,
                 user=str(d["user"]) if d.get("user") else None,
                 team=str(d["team"]) if d.get("team") else None,
+                skip_copies_of=[_path(p) for p in d.get("skip_copies_of", [])],
             )
             for d in raw["data_stores"]
         ]

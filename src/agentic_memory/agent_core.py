@@ -53,7 +53,8 @@ def _session_cwd(meta: dict) -> str | None:
 
 
 def discover_sessions(
-    source_dir: Path, exclude: tuple[str, ...] | list[str] = ()
+    source_dir: Path, exclude: tuple[str, ...] | list[str] = (),
+    skip_copies_of: tuple[Path, ...] | list[Path] = (),
 ) -> list[tuple[Path, str, str | None]]:
     """Return (meta_path, project_slug, parent_session) for every session.
 
@@ -61,11 +62,15 @@ def discover_sessions(
     on each session update (updatedAt at minimum), so its (mtime, size) moves
     whenever the session grows. Metas that cannot be parsed or carry no cwd
     are skipped — a session that can't be attributed to a project is noise.
+    So is a session whose metadata file also exists in one of
+    ``skip_copies_of``: a copy of one ingested from there.
     """
     out: list[tuple[Path, str, str | None]] = []
     if not source_dir.is_dir():
         return out
     for meta_path in sorted(source_dir.glob("*.json")):
+        if any((origin / meta_path.name).exists() for origin in skip_copies_of):
+            continue
         meta = _load_meta(meta_path)
         if meta is None:
             continue
@@ -168,7 +173,7 @@ def _append_message_turns(
 
 def discover_transcript_files(
     source_dir: Path, exclude: tuple[str, ...] | list[str] = (),
-    project: str | None = None,
+    project: str | None = None, skip_copies_of: tuple[Path, ...] | list[Path] = (),
 ) -> list[tuple[Path, str, str | None]]:
     """Discovery for type="transcript": bare per-session JSONL files.
 
@@ -191,6 +196,8 @@ def discover_transcript_files(
         return out
     for path in sorted(source_dir.glob("*.jsonl")):
         if path.name.endswith(".messages.jsonl"):
+            continue
+        if any((origin / path.name).exists() for origin in skip_copies_of):
             continue
         out.append((path, project, None))
     return out
