@@ -3,6 +3,10 @@ from dataclasses import dataclass, fields
 from .autobiography import PersonalError, PersonalPrincipal
 
 
+# Limits that apply only when configured (None = no limit).
+OPTIONAL_LIMITS = ('max_candidates','max_edits','model_calls','daily_model_calls','daily_token_budget','max_output_tokens')
+
+
 @dataclass(frozen=True)
 class PersonalConfig:
     enabled: bool = False
@@ -20,15 +24,19 @@ class PersonalConfig:
     historical: bool = False
     dream_hour: int = 23
     timezone: str = 'UTC'
-    max_candidates: int = 16
-    max_edits: int = 8
-    model_calls: int = 8
-    max_seconds: int = 300
+    # Work and spending limits are off unless configured: no daily call or
+    # token budget, no per-job call allowance, no cap on a reflection's
+    # candidates or edits, and the provider's own output limit. An operator
+    # who wants bounds sets them.
+    max_candidates: int | None = None
+    max_edits: int | None = None
+    model_calls: int | None = None
+    max_seconds: int = 300  # a job's deadline: a hang guard, not a budget
     lease_seconds: int = 600
     extraction_interval: int = 300
-    daily_model_calls: int = 32
-    daily_token_budget: int = 500000
-    max_output_tokens: int = 4096
+    daily_model_calls: int | None = None
+    daily_token_budget: int | None = None
+    max_output_tokens: int | None = None
     service_config: str | None = None
     # Epic U: one store, an audience per person (the host's people). Off =
     # exactly one audience, as before.
@@ -60,11 +68,14 @@ class PersonalConfig:
                     raise ValueError(f'personal.{key} must be a string array')
                 values[key]=tuple(values[key])
         result=cls(**values)
-        for key in ['context_budget','max_candidates','max_edits','model_calls','max_seconds','lease_seconds','extraction_interval','daily_model_calls','daily_token_budget','max_output_tokens']:
+        for key in ['context_budget','max_seconds','lease_seconds','extraction_interval']:
             if type(getattr(result,key)) is not int or getattr(result,key)<=0:
                 raise ValueError(f'personal.{key} must be a positive integer')
-        if not 256<=result.context_budget<=64000 or result.max_candidates>100 or result.max_edits>32:
-            raise ValueError('personal context/candidate/edit budget exceeds its bound')
+        for key in OPTIONAL_LIMITS:
+            if getattr(result,key) is not None and (type(getattr(result,key)) is not int or getattr(result,key)<=0):
+                raise ValueError(f'personal.{key} must be a positive integer when set')
+        if not 256<=result.context_budget<=64000:
+            raise ValueError('personal.context_budget must be 256..64000')
         if type(result.dream_hour) is not int or not 0<=result.dream_hour<=23:
             raise ValueError('personal.dream_hour must be 0..23')
         from zoneinfo import ZoneInfo

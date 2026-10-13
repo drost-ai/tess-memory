@@ -57,8 +57,8 @@ class PersonalInbox:
 
     def publish(self,part_id,proposals,*,admission=None):
         self.store.principal.require('extractor','operator')
-        if not isinstance(proposals,list) or len(proposals)>8:
-            raise PersonalError('invalid','return at most eight candidates for a source part')
+        if not isinstance(proposals,list):
+            raise PersonalError('invalid','candidates must be a list')
         s=self.store;p=s.principal
         with s.transaction():
             if admission:admission()

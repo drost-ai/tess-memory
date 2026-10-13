@@ -151,7 +151,7 @@ class PersonalOperations:
         day=datetime.fromtimestamp(s.clock(),ZoneInfo(cfg.timezone)).date().isoformat()
         # Budget a conservative estimate for envelopes, tools and follow-up
         # context as well as the bounded request/output text. This is not billing.
-        tokens=slots*(input_units+cfg.max_output_tokens+8192)+max(0,slots-1)*32768
+        tokens=slots*(input_units+(cfg.max_output_tokens or 0)+8192)+max(0,slots-1)*32768
         with s.transaction():
             op=self._operation(operation_id,fence)
             if op['kind']=='dream' and slots==1:
@@ -178,12 +178,18 @@ class PersonalOperations:
             if prior:return {'status':'busy'}
             used=s.db.execute("SELECT COALESCE(SUM(reserved_calls),0),COALESCE(SUM(reserved_tokens),0) FROM autobio_model_work WHERE day=? AND state!='not_dispatched'",(day,)).fetchone()
             run_used=s.db.execute("SELECT COALESCE(SUM(reserved_calls),0) FROM autobio_model_work WHERE operation_id=? AND state!='not_dispatched'",(operation_id,)).fetchone()[0]
-            call_ceiling=cfg.daily_model_calls
-            token_ceiling=cfg.daily_token_budget
-            if op['kind']=='extractor':
-                call_ceiling-=min(cfg.model_calls,cfg.daily_model_calls//4)
-                token_ceiling=cfg.daily_token_budget*3//4
-            if used[0]+slots>call_ceiling or used[1]+tokens>token_ceiling or run_used+slots>cfg.model_calls:
+            # Allowances apply only when configured; extraction then leaves a
+            # share of the daily allowance for reflection.
+            exhausted=cfg.model_calls is not None and run_used+slots>cfg.model_calls
+            if cfg.daily_model_calls is not None:
+                call_ceiling=cfg.daily_model_calls
+                if op['kind']=='extractor':
+                    call_ceiling-=min(cfg.model_calls or cfg.daily_model_calls,cfg.daily_model_calls//4)
+                exhausted=exhausted or used[0]+slots>call_ceiling
+            if cfg.daily_token_budget is not None:
+                token_ceiling=cfg.daily_token_budget*3//4 if op['kind']=='extractor' else cfg.daily_token_budget
+                exhausted=exhausted or used[1]+tokens>token_ceiling
+            if exhausted:
                 raise PersonalError('budget','personal daily or operation allowance exhausted; work remains queued')
             request_id=uuid.uuid4().hex
             s.db.execute('''INSERT INTO autobio_model_work(id,operation_id,work_id,cache_key,day,reserved_calls,reserved_tokens,state,provider,model,identity,source_ids,record_ids,created)
@@ -304,10 +310,11 @@ class PersonalOperations:
                 'oldest_candidate_age_seconds':max(0,self.store.clock()-oldest) if oldest else None,
                 'failed_parts':failures,'source_errors':sources,
                 'day':day,'model_turns':row[0],'reserved_provider_calls':row[1],'reserved_token_estimate':row[2],
-                'observed_usage':observed,'remaining_reservations':{'provider_calls':max(0,self.config.personal.daily_model_calls-row[1]),
-                    'tokens':max(0,self.config.personal.daily_token_budget-row[2])},
+                'observed_usage':observed,'remaining_reservations':{
+                    'provider_calls':None if self.config.personal.daily_model_calls is None else max(0,self.config.personal.daily_model_calls-row[1]),
+                    'tokens':None if self.config.personal.daily_token_budget is None else max(0,self.config.personal.daily_token_budget-row[2])},
                 'limits':{'daily_provider_calls':self.config.personal.daily_model_calls,'daily_token_reservation_budget':self.config.personal.daily_token_budget},
-                'note':'Conservative reservations include potential logical provider calls; transport retries and billed cost remain separately observed.'}
+                'note':'Reservations are conservative estimates, not billing; null limits and remaining allowances mean no limit is configured.'}
 
     def close(self):
         for context,_ in list(self.leases.values()):

@@ -70,7 +70,7 @@ def register_personal_tools(server, config, *, principal=None):
             return PersonalInbox(store()).part_status(part_id)
 
         @expose
-        def autobiography_extraction_prepare(limit: int=8) -> dict:
+        def autobiography_extraction_prepare(limit: int | None=None) -> dict:
             """Service operation: prepare changed source parts without editing authored state."""
             from .autobiography_extract import PersonalExtraction
             return PersonalExtraction(config,store()).prepare(limit=limit)

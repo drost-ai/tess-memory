@@ -14,7 +14,7 @@ from .source_activity import require_quiet, SourceNotQuiet
 EXTRACTION_VERSION=1
 PART_CHARS=12000
 EXTRACT_SYSTEM='''You are a personal-memory candidate extractor. You propose evidence-linked candidates; you cannot edit autobiography.
-Return only JSON {"candidates": [...]} with at most eight entries, or an empty array.
+Return only JSON {"candidates": [...]}, or an empty array.
 Each entry has segment (Self|Principles|People|Relationships|Experiences|Reflections), title, body,
 attribution (user_statement|observed_fact|agent_reflection|extractor_inference|inherited), and quote.
 The quote must be copied exactly from the supplied source. User statements must quote a user message.
@@ -48,7 +48,7 @@ class PersonalExtraction:
         self.config,self.store=config,store
         self.inbox=PersonalInbox(store)
 
-    def prepare(self,*,limit=8):
+    def prepare(self,*,limit=None):
         cfg,s=self.config,self.store
         s.principal.require('extractor','operator')
         if not cfg.personal.enabled or not cfg.personal.extraction_enabled:
@@ -168,7 +168,7 @@ class PersonalExtraction:
         rows=s.db.execute('''SELECT p.* FROM autobio_extraction_parts p JOIN autobio_sources s ON s.id=p.source_id
             WHERE p.state='pending' AND p.retry_after<=? AND s.generation=p.generation AND s.owner=? AND s.agent=? AND s.audience=?
             AND NOT EXISTS(SELECT 1 FROM autobio_suppressions x WHERE x.source_id=p.source_id AND x.owner=s.owner AND x.agent=s.agent)
-            ORDER BY p.updated,p.id LIMIT ?''',(s.clock(),s.principal.owner,s.principal.agent,s.principal.audience,max(1,min(int(limit),cfg.personal.model_calls)))).fetchall()
+            ORDER BY p.updated,p.id LIMIT ?''',(s.clock(),s.principal.owner,s.principal.agent,s.principal.audience,_part_limit(limit,cfg.personal.model_calls))).fetchall()
         report['parts']=[{'id':r['id'],'source_id':r['source_id'],'generation':r['generation'],'system':EXTRACT_SYSTEM,
                           'text':r['text'],'start':r['start'],'end':r['end']} for r in rows]
         return report
@@ -184,3 +184,10 @@ class PersonalExtraction:
         for revision in json.loads(row[0]).get('source_revisions',[]):
             if not SourceRevision(**revision).verify():raise PersonalError('stale_source','source prefix changed during extraction')
         return self.inbox.publish(part_id,proposals,admission=admission)
+
+
+def _part_limit(requested, configured):
+    """How many parts one job prepares: the smaller of the host's request and
+    the configured allowance, either of which may be unset (-1: no limit)."""
+    bounds=[int(x) for x in (requested,configured) if x is not None]
+    return max(1,min(bounds)) if bounds else -1

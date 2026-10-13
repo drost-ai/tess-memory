@@ -89,7 +89,7 @@ class DreamCycle:
             candidates=[];chars=len(context['text'])
             rows=s.db.execute('''SELECT * FROM autobio_candidates WHERE owner=? AND agent=? AND audience=? AND created<=?
                 AND (state='pending' OR (state='deferred' AND review_after<=?)) ORDER BY created,id LIMIT ?''',
-                (p.owner,p.agent,p.audience,now,now,0 if initialize else cfg.max_candidates*4)).fetchall()
+                (p.owner,p.agent,p.audience,now,now,0 if initialize else -1 if cfg.max_candidates is None else cfg.max_candidates*4)).fetchall()
             for row in rows:
                 evidence=json.loads(row['evidence'])
                 if not all(s.evidence_available(e) for e in evidence):
@@ -103,7 +103,8 @@ class DreamCycle:
                     offset=evidence[0]['start']-part['start']
                     value['source_context']=part['text'][max(0,offset-1000):offset+len(value['proposal']['quote'])+1000]
                 size=len(canonical(value))
-                if len(candidates)>=cfg.max_candidates or chars+size>48000:break
+                # The prompt must fit: candidates beyond ~48k characters wait for the next cycle.
+                if (cfg.max_candidates is not None and len(candidates)>=cfg.max_candidates) or chars+size>48000:break
                 candidates.append(value);chars+=size
                 s.db.execute("UPDATE autobio_candidates SET state='claimed',cycle_id=?,fence=?,lease_until=?,updated=? WHERE id=?",
                     (cycle_id,fence,lease_until,now,row['id']))
@@ -116,7 +117,7 @@ class DreamCycle:
                  canonical(self._heads()),canonical(context['manifest']),canonical(journal),int(cfg.shadow)))
             return {'status':status,'cycle_id':cycle_id,'fence':fence,'lease_token':token,'deadline':deadline,
                     'system':DREAM_SYSTEM+(INITIALIZE_SYSTEM if initialize else ''),'core':context,'candidates':candidates,'shadow':cfg.shadow,
-                    'limits':{'edits':cfg.max_edits,'model_calls':cfg.model_calls,'seconds':cfg.max_seconds}}
+                    'limits':{k:v for k,v in {'edits':cfg.max_edits,'model_calls':cfg.model_calls,'seconds':cfg.max_seconds}.items() if v is not None}}
 
     def renew(self,cycle_id,fence,lease_token):
         self.store.principal.require('dream','operator')
@@ -130,7 +131,9 @@ class DreamCycle:
     def commit(self,cycle_id,fence,lease_token,*,idempotency_key,edits,outcomes):
         s=self.store;p=s.principal;p.require('dream','operator')
         cfg=self.config.personal
-        if not isinstance(edits,list) or not isinstance(outcomes,list) or len(edits)>cfg.max_edits or len(outcomes)>cfg.max_candidates:
+        if not isinstance(edits,list) or not isinstance(outcomes,list):
+            raise PersonalError('invalid','edits and outcomes must be lists')
+        if (cfg.max_edits is not None and len(edits)>cfg.max_edits) or (cfg.max_candidates is not None and len(outcomes)>cfg.max_candidates):
             raise PersonalError('budget','reconciliation batch exceeds configured limits')
         payload_hash=digest({'cycle':cycle_id,'edits':edits,'outcomes':outcomes,'scope':[p.owner,p.agent,p.audience]})
         with s.transaction():
@@ -143,7 +146,7 @@ class DreamCycle:
                     raise PersonalError('invalid','initialization can only author missing core segments')
             if self._heads()!=json.loads(cycle['read_heads']):
                 raise PersonalError('conflict','autobiography changed during reflection; reread and reconsider')
-            if cycle['edits']+len(edits)>cfg.max_edits:
+            if cfg.max_edits is not None and cycle['edits']+len(edits)>cfg.max_edits:
                 raise PersonalError('budget','cycle edit allowance exhausted')
             pending={r['id']:r for r in s.db.execute("SELECT * FROM autobio_candidates WHERE cycle_id=? AND fence=? AND state='claimed'",(cycle_id,fence))}
             prepared=copy.deepcopy(edits);seen=set()
@@ -162,7 +165,7 @@ class DreamCycle:
                 indices=outcome.get('edit_indices',[]);existing=outcome.get('existing_revisions',[])
                 if not isinstance(indices,list) or any(type(i) is not int or not 0<=i<len(prepared) for i in indices):
                     raise PersonalError('invalid','invalid resulting edit references')
-                if not isinstance(existing,list) or len(existing)>cfg.max_edits:raise PersonalError('invalid','invalid existing revision references')
+                if not isinstance(existing,list) or (cfg.max_edits is not None and len(existing)>cfg.max_edits):raise PersonalError('invalid','invalid existing revision references')
                 if action in ('accepted','merged') and not indices and not existing:
                     raise PersonalError('invalid','accepted evidence must name resulting or already-integrated revisions')
                 for ref in existing:
