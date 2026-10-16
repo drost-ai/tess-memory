@@ -136,7 +136,7 @@ class AutobiographyTests(unittest.TestCase):
         operator=AutobiographyStore(self.path,replace(self.principal,role='operator'));self.addCleanup(operator.close)
         receipt=import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='seed')
         self.assertEqual(receipt,import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='seed'))
-        record=operator.get(receipt['edits'][0]['record_id'])
+        record=operator.get(receipt['edits'][0]['record_id'],include_inactive=True)
         self.assertEqual((record['state'],record['origin'],record['attribution']),('retired','import','inherited'))
         file.write_text('Changed after preview')
         with self.assertRaises(PersonalError):import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='changed')

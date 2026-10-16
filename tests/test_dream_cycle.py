@@ -39,6 +39,46 @@ class DreamTests(unittest.TestCase):
         proposal=self.proposal();proposal.update(overrides)
         return self.dream.commit(cycle['cycle_id'],cycle['fence'],cycle['lease_token'],idempotency_key='batch1',**proposal)
 
+    def test_lifecycle_candidate_decision_is_fenced_atomic_and_preserves_snapshots(self):
+        author=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='author'))
+        self.addCleanup(author.close)
+        ids=[]
+        for subject in ('old','replacement'):
+            ids.append(author.update(expected_revision=0,segment='People',subject=subject,title=subject,
+                body='Unchanged '+subject,reason='Authored',idempotency_key=subject)['edits'][0]['record_id'])
+        original=tuple(author.db.execute('SELECT * FROM autobio_revisions WHERE record_id=?',(ids[0],)).fetchone())
+        cycle=self.dream.prepare()
+        edit={'operation':'lifecycle','record_id':ids[0],'expected_revision':1,'state':'superseded',
+              'reason':'New statement supersedes this claim','superseded_by':ids[1],'superseded_by_revision':1}
+        receipt=self.commit(cycle,edits=[edit])
+        self.assertEqual(receipt,self.commit(cycle,edits=[edit]))
+        self.assertEqual(tuple(author.db.execute('SELECT * FROM autobio_revisions WHERE record_id=? AND revision=1',(ids[0],)).fetchone()),original)
+        self.assertEqual(author.get(ids[0],2)['evidence'],[])
+        self.assertEqual(author.get(ids[0],2)['lifecycle']['superseded_by'],ids[1])
+        with self.assertRaises(PersonalError):author.get(ids[0])
+        candidate=PersonalInbox(self.store).list(state='accepted')['candidates'][0]
+        self.assertEqual(candidate['resulting_revisions'],receipt['edits'])
+
+    def test_lifecycle_shadow_and_failed_batch_leave_history_unchanged(self):
+        author=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='author'))
+        self.addCleanup(author.close)
+        rid=author.update(expected_revision=0,segment='People',title='Old',body='Unchanged',
+            reason='Authored',idempotency_key='old')['edits'][0]['record_id']
+        edit={'operation':'lifecycle','record_id':rid,'expected_revision':1,'state':'retracted','reason':'Incorrect'}
+        cycle=self.dream.prepare()
+        with self.assertRaises(PersonalError):
+            self.commit(cycle,edits=[edit,dict(edit,expected_revision=99)])
+        self.assertEqual(author.get(rid)['revision'],1)
+        self.assertEqual(len(author.history(rid)['revisions']),1)
+        self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'],status='partial')
+        self.cfg=replace(self.cfg,personal=replace(self.cfg.personal,shadow=True))
+        self.dream=DreamCycle(self.cfg,self.store)
+        cycle=self.dream.prepare()
+        receipt=self.commit(cycle,edits=[edit])
+        self.assertTrue(receipt['shadow'])
+        self.assertEqual(author.get(rid)['revision'],1)
+        self.assertEqual(len(author.history(rid)['revisions']),1)
+
     def test_atomic_autonomous_publication_and_lost_ack_retry(self):
         cycle=self.dream.prepare();receipt=self.commit(cycle)
         self.assertEqual(receipt,self.commit(cycle))

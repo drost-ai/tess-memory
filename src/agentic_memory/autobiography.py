@@ -14,7 +14,7 @@ import uuid
 
 SEGMENTS = ('Self', 'Principles', 'People', 'Relationships', 'Experiences', 'Reflections')
 ATTRIBUTIONS = ('user_statement', 'observed_fact', 'agent_reflection', 'extractor_inference', 'inherited')
-ROLES = ('reader', 'author', 'extractor', 'dream', 'operator')
+ROLES = ('reader', 'author', 'extractor', 'dream', 'reconciler', 'operator')
 SCHEMA_VERSION = 1
 MAX_BODY = 32000
 MAX_EVIDENCE = 32
@@ -62,7 +62,7 @@ class PersonalPrincipal:
             identifier(self.reads, 'reads')
         if self.role not in ROLES:
             raise PersonalError('forbidden', 'unavailable personal role')
-        if self.role in ('author','dream') and self.session_id == 'unbound':
+        if self.role in ('author','dream','reconciler') and self.session_id == 'unbound':
             raise PersonalError('forbidden','authoring requires a trusted session binding')
 
     def audience_sql(self, alias=''):
@@ -77,7 +77,7 @@ class PersonalPrincipal:
         return f'{column}audience=?', [self.audience]
 
     def require(self, *roles):
-        if self.role not in roles:
+        if ('dream' if self.role=='reconciler' else self.role) not in tuple('dream' if role=='reconciler' else role for role in roles):
             raise PersonalError('forbidden', 'operation unavailable to this principal')
 
 
@@ -137,6 +137,8 @@ class AutobiographyStore:
                 row = self.db.execute("SELECT value FROM autobio_meta WHERE key='version'").fetchone()
                 if row and int(row[0]) != SCHEMA_VERSION:
                     raise PersonalError('schema_version', 'unsupported personal schema version')
+                from .autobiography_lifecycle import install
+                install(self.db)
                 scope = canonical([principal.owner, principal.agent])
                 bound = self.db.execute("SELECT value FROM autobio_meta WHERE key='scope'").fetchone()
                 if bound and bound[0] != scope:
@@ -191,14 +193,18 @@ class AutobiographyStore:
         result = {**head, **dict(row), 'id': record_id}
         result['evidence'] = json.loads(result['evidence'])
         result['current_revision'] = head['revision']
+        event = self.db.execute('SELECT * FROM autobio_lifecycle WHERE record_id=? AND revision=?', (record_id, revision)).fetchone()
+        result['lifecycle'] = dict(event) if event else None
         result['evidence_availability'] = [self.evidence_available(e) for e in result['evidence']]
         return result
 
-    def get(self, record_id, revision=None):
+    def get(self, record_id, revision=None, *, include_inactive=False):
         with self.transaction(write=False):
+            if revision is None and not include_inactive and self._head(record_id)['state'] != 'active':
+                raise PersonalError('not_found', 'personal record is no longer active; request history or an explicit revision')
             return self._get(record_id, revision)
 
-    def list_records(self, *, segment=None, limit=100, after=''):
+    def list_records(self, *, segment=None, limit=100, after='', include_inactive=False):
         if segment is not None and segment not in SEGMENTS:
             raise PersonalError('invalid', 'unknown personal segment')
         limit = max(1, min(int(limit), 100))
@@ -206,8 +212,8 @@ class AutobiographyStore:
         with self.transaction(write=False):
             audience, args = p.audience_sql()
             rows = self.db.execute(f'''SELECT id FROM autobio_records WHERE owner=? AND agent=? AND {audience}
-                AND id>? AND (? IS NULL OR segment=?) ORDER BY id LIMIT ?''',
-                (p.owner, p.agent, *args, after, segment, segment, limit+1)).fetchall()
+                AND (? OR state='active') AND id>? AND (? IS NULL OR segment=?) ORDER BY id LIMIT ?''',
+                (p.owner, p.agent, *args, bool(include_inactive), after, segment, segment, limit+1)).fetchall()
             return {'records': [self._get(r['id']) for r in rows[:limit]],
                     'next_cursor': rows[limit-1]['id'] if len(rows)>limit else None}
 
@@ -257,6 +263,9 @@ class AutobiographyStore:
                                    (p.owner,p.agent,source_id)).fetchone())
 
     def _write(self, edit, commit_id, origin):
+        if isinstance(edit, dict) and edit.get('operation') == 'lifecycle':
+            from .autobiography_lifecycle import write_transition
+            return write_transition(self, edit, commit_id, origin)
         if not isinstance(edit,dict) or set(edit)-{'record_id','expected_revision','segment','subject','title','body','reason','evidence','attribution','state'}:
             raise PersonalError('invalid','invalid authored edit')
         body, reason, title = edit.get('body'),edit.get('reason'),edit.get('title')
@@ -280,6 +289,7 @@ class AutobiographyStore:
         p=self.principal
         now=self.clock()
         record_id=edit.get('record_id')
+        head=None
         expected=edit.get('expected_revision')
         if type(expected) is not int or expected<0:
             raise PersonalError('invalid','expected_revision must be a nonnegative integer')
@@ -308,6 +318,8 @@ class AutobiographyStore:
                 raise PersonalError('conflict','a record for this segment and subject already exists') from exc
         self.db.execute('INSERT INTO autobio_revisions VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
             (record_id,revision,body,title,state,reason,p.session_id,origin,attribution,canonical(evidence),now,commit_id))
+        from .autobiography_lifecycle import append_event
+        append_event(self, record_id, revision, head, state)
         return {'record_id':record_id,'revision':revision}
 
     def _receipt(self, request_key, payload_hash):
@@ -342,6 +354,10 @@ class AutobiographyStore:
                 (commit_id,p.owner,p.agent,self._request_key(idempotency_key),payload_hash,canonical(receipt),self.clock()))
         self.index_record(revision['record_id'])
         return receipt
+
+    def transition(self, record_id, **options):
+        from .autobiography_lifecycle import transition
+        return transition(self, record_id, **options)
 
     def restore(self, record_id, revision, *, expected_revision, reason, idempotency_key):
         old=self.get(record_id,revision)
@@ -383,6 +399,7 @@ class AutobiographyStore:
                 raise PersonalError('budget','use paginated record/history reads for exports exceeding 1000 records')
             revisions=[dict(r) for record in records for r in self.db.execute('SELECT * FROM autobio_revisions WHERE record_id=? ORDER BY revision',(record['id'],))]
             return {'schema_version':SCHEMA_VERSION,'scope':[p.owner,p.agent,p.audience],'records':records,'revisions':revisions,
+                    'lifecycle':[dict(e) for record in records for e in self.db.execute('SELECT * FROM autobio_lifecycle WHERE record_id=? ORDER BY revision',(record['id'],))],
                     'documents':[{'filename':r['id']+'.md','markdown':r['body'],'revision':r['revision']} for r in records],
                     'privacy_notice':'Downloaded exports and external backups require operator-managed deletion and retention.'}
 

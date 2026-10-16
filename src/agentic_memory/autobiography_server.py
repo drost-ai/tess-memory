@@ -34,9 +34,11 @@ def register_personal_tools(server, config, *, principal=None):
         return operation
 
     @expose
-    def autobiography_get(record_id: str | None=None, segment: str | None=None, limit: int=20, after: str='') -> dict:
+    def autobiography_get(record_id: str | None=None, segment: str | None=None, limit: int=20, after: str='', revision: int | None=None, include_inactive: bool=False) -> dict:
         """Read current authored memory in this configured scope; exact reads do not use a model."""
-        return store().get(record_id) if record_id else store().list_records(segment=segment,limit=limit,after=after)
+        if revision is not None and record_id is None:
+            raise PersonalError('invalid', 'an explicit revision requires record_id')
+        return store().get(record_id,revision,include_inactive=include_inactive) if record_id else store().list_records(segment=segment,limit=limit,after=after,include_inactive=include_inactive)
 
     @expose
     def autobiography_context(token_budget: int | None=None, subjects: list[str] | None=None) -> dict:
@@ -63,6 +65,26 @@ def register_personal_tools(server, config, *, principal=None):
         return PersonalInbox(store()).list(state=state,limit=limit,after=after)
 
     if bound.role in ('extractor','operator'):
+        def workflow():
+            from .extraction_workflow import ExtractionWorkflow
+            return ExtractionWorkflow(config,store(),operations())
+
+        @expose
+        def autobiography_extraction_claim(operation_id: str, operation_fence: int, limit: int=8) -> dict:
+            return workflow().claim(operation_id,operation_fence,limit)
+
+        @expose
+        def autobiography_extraction_read(operation_id: str, operation_fence: int, range_id: str, lease_token: str, offset: int=0, limit: int=12000) -> dict:
+            return workflow().read(operation_id,operation_fence,range_id,lease_token,offset,limit)
+
+        @expose
+        def autobiography_extraction_candidate(operation_id: str, operation_fence: int, range_id: str, lease_token: str, candidate_key: str, request_id: str, expected_revision: int, action: str='submit', candidate: dict | None=None) -> dict:
+            return workflow().candidate(operation_id,operation_fence,range_id,lease_token,candidate_key,request_id,expected_revision,action,candidate)
+
+        @expose
+        def autobiography_extraction_finalize(operation_id: str, operation_fence: int, range_id: str, lease_token: str, request_id: str) -> dict:
+            return workflow().finalize(operation_id,operation_fence,range_id,lease_token,request_id)
+
         @expose
         def autobiography_extraction_get(part_id: str) -> dict:
             """Service operation: recover a publication receipt after a lost acknowledgment."""
@@ -90,7 +112,7 @@ def register_personal_tools(server, config, *, principal=None):
             PersonalInbox(store()).fail(part_id,code)
             return {'retained':True}
 
-    if bound.role in ('extractor','dream','operator'):
+    if bound.role in ('extractor','dream','reconciler','operator'):
         @expose
         def autobiography_operation_claim(kind: str, manual: bool=False, request_deadline: float | None=None) -> dict:
             """Service operation: claim a due personal job without overlapping another worker."""
@@ -127,7 +149,33 @@ def register_personal_tools(server, config, *, principal=None):
             """Service operation: invalidate a structurally rejected proposal without replaying it forever."""
             return operations().reject_cache(operation_id,fence,cache_key,code)
 
-    if bound.role in ('dream','operator'):
+    if bound.role in ('dream','reconciler','operator'):
+        def reconcile_operation(operation_id,operation_fence):
+            op=operations()._operation(operation_id,operation_fence)
+            if op['kind'] not in ('dream','reconciler'):
+                raise PersonalError('forbidden','reconciler operation required')
+            return op
+
+        @expose
+        def autobiography_reconcile_claim(operation_id: str, operation_fence: int, initialize: bool=False) -> dict:
+            from .dream_cycle import DreamCycle
+            op=reconcile_operation(operation_id,operation_fence)
+            return DreamCycle(config,store()).prepare(deadline=op['deadline'],initialize=initialize,
+                admission=lambda:reconcile_operation(operation_id,operation_fence),full_lease=True)
+
+        @expose
+        def autobiography_reconcile_commit(operation_id: str, operation_fence: int, cycle_id: str, fence: int, lease_token: str, request_id: str, edits: list[dict], outcomes: list[dict]) -> dict:
+            from .dream_cycle import DreamCycle
+            return DreamCycle(config,store()).commit(cycle_id,fence,lease_token,idempotency_key=request_id,edits=edits,outcomes=outcomes,
+                admission=lambda:reconcile_operation(operation_id,operation_fence))
+
+        @expose
+        def autobiography_reconcile_defer(operation_id: str, operation_fence: int, cycle_id: str, fence: int, lease_token: str, request_id: str, candidate_ids: list[str], reason: str, review_after: float | None=None) -> dict:
+            from .dream_cycle import DreamCycle
+            outcomes=[{'candidate_id':cid,'action':'deferred','reason':reason,**({'review_after':review_after} if review_after is not None else {})} for cid in candidate_ids]
+            return DreamCycle(config,store()).commit(cycle_id,fence,lease_token,idempotency_key=request_id,edits=[],outcomes=outcomes,
+                admission=lambda:reconcile_operation(operation_id,operation_fence))
+
         @expose
         def autobiography_cycle_prepare(operation_id: str | None=None, operation_fence: int | None=None, initialize: bool=False) -> dict:
             """Service operation: claim a bounded reflection batch with a fenced lease."""
@@ -161,6 +209,16 @@ def register_personal_tools(server, config, *, principal=None):
 
     if bound.role in ('author','operator'):
         @expose
+        def autobiography_transition(record_id: str, expected_revision: int, state: str, reason: str, idempotency_key: str,
+                                     superseded_by: str | None=None, superseded_by_revision: int | None=None) -> dict:
+            """Append active/retired/outdated/superseded/retracted lifecycle history without rewriting evidence.
+
+            Supersession requires an active replacement record and exact revision. Historical content remains accessible.
+            """
+            return store().transition(record_id,expected_revision=expected_revision,state=state,reason=reason,
+                idempotency_key=idempotency_key,superseded_by=superseded_by,superseded_by_revision=superseded_by_revision)
+
+        @expose
         def autobiography_update(expected_revision: int, title: str, body: str, reason: str, idempotency_key: str,
                                  record_id: str | None=None, segment: str | None=None, subject: str | None=None,
                                  attribution: str='agent_reflection', evidence: list[dict] | None=None, state: str='active') -> dict:
@@ -187,7 +245,7 @@ def main():
     from .config import load_config
     parser=argparse.ArgumentParser(description='Role-bound personal memory MCP and operator interface')
     parser.add_argument('--settings',type=Path,required=True)
-    parser.add_argument('--role',choices=['reader','author','extractor','dream','operator'])
+    parser.add_argument('--role',choices=['reader','author','extractor','dream','reconciler','operator'])
     parser.add_argument('--session',default=None)
     parser.add_argument('--audience',default=None,help='the person this session serves (needs personal.multi_audience)')
     parser.add_argument('action',choices=['serve','export','status','index-status','repair-index','operations','retry','preview-import','import','erase','restore'],default='serve',nargs='?')

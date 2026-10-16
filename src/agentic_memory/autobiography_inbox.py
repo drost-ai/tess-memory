@@ -55,7 +55,7 @@ class PersonalInbox:
                 raise PersonalError('operational_audience','existing work belongs to a different operational audience')
             self.store.db.execute("INSERT OR IGNORE INTO autobio_meta VALUES('operational_audience',?)",(p.audience,))
 
-    def publish(self,part_id,proposals,*,admission=None):
+    def publish(self,part_id,proposals,*,admission=None,candidate_ids=None,finalize=None):
         self.store.principal.require('extractor','operator')
         if not isinstance(proposals,list):
             raise PersonalError('invalid','candidates must be a list')
@@ -67,13 +67,15 @@ class PersonalInbox:
             source=s.db.execute('SELECT * FROM autobio_sources WHERE id=? AND owner=? AND agent=? AND audience=?',
                 (part['source_id'],p.owner,p.agent,p.audience)).fetchone()
             if not source:raise PersonalError('not_found','source part unavailable')
+            if 'work_operation' in part.keys() and part['work_operation'] and finalize is None:
+                raise PersonalError('fenced','incremental range requires finalization')
             if part['state']=='published':
                 if json.loads(part['result'])!=proposals:raise PersonalError('idempotency_mismatch','source part already has different published candidates')
                 return json.loads(part['receipt'])
             if source['generation']!=part['generation'] or s.is_suppressed(part['source_id']):
                 raise PersonalError('stale_source','source evidence changed or was suppressed')
             metadata=json.loads(source['metadata']);made=[]
-            for proposal in proposals:
+            for proposal_index,proposal in enumerate(proposals):
                 from .personal_privacy import require_no_credentials
                 require_no_credentials(canonical(proposal))
                 if not isinstance(proposal,dict) or set(proposal)-{'segment','title','body','attribution','quote','target_record_id'}:
@@ -87,7 +89,7 @@ class PersonalInbox:
                 if offset<0:raise PersonalError('invalid_evidence','candidate quote is absent from the supplied source')
                 start=part['start']+offset;end=start+len(quote)
                 if proposal['attribution']=='user_statement' and not any(
-                    r['role']=='user' and r['start']<=start and r['end']>=end for r in metadata.get('roles',[])):
+                    r['role']=='user' and r.get('human_evidence',True) and r['start']<=start and r['end']>=end for r in metadata.get('roles',[])):
                     raise PersonalError('invalid_evidence','user-statement quote is not within a user message')
                 if proposal.get('target_record_id'):s._head(proposal['target_record_id'], write=True)
                 evidence=[{'source_id':source['id'],'generation':source['generation'],'start':start,'end':end,'attribution':proposal['attribution']}]
@@ -96,16 +98,17 @@ class PersonalInbox:
                 stored_proposal=dict(proposal)
                 stamp=next((r.get('source_event_time') for r in metadata.get('roles',[]) if r['start']<=start and r['end']>=end),None)
                 if stamp:stored_proposal['source_event_time']=stamp
-                cid=uuid.uuid4().hex
+                cid=candidate_ids[proposal_index] if candidate_ids is not None else uuid.uuid4().hex
                 changed=s.db.execute('''INSERT OR IGNORE INTO autobio_candidates
                     (id,owner,agent,audience,source_id,generation,proposal,evidence,dedupe,state,created,updated)
                     VALUES(?,?,?,?,?,?,?,?,?,'pending',?,?)''',
                     (cid,p.owner,p.agent,p.audience,source['id'],source['generation'],canonical(stored_proposal),canonical(evidence),key,s.clock(),s.clock())).rowcount
-                if changed:made.append(cid)
+                made.append(cid if changed else s.db.execute('SELECT id FROM autobio_candidates WHERE dedupe=?',(key,)).fetchone()[0])
             receipt={'published':True,'candidate_ids':made}
             s.db.execute("UPDATE autobio_extraction_parts SET state='published',result=?,receipt=?,updated=? WHERE id=?",
                 (canonical(proposals),canonical(receipt),s.clock(),part_id))
             if admission:admission()
+            if finalize:receipt=finalize(receipt)
             return receipt
 
     def fail(self,part_id,code):
@@ -115,6 +118,9 @@ class PersonalInbox:
             row=self.store.db.execute('''SELECT part.attempts,part.state FROM autobio_extraction_parts part JOIN autobio_sources src ON src.id=part.source_id
                 WHERE part.id=? AND src.owner=? AND src.agent=? AND src.audience=?''',(part_id,p.owner,p.agent,p.audience)).fetchone()
             if not row:raise PersonalError('not_found','source part unavailable')
+            columns={r[1] for r in self.store.db.execute('PRAGMA table_info(autobio_extraction_parts)')}
+            if 'work_operation' in columns and self.store.db.execute('SELECT work_operation FROM autobio_extraction_parts WHERE id=?',(part_id,)).fetchone()[0]:
+                raise PersonalError('fenced','incremental range failure requires its owning operation')
             if row['state'] in ('published','stale'):return
             if code in ('invalid','invalid_evidence','idempotency_mismatch','sensitive_content') and self.store.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_model_work'").fetchone():
                 for cached in self.store.db.execute('''SELECT c.* FROM autobio_model_cache c JOIN autobio_model_work w ON w.cache_key=c.id WHERE w.work_id=?''',(part_id,)).fetchall():

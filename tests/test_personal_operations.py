@@ -54,11 +54,14 @@ class PersonalOperationTests(unittest.TestCase):
         third=self.reserve(newer,'three');self.complete(newer,third)
         self.assertEqual(self.ops.status()['reserved_provider_calls'],1)
 
-    def test_schedule_is_calendar_based_with_dst_and_no_early_dream(self):
+    def test_reconciler_interval_alias_and_legacy_calendar_helper(self):
         operator=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='operator'),clock=lambda:self.now[0]);self.addCleanup(operator.close)
         ops=PersonalOperations(self.cfg,operator);self.addCleanup(ops.close)
-        result=ops.claim('dream');self.assertEqual(result['status'],'not_due')
-        self.assertEqual(datetime.fromtimestamp(result['due'],ZoneInfo('UTC')).hour,23)
+        result=ops.claim('reconciler');self.assertEqual(result['status'],'running')
+        self.assertEqual(ops.claim('dream')['status'],'busy')
+        finished=ops.finish(result['operation_id'],result['fence'])
+        self.assertEqual(finished['next_due'],self.now[0]+900)
+        self.assertEqual(ops.claim('dream')['status'],'not_due')
         # Test a zone with both transitions in this year. Vancouver's current
         # IANA rules need not have the same fall transition as Los Angeles.
         ops.config=replace(self.cfg,personal=replace(self.cfg.personal,timezone='America/Los_Angeles'))
@@ -68,7 +71,7 @@ class PersonalOperationTests(unittest.TestCase):
 
     def test_expired_operation_cannot_finish_over_replacement(self):
         old=self.ops.claim('extractor');self.assertEqual(self.ops.claim('extractor')['status'],'busy')
-        self.now[0]+=1000
+        self.now[0]+=self.cfg.personal.max_seconds+1
         replacement=self.ops.claim('extractor')
         self.assertGreater(replacement['fence'],old['fence'])
         with self.assertRaisesRegex(PersonalError,'expired or was replaced'):self.ops.finish(old['operation_id'],old['fence'])

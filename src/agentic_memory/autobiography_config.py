@@ -22,6 +22,12 @@ class PersonalConfig:
     shadow: bool = True
     source_names: tuple[str, ...] = ()
     historical: bool = False
+    # Explicit personal-only roots; never inherits the coding archive.
+    source_mode: str = 'allowlist'
+    source_paths: tuple[str, ...] = ()
+    source_since: str | None = None
+    ai_name: str = ''
+    user_name: str = ''
     dream_hour: int = 23
     timezone: str = 'UTC'
     # Work and spending limits are off unless configured: no daily call or
@@ -31,9 +37,10 @@ class PersonalConfig:
     max_candidates: int | None = None
     max_edits: int | None = None
     model_calls: int | None = None
-    max_seconds: int = 300  # a job's deadline: a hang guard, not a budget
+    max_seconds: int = 1800  # a job's deadline: a hang guard, not a budget
     lease_seconds: int = 600
-    extraction_interval: int = 300
+    extraction_interval: int = 900
+    reconciliation_interval: int = 900
     daily_model_calls: int | None = None
     daily_token_budget: int | None = None
     max_output_tokens: int | None = None
@@ -56,19 +63,35 @@ class PersonalConfig:
 
     @classmethod
     def parse(cls, raw):
-        if not isinstance(raw,dict) or set(raw)-{f.name for f in fields(cls)}:
+        if not isinstance(raw,dict):raise ValueError('unknown personal configuration fields')
+        raw=dict(raw)
+        if 'reconciler_enabled' in raw:
+            if 'dream_enabled' in raw and raw['dream_enabled']!=raw['reconciler_enabled']:
+                raise ValueError('conflicting reconciler_enabled/dream_enabled')
+            raw['dream_enabled']=raw.pop('reconciler_enabled')
+        if set(raw)-{f.name for f in fields(cls)}:
             raise ValueError('unknown personal configuration fields')
         values=dict(raw)
         for key in ['enabled','extraction_enabled','dream_enabled','shadow','historical','multi_audience']:
             if key in values and type(values[key]) is not bool:
                 raise ValueError(f'personal.{key} must be a boolean')
-        for key in ['context_subjects','source_names']:
+        for key in ['context_subjects','source_names','source_paths']:
             if key in values:
                 if not isinstance(values[key],list) or any(not isinstance(x,str) or not x for x in values[key]):
                     raise ValueError(f'personal.{key} must be a string array')
                 values[key]=tuple(values[key])
         result=cls(**values)
-        for key in ['context_budget','max_seconds','lease_seconds','extraction_interval']:
+        if result.source_mode not in ('allowlist','native'):
+            raise ValueError('personal.source_mode must be allowlist or native')
+        for key in ('ai_name','user_name'):
+            if not isinstance(getattr(result,key),str):
+                raise ValueError(f'personal.{key} must be a string')
+        if result.source_since is not None:
+            from .personal_sources import parse_boundary
+            parse_boundary(result.source_since)
+        if result.source_mode == 'native' and not result.source_paths:
+            raise ValueError('personal.source_paths must explicitly identify the host session roots')
+        for key in ['context_budget','max_seconds','lease_seconds','extraction_interval','reconciliation_interval']:
             if type(getattr(result,key)) is not int or getattr(result,key)<=0:
                 raise ValueError(f'personal.{key} must be a positive integer')
         for key in OPTIONAL_LIMITS:

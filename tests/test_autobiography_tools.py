@@ -36,7 +36,7 @@ class PersonalToolTests(unittest.TestCase):
 
     def test_author_can_edit_without_approval_and_reader_has_no_update_tool(self):
         tools=self.tools()
-        self.assertEqual(len(tools),6)
+        self.assertEqual(len(tools),7)
         for tool in tools.values():
             self.assertFalse({'owner','agent','audience','role'} & set(tool.parameters.get('properties',{})))
         result=tools['autobiography_update'].fn(expected_revision=0,segment='Principles',title='Principles',
@@ -47,6 +47,23 @@ class PersonalToolTests(unittest.TestCase):
         readonly=self.tools(self.personal.principal())
         self.assertNotIn('autobiography_update',readonly)
         self.assertNotIn('autobiography_update',self.tools(self.personal.principal(role='dream',session_id='dream-session')))
+
+    def test_lifecycle_tools_preserve_history_and_require_authority(self):
+        tools = self.tools()
+        result = tools['autobiography_update'].fn(expected_revision=0, segment='Self', title='Self',
+            body='Original content', reason='Authored', idempotency_key='create')
+        rid = result['result']['edits'][0]['record_id']
+        result = tools['autobiography_transition'].fn(record_id=rid, expected_revision=1,
+            state='outdated', reason='Contradicted', idempotency_key='invalidate')
+        self.assertTrue(result['ok'])
+        self.assertFalse(tools['autobiography_get'].fn(record_id=rid)['ok'])
+        self.assertEqual(tools['autobiography_get'].fn()['result']['records'], [])
+        self.assertEqual(tools['autobiography_get'].fn(record_id=rid, revision=1)['result']['body'], 'Original content')
+        self.assertEqual(tools['autobiography_get'].fn(record_id=rid, include_inactive=True)['result']['state'], 'outdated')
+        for role in ('reader', 'dream', 'reconciler'):
+            readonly = self.tools(self.personal.principal(role=role, session_id='service'))
+            self.assertNotIn('autobiography_transition', readonly)
+        self.assertFalse(tools['autobiography_get'].fn(revision=1)['ok'])
 
     def test_context_is_explicit_stable_and_person_selection_is_bounded(self):
         store=AutobiographyStore(self.cfg.db_path,self.principal);self.addCleanup(store.close)

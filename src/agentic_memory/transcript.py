@@ -22,6 +22,10 @@ class Turn:
     role: str          # "user" | "assistant" | "tool" | "tool_result"
     text: str
     ts: str | None = None
+    message_id: str | None = None
+    message_index: int | None = None
+    origin: dict | str | None = None
+    human_evidence: bool = True
 
 
 @dataclass

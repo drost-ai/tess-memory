@@ -29,7 +29,7 @@ class PersonalContractTests(unittest.TestCase):
         files={'Self':str(path)};preview=preview_seeds(files)
         receipt=import_seeds(self.store,files,preview_hash=preview['preview_hash'],idempotency_key='import')
         rid=receipt['edits'][0]['record_id'];path.unlink()
-        self.assertEqual(self.store.get(rid)['evidence_availability'],[False])
+        self.assertEqual(self.store.get(rid,include_inactive=True)['evidence_availability'],[False])
         with self.assertRaises(PersonalError) as error:
             self.store.restore(rid,1,expected_revision=1,reason='Restore old state',idempotency_key='restore')
         self.assertEqual(error.exception.code,'invalid_evidence')

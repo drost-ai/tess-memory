@@ -69,6 +69,11 @@ class PersonalOperations:
             for table,column in [('autobio_operations','finish_receipt'),('autobio_model_work','completion_receipt'),('autobio_model_work','response_hash')]:
                 if column not in {r[1] for r in store.db.execute('PRAGMA table_info('+table+')')}:
                     store.db.execute('ALTER TABLE '+table+' ADD COLUMN '+column+' TEXT')
+        with store.transaction():
+            if not store.db.execute("SELECT 1 FROM autobio_meta WHERE key='reconciler_interval_v1'").fetchone():
+                now=store.clock()
+                store.db.execute("UPDATE autobio_schedule SET due=MIN(due,?),updated=? WHERE (kind='dream' OR kind LIKE 'dream@%') AND operation_id IS NULL", (now+config.personal.reconciliation_interval,now))
+                store.db.execute("INSERT INTO autobio_meta(key,value) VALUES('reconciler_interval_v1','1')")
         if config.personal.service_config:
             from .scheduler_config import load_service
             service=load_service(Path(config.personal.service_config).expanduser())
@@ -84,12 +89,13 @@ class PersonalOperations:
         return due.timestamp()
 
     def _role(self,kind):
-        if kind not in ('extractor','dream'):raise PersonalError('invalid','unknown personal operation')
+        if kind not in ('extractor','dream','reconciler'):raise PersonalError('invalid','unknown personal operation')
         self.store.principal.require(kind,'operator')
 
     def _schedule_key(self,kind):
         """One schedule per job kind, and per audience in a multi-audience
         store (the owner's audience keeps the plain key it always had)."""
+        kind='dream' if kind=='reconciler' else kind
         audience=self.store.principal.audience
         return kind if audience==self.config.personal.audience else f'{kind}@{audience}'
 
@@ -103,7 +109,7 @@ class PersonalOperations:
         if not cfg.enabled or not enabled:return {'status':'disabled'}
         now=s.clock()
         with s.transaction():
-            due=now if kind=='extractor' else self.next_night(now)
+            due=now
             s.db.execute('INSERT OR IGNORE INTO autobio_schedule(kind,due,updated) VALUES(?,?,?)',(key,due,now))
             row=s.db.execute('SELECT * FROM autobio_schedule WHERE kind=?',(key,)).fetchone()
             if row['operation_id'] and row['lease_until']>now:return {'status':'busy','due':row['due']}
@@ -118,6 +124,9 @@ class PersonalOperations:
             s.db.execute('UPDATE autobio_schedule SET operation_id=?,actor_session=?,fence=?,lease_until=?,updated=? WHERE kind=?',
                          (op,p.session_id,fence,deadline,now,key))
             return {'status':'running','operation_id':op,'fence':fence,'deadline':deadline,
+                    'identity':{'agent':p.agent,'owner':p.owner,
+                                'ai_name':getattr(cfg,'ai_name',None) or p.agent,
+                                'user_name':getattr(cfg,'user_name',None) or p.owner},
                     'limits':{'model_calls':cfg.model_calls,'max_output_tokens':cfg.max_output_tokens,'max_seconds':cfg.max_seconds}}
 
     def _operation(self,operation_id,fence,*,allow_expired=False):
@@ -154,7 +163,7 @@ class PersonalOperations:
         tokens=slots*(input_units+(cfg.max_output_tokens or 0)+8192)+max(0,slots-1)*32768
         with s.transaction():
             op=self._operation(operation_id,fence)
-            if op['kind']=='dream' and slots==1:
+            if op['kind'] in ('dream','reconciler') and slots==1:
                 # A one-completion synthesis cannot read more context. Do not
                 # replay its deliberate deferrals as a later agentic result.
                 key=digest([p.owner,p.agent,p.audience,identity,system,prompt,'single_call'])
@@ -283,7 +292,7 @@ class PersonalOperations:
                     raise PersonalError('idempotency_mismatch','operation already finished with a different outcome')
                 return json.loads(prior['finish_receipt'])
             op=self._operation(operation_id,fence,allow_expired=True)
-            due=self.next_night(s.clock()) if op['kind']=='dream' else s.clock()+self.config.personal.extraction_interval
+            due=s.clock()+(self.config.personal.extraction_interval if op['kind']=='extractor' else self.config.personal.reconciliation_interval)
             receipt={'outcome':outcome,'next_due':due}
             s.db.execute('UPDATE autobio_operations SET state=?,result=?,finish_receipt=? WHERE id=?',(outcome,canonical(result or {}),canonical(receipt),operation_id))
             s.db.execute('UPDATE autobio_schedule SET due=?,operation_id=NULL,lease_until=NULL,outcome=?,updated=? WHERE kind=? AND fence=?',

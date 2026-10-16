@@ -27,6 +27,10 @@ or repeated generated text into verified facts. No change is a successful outcom
 Return only JSON {"edits": [...], "outcomes": [...]}.
 Edits have expected_revision (0 for new), optional record_id, segment for new records, title, body, reason,
 attribution (agent_reflection unless source-backed facts), and optional subject/evidence/state.
+Alternatively use lifecycle edits: {operation: lifecycle, record_id, expected_revision, state, reason}.
+Lifecycle states: active, retired, outdated, superseded, retracted. Superseded requires superseded_by
+and superseded_by_revision naming an existing active replacement. Lifecycle edits preserve body/evidence.
+Old memories are not automatically outdated: invalidate only explicitly contradicted or superseded claims.
 Outcomes have candidate_id, action (accepted|merged|dismissed|deferred), reason, and edit_indices for resulting edits.
 A merged no-change outcome may instead provide existing_revisions [{"record_id":...,"revision":...}].
 Deferred outcomes may provide review_after (UTC epoch seconds). Do not claim edits were saved; storage validates and commits them.
@@ -65,12 +69,15 @@ class DreamCycle:
             raise PersonalError('fenced','cycle publication lease is no longer current')
         return row
 
-    def prepare(self,*,deadline=None,initialize=False):
+    def prepare(self,*,deadline=None,initialize=False,admission=None,full_lease=False):
         s=self.store;p=s.principal;p.require('dream','operator')
         cfg=self.config.personal
         if not cfg.enabled or not cfg.dream_enabled:return {'status':'disabled'}
         self.initialize()
+        from .personal_sources import SourceCursors, metadata_eligible, reconciliation_source_manifest
+        cursors=SourceCursors(s)
         with s.transaction():
+            if admission:admission()
             now=s.clock()
             context=personal_context(s,budget=cfg.context_budget,subjects=cfg.context_subjects)
             if initialize and not context['manifest']['missing_core']:
@@ -84,13 +91,15 @@ class DreamCycle:
                 s.db.execute("UPDATE autobio_candidates SET state='pending',cycle_id=NULL,fence=NULL,lease_until=NULL WHERE cycle_id=? AND state='claimed'",(old['id'],))
             prior=s.db.execute('SELECT MAX(fence) FROM autobio_cycles').fetchone()[0] or 0
             cycle_id=uuid.uuid4().hex;fence=prior+1;token=uuid.uuid4().hex
-            deadline=min(now+cfg.max_seconds,deadline if deadline is not None else float('inf'));lease_until=min(deadline,now+cfg.lease_seconds)
+            deadline=min(now+cfg.max_seconds,deadline if deadline is not None else float('inf'));lease_until=deadline if full_lease else min(deadline,now+cfg.lease_seconds)
             if deadline<=now:raise PersonalError('deadline','reflection deadline has expired')
             candidates=[];chars=len(context['text'])
             rows=s.db.execute('''SELECT * FROM autobio_candidates WHERE owner=? AND agent=? AND audience=? AND created<=?
                 AND (state='pending' OR (state='deferred' AND review_after<=?)) ORDER BY created,id LIMIT ?''',
                 (p.owner,p.agent,p.audience,now,now,0 if initialize else -1 if cfg.max_candidates is None else cfg.max_candidates*4)).fetchall()
             for row in rows:
+                source=s.db.execute('SELECT metadata FROM autobio_sources WHERE id=?',(row['source_id'],)).fetchone()
+                if source and not metadata_eligible(self.config,json.loads(source[0])):continue
                 evidence=json.loads(row['evidence'])
                 if not all(s.evidence_available(e) for e in evidence):
                     attempts=row['attempts']+1
@@ -104,7 +113,8 @@ class DreamCycle:
                     value['source_context']=part['text'][max(0,offset-1000):offset+len(value['proposal']['quote'])+1000]
                 size=len(canonical(value))
                 # The prompt must fit: candidates beyond ~48k characters wait for the next cycle.
-                if (cfg.max_candidates is not None and len(candidates)>=cfg.max_candidates) or chars+size>48000:break
+                if cfg.max_candidates is not None and len(candidates)>=cfg.max_candidates:break
+                if candidates and chars+size>48000:continue
                 candidates.append(value);chars+=size
                 s.db.execute("UPDATE autobio_candidates SET state='claimed',cycle_id=?,fence=?,lease_until=?,updated=? WHERE id=?",
                     (cycle_id,fence,lease_until,now,row['id']))
@@ -117,6 +127,7 @@ class DreamCycle:
                  canonical(self._heads()),canonical(context['manifest']),canonical(journal),int(cfg.shadow)))
             return {'status':status,'cycle_id':cycle_id,'fence':fence,'lease_token':token,'deadline':deadline,
                     'system':DREAM_SYSTEM+(INITIALIZE_SYSTEM if initialize else ''),'core':context,'candidates':candidates,'shadow':cfg.shadow,
+                    'source_manifest':reconciliation_source_manifest(self.config,s,candidates,cursors),
                     'limits':{k:v for k,v in {'edits':cfg.max_edits,'model_calls':cfg.model_calls,'seconds':cfg.max_seconds}.items() if v is not None}}
 
     def renew(self,cycle_id,fence,lease_token):
@@ -128,7 +139,7 @@ class DreamCycle:
             self.store.db.execute("UPDATE autobio_candidates SET lease_until=? WHERE cycle_id=? AND fence=? AND state='claimed'",(until,cycle_id,fence))
             return {'lease_until':until}
 
-    def commit(self,cycle_id,fence,lease_token,*,idempotency_key,edits,outcomes):
+    def commit(self,cycle_id,fence,lease_token,*,idempotency_key,edits,outcomes,admission=None):
         s=self.store;p=s.principal;p.require('dream','operator')
         cfg=self.config.personal
         if not isinstance(edits,list) or not isinstance(outcomes,list):
@@ -137,6 +148,7 @@ class DreamCycle:
             raise PersonalError('budget','reconciliation batch exceeds configured limits')
         payload_hash=digest({'cycle':cycle_id,'edits':edits,'outcomes':outcomes,'scope':[p.owner,p.agent,p.audience]})
         with s.transaction():
+            if admission:admission()
             receipt=s._receipt(idempotency_key,payload_hash)
             if receipt:return receipt
             cycle=self._cycle(cycle_id,fence,lease_token)
@@ -176,6 +188,9 @@ class DreamCycle:
                 evidence=s._evidence(json.loads(pending[cid]['evidence']))
                 for index in indices:
                     if not isinstance(prepared[index],dict):raise PersonalError('invalid','edit must be an object')
+                    # A lifecycle decision links this candidate via resulting_revisions;
+                    # its authored snapshot evidence must remain byte-for-byte unchanged.
+                    if prepared[index].get('operation') == 'lifecycle':continue
                     combined=prepared[index].get('evidence',[])+evidence
                     prepared[index]['evidence']=list({canonical(e):e for e in combined}.values())
             commit_id=uuid.uuid4().hex

@@ -20,6 +20,14 @@ def content_key(value) -> str:
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
+def turn_key(turn):
+    # Preserve historical keys when there is no explicit authorship metadata.
+    value = {'role':turn.role, 'text':turn.text, 'ts':turn.ts}
+    if turn.origin is not None:
+        value.update(origin=turn.origin, human_evidence=turn.human_evidence)
+    return value
+
+
 @dataclass
 class ParsedSource:
     transcript: SessionTranscript | None
@@ -30,13 +38,15 @@ class ParsedSource:
     observed_signature: str
     parsed_records: int
     recovery_notes: list[str] = field(default_factory=list)
+    # Exposed for personal gap policy; coding parsing/eligibility is unchanged.
+    message_indices: list[int] | None = None
 
     def unit_keys(self) -> list[str]:
         if self.transcript is None:
             return []
         result, start = [], 0
         for end in self.unit_ends:
-            result.append(content_key([asdict(t) for t in self.transcript.turns[start:end]]))
+            result.append(content_key([turn_key(t) for t in self.transcript.turns[start:end]]))
             start = end
         return result
 
@@ -57,7 +67,7 @@ class ParsedSource:
             end = row['end']
             if end <= start or end > len(self.transcript.turns):
                 break
-            key = content_key([asdict(t) for t in self.transcript.turns[start:end]])
+            key = content_key([turn_key(t) for t in self.transcript.turns[start:end]])
             if row['key'] != key:
                 break
             kept[end] = row['kind']
@@ -134,7 +144,7 @@ class CompletedSourceReader:
                 "has_commit": False, "uncommitted": False}
 
     def _generic(self, ds, path, project, parent):
-        policy = f"messages-v{READER_VERSION}:{ds.type}"
+        policy = f"messages-v{READER_VERSION}:origin-v2:{ds.type}"
         revisions = []
         meta = {}
         if ds.type == "agent-core":
@@ -183,7 +193,11 @@ class CompletedSourceReader:
                     raise SourceReadError("invalid message index")
                 state["messages"][str(index)] = {"role": message.get("role"), "content": message.get("content"),
                                                 "stop_reason": message.get("stop_reason", message.get("stopReason")),
-                                                "timestamp": record.get("persisted_at")}
+                                                "timestamp": record.get("persisted_at"),
+                                                "metadata": message.get("metadata", record.get("metadata", {})),
+                                                "_source_message_index": index,
+                                                "_source_message_id": message.get("id") or record.get("message_id"),
+                                                "origin": message.get("origin", record.get("origin"))}
                 state["next_index"] = index + 1
                 state["uncommitted"] = True
             elif kind == "commit" and flavor == "sidecar":
@@ -219,7 +233,7 @@ class CompletedSourceReader:
             if st.turns and (not ends or len(st.turns) > ends[-1]):
                 ends.append(len(st.turns))
                 kinds.append(kind)
-        for rec in records:
+        for source_index, rec in enumerate(records):
             if not isinstance(rec, dict):
                 raise SourceReadError("message entry must be an object")
             if flavor == "claude":
@@ -249,7 +263,17 @@ class CompletedSourceReader:
             if (role == "user" and text and not _is_harness_text(text) and st.turns
                     and any(t.role in {"assistant", "tool", "tool_result"} for t in st.turns[(ends[-1] if ends else 0):])):
                 close("interrupted_by_next_user")
+            turn_start = len(st.turns)
             _append_message_turns(st, role, content, ts)
+            metadata = msg.get('metadata') if isinstance(msg.get('metadata'), dict) else {}
+            origin = metadata.get('agentCoreOrigin', msg.get('origin'))
+            human = origin is None or (isinstance(origin, dict) and origin.get('actor') == 'user'
+                and origin.get('intentAuthority') == 'request' and origin.get('synthetic') is False)
+            for turn in st.turns[turn_start:]:
+                turn.message_index = msg.get('_source_message_index', source_index)
+                turn.message_id = msg.get('_source_message_id') or msg.get('id') or rec.get('uuid') or f'{st.session_id}:{turn.message_index}'
+                turn.origin = origin
+                turn.human_evidence = turn.role == 'user' and human
             has_tools = isinstance(content, list) and any(isinstance(b, dict) and b.get("type") == "tool_use" for b in content)
             reason = msg.get("stop_reason", msg.get("stopReason"))
             if role == "assistant" and text and not has_tools and reason not in ("tool_use", "max_tokens", "length"):
@@ -278,4 +302,5 @@ class CompletedSourceReader:
         if not st.turns or (not st.n_user and not self.cfg.recovery_ingestion):
             st = None
         return ParsedSource(st, ends, kinds, revisions, pending, source_signature(path, ds, self.cfg),
-                            sum(r.parsed_records for r in revisions), notes)
+                            sum(r.parsed_records for r in revisions), notes,
+                            [rec.get('_source_message_index',i) for i,rec in enumerate(records)] if ds.type=='agent-core' else None)
