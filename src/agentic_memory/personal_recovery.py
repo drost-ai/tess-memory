@@ -43,3 +43,19 @@ def retry_failed(config, store, *, kind, target, reason):
         store.db.execute('INSERT INTO autobio_recovery_receipts VALUES(?,?,?,?,?,?,?,?,?)',
             (receipt,p.owner,p.agent,p.audience,kind,target,reason,canonical(previous),store.clock()))
     return {'receipt_id':receipt,'queued':True,'kind':kind,'target':target,'model_calls':0}
+
+
+def recover_registers(store, *, invalidate_all=False):
+    """Operator recovery fences leases, never revives suppressed/erased evidence.
+
+    Use invalidate_all after an operator-managed backup restore before workers
+    resume. Normal recovery releases only expired leases. No model work starts.
+    """
+    store.principal.require('operator')
+    from .personal_privacy import derivative_registers
+    registers=derivative_registers(store)
+    if registers is None:
+        return {'released':0,'model_calls':0}
+    with store.transaction():
+        count=registers.invalidate_all() if invalidate_all else registers.expire_leases()
+    return {'released':count,'model_calls':0,'invalidated_all':invalidate_all}

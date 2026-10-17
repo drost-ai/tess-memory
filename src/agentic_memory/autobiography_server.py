@@ -30,7 +30,11 @@ def register_personal_tools(server, config, *, principal=None):
         def operation(*args,**kwargs):
             try:return {'ok':True,'result':fn(*args,**kwargs)}
             except PersonalError as exc:return {'ok':False,'error':{'code':exc.code,'message':str(exc)}}
-        server.add_tool(operation,name=fn.__name__)
+        hidden_model=bound.role in ('follow_up_reconciler','topic_reconciler','care','research') and fn.__name__.startswith('autobiography_model_')
+        hidden_candidates=bound.role in ('care','research') and fn.__name__=='autobiography_register_candidates'
+        hidden_status=bound.role in ('follow_up_reconciler','topic_reconciler','care','research') and fn.__name__=='autobiography_operation_status'
+        if not hidden_model and not hidden_candidates and not hidden_status:
+            server.add_tool(operation,name=fn.__name__)
         return operation
 
     @expose
@@ -78,8 +82,8 @@ def register_personal_tools(server, config, *, principal=None):
             return workflow().read(operation_id,operation_fence,range_id,lease_token,offset,limit)
 
         @expose
-        def autobiography_extraction_candidate(operation_id: str, operation_fence: int, range_id: str, lease_token: str, candidate_key: str, request_id: str, expected_revision: int, action: str='submit', candidate: dict | None=None) -> dict:
-            return workflow().candidate(operation_id,operation_fence,range_id,lease_token,candidate_key,request_id,expected_revision,action,candidate)
+        def autobiography_extraction_candidate(operation_id: str, operation_fence: int, range_id: str, lease_token: str, candidate_key: str, request_id: str, expected_revision: int, action: str='submit', candidate: dict | None=None, candidate_kind: str='memory') -> dict:
+            return workflow().candidate(operation_id,operation_fence,range_id,lease_token,candidate_key,request_id,expected_revision,action,candidate,candidate_kind)
 
         @expose
         def autobiography_extraction_finalize(operation_id: str, operation_fence: int, range_id: str, lease_token: str, request_id: str) -> dict:
@@ -112,7 +116,7 @@ def register_personal_tools(server, config, *, principal=None):
             PersonalInbox(store()).fail(part_id,code)
             return {'retained':True}
 
-    if bound.role in ('extractor','dream','reconciler','operator'):
+    if bound.role in ('extractor','dream','reconciler','follow_up_reconciler','topic_reconciler','care','research','operator'):
         @expose
         def autobiography_operation_claim(kind: str, manual: bool=False, request_deadline: float | None=None) -> dict:
             """Service operation: claim a due personal job without overlapping another worker."""
@@ -207,6 +211,72 @@ def register_personal_tools(server, config, *, principal=None):
             from .dream_cycle import DreamCycle
             return {'cycles':DreamCycle(config,store()).status(limit)}
 
+    def activation():
+        from .prospective_activation import ProspectiveActivation
+        return ProspectiveActivation(config,store())
+
+    def registers():
+        if not config.personal.registers_enabled or not activation().status().get('active'):
+            raise PersonalError('disabled','personal registers require enablement and prospective activation')
+        from .personal_registers import PersonalRegisters
+        return PersonalRegisters(store(),operations())
+
+    if bound.role in ('extractor','follow_up_reconciler','topic_reconciler','care','research','operator'):
+        @expose
+        def autobiography_register_status() -> dict:
+            result=activation().status()
+            return {**result,'enabled':config.personal.registers_enabled,'activated':bool(result.get('active')),'policy_version':result.get('activation_version',0)}
+
+    if bound.role == 'operator':
+        @expose
+        def autobiography_register_recover(invalidate_all: bool=False) -> dict:
+            from .personal_recovery import recover_registers
+            return recover_registers(store(),invalidate_all=invalidate_all)
+
+        @expose
+        def autobiography_register_activate(request_id: str, expected_policy_version: int=0) -> dict:
+            return activation().activate(request_id,expected_policy_version)
+
+        @expose
+        def autobiography_register_suppress(kind: str, item_id: str, expected_revision: int, request_id: str, reason: str) -> dict:
+            return registers().suppress(kind,item_id,expected_revision,request_id,reason)
+
+    if bound.role in ('follow_up_reconciler','topic_reconciler','care','research','operator'):
+        @expose
+        def autobiography_register_candidates(kind: str, state: str='pending', limit: int=20, after: str='') -> dict:
+            return registers().candidates(kind,state,limit,after)
+
+        @expose
+        def autobiography_register_list(kind: str, state: str='active', due_before: float | None=None, limit: int=20, after: str='') -> dict:
+            return registers().list(kind,state,due_before,limit,after)
+
+    if bound.role in ('follow_up_reconciler','topic_reconciler','operator'):
+        @expose
+        def autobiography_register_reconcile_claim(operation_id: str, operation_fence: int, kind: str, limit: int=20) -> dict:
+            return registers().reconcile_claim(operation_id,operation_fence,kind,limit)
+
+        @expose
+        def autobiography_register_reconcile_commit(operation_id: str, operation_fence: int, kind: str, fence: int, lease_token: str, request_id: str, edits: list[dict], outcomes: list[dict]) -> dict:
+            return registers().reconcile_commit(operation_id,operation_fence,kind,fence,lease_token,request_id,edits,outcomes)
+
+    if bound.role in ('care','research','operator'):
+        @expose
+        def autobiography_register_claim(operation_id: str, operation_fence: int, kind: str, item_id: str, expected_revision: int, request_id: str) -> dict:
+            return registers().claim(operation_id,operation_fence,kind,item_id,expected_revision,request_id)
+
+        @expose
+        def autobiography_register_validate_claim(operation_id: str, operation_fence: int, kind: str, item_id: str, fence: int, lease_token: str, expected_revision: int) -> dict:
+            return registers().validate_claim(operation_id,operation_fence,kind,item_id,fence,lease_token,expected_revision)
+
+        @expose
+        def autobiography_register_progress(operation_id: str, operation_fence: int, kind: str, item_id: str, fence: int, lease_token: str, expected_revision: int, request_id: str, summary: str, findings: list | None=None, next_step: str='', review_after: float | None=None) -> dict:
+            return registers().progress(operation_id,operation_fence,kind,item_id,fence,lease_token,expected_revision,request_id,summary,findings or [],next_step,review_after)
+
+        @expose
+        def autobiography_register_complete(operation_id: str, operation_fence: int, kind: str, item_id: str, fence: int, lease_token: str, expected_revision: int, request_id: str, outcome: str, summary: str, review_after: float | None=None, delivery_receipt: dict | None=None) -> dict:
+            """Store an outcome; a supplied receipt is NOT proof of platform delivery."""
+            return registers().complete(operation_id,operation_fence,kind,item_id,fence,lease_token,expected_revision,request_id,outcome,summary,review_after,delivery_receipt)
+
     if bound.role in ('author','operator'):
         @expose
         def autobiography_transition(record_id: str, expected_revision: int, state: str, reason: str, idempotency_key: str,
@@ -245,7 +315,7 @@ def main():
     from .config import load_config
     parser=argparse.ArgumentParser(description='Role-bound personal memory MCP and operator interface')
     parser.add_argument('--settings',type=Path,required=True)
-    parser.add_argument('--role',choices=['reader','author','extractor','dream','reconciler','operator'])
+    parser.add_argument('--role',choices=['reader','author','extractor','dream','reconciler','follow_up_reconciler','topic_reconciler','care','research','operator'])
     parser.add_argument('--session',default=None)
     parser.add_argument('--audience',default=None,help='the person this session serves (needs personal.multi_audience)')
     parser.add_argument('action',choices=['serve','export','status','index-status','repair-index','operations','retry','preview-import','import','erase','restore'],default='serve',nargs='?')

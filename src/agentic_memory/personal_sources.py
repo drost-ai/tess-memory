@@ -57,7 +57,7 @@ def source_origin(metadata):
     md = metadata.get('metadata') or {}
     internal = md.get('personalMemoryOrigin')
     parent = md.get('parentSessionId')
-    return {'kind': 'internal' if internal in ('dream', 'extractor', 'reconciler') else 'child' if parent else 'conversation',
+    return {'kind': 'internal' if internal in ('dream', 'extractor', 'reconciler', 'follow_up_reconciler', 'topic_reconciler', 'care', 'research') else 'child' if parent else 'conversation',
             'personal_memory_origin': internal, 'parent_session_id': parent,
             # The canonical engine metadata does not establish channel provenance.
             'channel': None, 'channel_evidence': 'not_recorded_in_canonical_session'}

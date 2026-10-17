@@ -88,8 +88,14 @@ class PersonalOperations:
         if due.timestamp()<=now:due+=timedelta(days=1)
         return due.timestamp()
 
+    def _registers_if_present(self):
+        if self.store.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_register_items'").fetchone():
+            from .personal_registers import PersonalRegisters
+            return PersonalRegisters(self.store,self)
+        return None
+
     def _role(self,kind):
-        if kind not in ('extractor','dream','reconciler'):raise PersonalError('invalid','unknown personal operation')
+        if kind not in ('extractor','dream','reconciler','follow_up_reconciler','topic_reconciler','care','research'):raise PersonalError('invalid','unknown personal operation')
         self.store.principal.require(kind,'operator')
 
     def _schedule_key(self,kind):
@@ -101,11 +107,19 @@ class PersonalOperations:
 
     def claim(self,kind,*,manual=False,request_deadline=None):
         self._role(kind);s=self.store;p=s.principal;cfg=self.config.personal
+        registers=self._registers_if_present()
         key=self._schedule_key(kind)
         if request_deadline is not None and (type(request_deadline) not in (int,float) or not math.isfinite(request_deadline) or request_deadline<=s.clock()):
             raise PersonalError('deadline','host job deadline has expired')
-        s.repair_index(limit=8,max_seconds=.5)
-        enabled=cfg.extraction_enabled if kind=='extractor' else cfg.dream_enabled
+        if kind in ('extractor','dream','reconciler'):
+            s.repair_index(limit=8,max_seconds=.5)
+        if kind in ('follow_up_reconciler','topic_reconciler','care','research'):
+            from .prospective_activation import ProspectiveActivation
+            if not cfg.registers_enabled or not ProspectiveActivation(self.config,s).status().get('active'):
+                return {'status':'disabled'}
+            enabled=True
+        else:
+            enabled=cfg.extraction_enabled if kind=='extractor' else cfg.dream_enabled
         if not cfg.enabled or not enabled:return {'status':'disabled'}
         now=s.clock()
         with s.transaction():
@@ -115,6 +129,8 @@ class PersonalOperations:
             if row['operation_id'] and row['lease_until']>now:return {'status':'busy','due':row['due']}
             if row['due']>now and not manual:return {'status':'not_due','due':row['due']}
             if row['operation_id']:
+                if registers:
+                    registers.release_operation(row['operation_id'])
                 s.db.execute("UPDATE autobio_operations SET state='interrupted',result=? WHERE id=?",(canonical({'reason':'lease_expired'}),row['operation_id']))
                 s.db.execute("UPDATE autobio_model_work SET state='interrupted' WHERE operation_id=? AND state IN ('waiting','running')",(row['operation_id'],))
             op=uuid.uuid4().hex;fence=row['fence']+1;deadline=min(now+cfg.max_seconds,request_deadline or float('inf'))
@@ -163,6 +179,8 @@ class PersonalOperations:
         tokens=slots*(input_units+(cfg.max_output_tokens or 0)+8192)+max(0,slots-1)*32768
         with s.transaction():
             op=self._operation(operation_id,fence)
+            if op['kind'] in ('follow_up_reconciler','topic_reconciler','care','research'):
+                raise PersonalError('unsupported','register workflows use host execution accounting, not legacy model reservations')
             if op['kind'] in ('dream','reconciler') and slots==1:
                 # A one-completion synthesis cannot read more context. Do not
                 # replay its deliberate deferrals as a later agentic result.
@@ -282,6 +300,7 @@ class PersonalOperations:
 
     def finish(self,operation_id,fence,*,outcome='completed',result=None):
         s=self.store
+        registers=self._registers_if_present()
         if outcome not in ('completed','partial','failed','cancelled'):raise PersonalError('invalid','invalid operation outcome')
         with s.transaction():
             prior=s.db.execute('SELECT * FROM autobio_operations WHERE id=? AND owner=? AND agent=? AND audience=? AND actor_session=? AND fence=?',
@@ -292,7 +311,9 @@ class PersonalOperations:
                     raise PersonalError('idempotency_mismatch','operation already finished with a different outcome')
                 return json.loads(prior['finish_receipt'])
             op=self._operation(operation_id,fence,allow_expired=True)
-            due=s.clock()+(self.config.personal.extraction_interval if op['kind']=='extractor' else self.config.personal.reconciliation_interval)
+            due=s.clock()+({'extractor':self.config.personal.extraction_interval,'care':self.config.personal.care_interval,'research':self.config.personal.research_interval,'follow_up_reconciler':self.config.personal.register_reconciliation_interval,'topic_reconciler':self.config.personal.register_reconciliation_interval}.get(op['kind'],self.config.personal.reconciliation_interval))
+            if registers:
+                registers.release_operation(operation_id)
             receipt={'outcome':outcome,'next_due':due}
             s.db.execute('UPDATE autobio_operations SET state=?,result=?,finish_receipt=? WHERE id=?',(outcome,canonical(result or {}),canonical(receipt),operation_id))
             s.db.execute('UPDATE autobio_schedule SET due=?,operation_id=NULL,lease_until=NULL,outcome=?,updated=? WHERE kind=? AND fence=?',
@@ -300,6 +321,7 @@ class PersonalOperations:
             return receipt
 
     def status(self):
+        self.store.principal.require('extractor','dream','reconciler','operator')
         day=datetime.fromtimestamp(self.store.clock(),ZoneInfo(self.config.personal.timezone)).date().isoformat()
         row=self.store.db.execute("SELECT COUNT(*),COALESCE(SUM(reserved_calls),0),COALESCE(SUM(reserved_tokens),0) FROM autobio_model_work WHERE day=? AND state!='not_dispatched'",(day,)).fetchone()
         p=self.store.principal

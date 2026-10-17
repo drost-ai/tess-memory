@@ -19,6 +19,10 @@ class PersonalConfig:
     context_subjects: tuple[str, ...] = ()
     extraction_enabled: bool = False
     dream_enabled: bool = False
+    registers_enabled: bool = False
+    care_interval: int = 1
+    research_interval: int = 1
+    register_reconciliation_interval: int = 1
     shadow: bool = True
     source_names: tuple[str, ...] = ()
     historical: bool = False
@@ -72,7 +76,7 @@ class PersonalConfig:
         if set(raw)-{f.name for f in fields(cls)}:
             raise ValueError('unknown personal configuration fields')
         values=dict(raw)
-        for key in ['enabled','extraction_enabled','dream_enabled','shadow','historical','multi_audience']:
+        for key in ['enabled','extraction_enabled','dream_enabled','registers_enabled','shadow','historical','multi_audience']:
             if key in values and type(values[key]) is not bool:
                 raise ValueError(f'personal.{key} must be a boolean')
         for key in ['context_subjects','source_names','source_paths']:
@@ -91,7 +95,7 @@ class PersonalConfig:
             parse_boundary(result.source_since)
         if result.source_mode == 'native' and not result.source_paths:
             raise ValueError('personal.source_paths must explicitly identify the host session roots')
-        for key in ['context_budget','max_seconds','lease_seconds','extraction_interval','reconciliation_interval']:
+        for key in ['context_budget','max_seconds','lease_seconds','extraction_interval','reconciliation_interval','care_interval','research_interval','register_reconciliation_interval']:
             if type(getattr(result,key)) is not int or getattr(result,key)<=0:
                 raise ValueError(f'personal.{key} must be a positive integer')
         for key in OPTIONAL_LIMITS:

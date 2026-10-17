@@ -73,6 +73,15 @@ class PersonalExtraction:
             else:
                 found.extend((ds,path,project,parent) for path,project,parent in source_adapter(ds,codex_catalog=reader.catalog)[0])
         found.sort(key=lambda row:str(row[1]))
+        if cfg.personal.registers_enabled:
+            from .prospective_activation import ProspectiveActivation
+            activation=ProspectiveActivation(cfg,s)
+            if activation.status().get('active'):
+                for ds,path,project,parent in found:
+                    try:
+                        activation.observe_path(ds,path)
+                    except PersonalError as exc:
+                        report['errors'].append({'path':str(path),'code':'prospective_'+exc.code})
         with s.transaction():
             if not s.db.execute("SELECT 1 FROM autobio_meta WHERE key='extraction_initialized'").fetchone():
                 if not historical:

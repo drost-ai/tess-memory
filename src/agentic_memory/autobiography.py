@@ -14,7 +14,7 @@ import uuid
 
 SEGMENTS = ('Self', 'Principles', 'People', 'Relationships', 'Experiences', 'Reflections')
 ATTRIBUTIONS = ('user_statement', 'observed_fact', 'agent_reflection', 'extractor_inference', 'inherited')
-ROLES = ('reader', 'author', 'extractor', 'dream', 'reconciler', 'operator')
+ROLES = ('reader', 'author', 'extractor', 'dream', 'reconciler', 'follow_up_reconciler', 'topic_reconciler', 'care', 'research', 'operator')
 SCHEMA_VERSION = 1
 MAX_BODY = 32000
 MAX_EVIDENCE = 32
@@ -62,7 +62,7 @@ class PersonalPrincipal:
             identifier(self.reads, 'reads')
         if self.role not in ROLES:
             raise PersonalError('forbidden', 'unavailable personal role')
-        if self.role in ('author','dream','reconciler') and self.session_id == 'unbound':
+        if self.role in ('author','dream','reconciler','follow_up_reconciler','topic_reconciler','care','research') and self.session_id == 'unbound':
             raise PersonalError('forbidden','authoring requires a trusted session binding')
 
     def audience_sql(self, alias=''):
@@ -392,13 +392,15 @@ class AutobiographyStore:
 
     def export(self):
         self.principal.require('operator','author')
+        from .personal_privacy import derivative_registers
+        registers=derivative_registers(self)
         with self.transaction(write=False):
             p=self.principal
             records=[self._get(r[0]) for r in self.db.execute('SELECT id FROM autobio_records WHERE owner=? AND agent=? AND audience=? ORDER BY id',(p.owner,p.agent,p.audience))]
             if len(records)>1000:
                 raise PersonalError('budget','use paginated record/history reads for exports exceeding 1000 records')
             revisions=[dict(r) for record in records for r in self.db.execute('SELECT * FROM autobio_revisions WHERE record_id=? ORDER BY revision',(record['id'],))]
-            return {'schema_version':SCHEMA_VERSION,'scope':[p.owner,p.agent,p.audience],'records':records,'revisions':revisions,
+            return {'registers':registers.export_scoped() if registers and p.role=='operator' else {},'schema_version':SCHEMA_VERSION,'scope':[p.owner,p.agent,p.audience],'records':records,'revisions':revisions,
                     'lifecycle':[dict(e) for record in records for e in self.db.execute('SELECT * FROM autobio_lifecycle WHERE record_id=? ORDER BY revision',(record['id'],))],
                     'documents':[{'filename':r['id']+'.md','markdown':r['body'],'revision':r['revision']} for r in records],
                     'privacy_notice':'Downloaded exports and external backups require operator-managed deletion and retention.'}
@@ -410,6 +412,8 @@ class AutobiographyStore:
         transcripts, downloaded exports and backups remain operator-managed.
         """
         self.principal.require('operator')
+        from .personal_privacy import derivative_registers
+        registers=derivative_registers(self)
         with self.transaction():
             head=self._head(record_id)
             if head['revision']!=expected_revision:
@@ -418,6 +422,7 @@ class AutobiographyStore:
             for row in self.db.execute('SELECT evidence FROM autobio_revisions WHERE record_id=?',(record_id,)):
                 sources.update(e['source_id'] for e in json.loads(row[0]))
             p=self.principal
+            derivatives=registers.purge_sources(sources) if registers else {}
             for source in sources:
                 self.db.execute('INSERT OR IGNORE INTO autobio_suppressions VALUES(?,?,?,?)',(p.owner,p.agent,source,self.clock()))
                 if self.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_candidates'").fetchone():
@@ -443,6 +448,6 @@ class AutobiographyStore:
             receipt=uuid.uuid4().hex
             self.db.execute('INSERT INTO autobio_erasure_receipts VALUES(?,?,?,?,?,?)',
                 (receipt,p.owner,p.agent,canonical([record_id]),canonical(sorted(sources)),self.clock()))
-            return {'erasure_id':receipt,'erased_record_ids':[record_id],'suppressed_source_ids':sorted(sources),
+            return {'register_derivatives':derivatives,'erasure_id':receipt,'erased_record_ids':[record_id],'suppressed_source_ids':sorted(sources),
                     'erasure_scope':'logical_application_state','forensic_erasure':False,
                     'external_copies':'SQLite WAL/freelist artifacts, filesystem snapshots, raw transcripts, downloaded exports and backups are not forensically erased by this transaction.'}

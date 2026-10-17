@@ -12,3 +12,11 @@ def redact_credentials(text):
 def require_no_credentials(text):
     if SECRET.search(text):
         raise PersonalError('sensitive_content','credentials belong in secret storage, not autobiographical records')
+
+
+def derivative_registers(store):
+    """Open existing derivative state only; never activate or create it on export."""
+    if not store.db.execute("SELECT 1 FROM sqlite_master WHERE name='autobio_register_items'").fetchone():
+        return None
+    from .personal_registers import PersonalRegisters
+    return PersonalRegisters(store,None)
