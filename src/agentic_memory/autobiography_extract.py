@@ -3,7 +3,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import re
-from bisect import bisect_right
+from datetime import datetime
+import math
 
 from .autobiography import PersonalError, canonical, digest
 from .autobiography_inbox import PersonalInbox
@@ -44,6 +45,42 @@ def clean_unit(turns):
         roles.append({'role':turn.role,'start':start,'end':start+len(value),'source_event_time':turn.ts,'message_id':turn.message_id,'message_index':turn.message_index,'origin':turn.origin,'human_evidence':turn.human_evidence})
     return text,roles
 
+
+
+def order_session_parts(store, rows):
+    """Newest conversation first; forward units/ranges within each session.
+
+    Use source event time, never extraction-ledger updated time. Aggregate all
+    units (including completed ones), so activity in a session's tail promotes
+    its earlier pending cursor too. Physical source activity is a fallback only
+    for sources with no parseable event timestamps. Recomputed each prepare.
+    """
+    activity = {}
+    fallback = {}
+    for row in store.db.execute(
+        'SELECT id,metadata FROM autobio_sources WHERE owner=? AND agent=? AND audience=?',
+        (store.principal.owner, store.principal.agent, store.principal.audience)):
+        md = json.loads(row['metadata'])
+        key = md.get('logical_source', row['id'].rsplit('/unit/', 1)[0])
+        for role in md.get('roles', []):
+            raw = role.get('source_event_time')
+            try:
+                value = float(raw) if isinstance(raw, (int, float)) else datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()
+                if math.isfinite(value):
+                    activity[key] = max(activity.get(key, float('-inf')), value)
+            except (ValueError, TypeError, AttributeError, OverflowError):
+                pass
+        if key not in fallback:
+            try:
+                fallback[key] = source_activity(Path(md['path']), md.get('source_type', 'agent-core')).modified_at
+            except (OSError, KeyError, ValueError):
+                fallback[key] = 0
+    def priority(row):
+        md = json.loads(row['source_metadata'])
+        key = md.get('logical_source', row['source_id'].rsplit('/unit/', 1)[0])
+        return (-activity.get(key, fallback.get(key, 0)), key,
+                int(md.get('unit', 0)), row['start'], row['end'], row['id'])
+    return sorted(rows, key=priority)
 
 class PersonalExtraction:
     def __init__(self,config,store):
@@ -87,10 +124,10 @@ class PersonalExtraction:
                 if not historical:
                     s.db.executemany('INSERT OR IGNORE INTO autobio_baseline_paths VALUES(?)',[(str(row[1]),) for row in found])
                 s.db.execute("INSERT INTO autobio_meta VALUES('extraction_initialized','1')")
-        cursor=s.db.execute("SELECT value FROM autobio_meta WHERE key='extraction_cursor'").fetchone()
-        begin=bisect_right([str(row[1]) for row in found],cursor[0]) if cursor else 0
-        ordered=found[begin:]+found[:begin]
-        for ds,path,project,parent in ordered[:128]:
+        # Refresh every session before freezing this run's queue. A rotating
+        # filename window can hide fresh conversations behind historical work.
+        ordered=found
+        for ds,path,project,parent in ordered:
                 report['scanned']+=1
                 signature='unavailable'
                 try:
@@ -235,7 +272,7 @@ class PersonalExtraction:
                             (str(path),signature,attempts,'failed' if attempts>=3 else 'retry',s.clock()+min(86400,300*2**attempts),type(exc).__name__))
                 finally:
                     with s.transaction():s.db.execute("INSERT OR REPLACE INTO autobio_meta VALUES('extraction_cursor',?)",(str(path),))
-        report['unscanned_this_pass']=max(0,len(found)-len(ordered[:128]))
+        report['unscanned_this_pass']=0
         report['pending_parts']=s.db.execute("SELECT COUNT(*) FROM autobio_extraction_parts WHERE state='pending'").fetchone()[0]
         report['failed_parts']=s.db.execute("SELECT COUNT(*) FROM autobio_extraction_parts WHERE state='failed'").fetchone()[0]
         scope_sql=''
@@ -244,10 +281,13 @@ class PersonalExtraction:
             roots=[str(d.path.resolve()) for d in selected]
             scope_sql=" AND json_extract(s.metadata,'$.personal_source_mode')='native' AND json_extract(s.metadata,'$.source_policy')=? AND json_extract(s.metadata,'$.source_root') IN ("+','.join('?' for _ in roots)+')'
             scope_args=[policy,*roots]
-        rows=s.db.execute('''SELECT p.* FROM autobio_extraction_parts p JOIN autobio_sources s ON s.id=p.source_id
+        rows=s.db.execute('''SELECT p.*,s.metadata AS source_metadata FROM autobio_extraction_parts p JOIN autobio_sources s ON s.id=p.source_id
             WHERE p.state='pending' AND p.retry_after<=? AND s.generation=p.generation AND s.owner=? AND s.agent=? AND s.audience=?
             AND NOT EXISTS(SELECT 1 FROM autobio_suppressions x WHERE x.source_id=p.source_id AND x.owner=s.owner AND x.agent=s.agent)
-            '''+scope_sql+' ORDER BY p.updated,p.id LIMIT ?',(s.clock(),s.principal.owner,s.principal.agent,s.principal.audience,*scope_args,_part_limit(limit,cfg.personal.model_calls))).fetchall()
+            '''+scope_sql,(s.clock(),s.principal.owner,s.principal.agent,s.principal.audience,*scope_args)).fetchall()
+        rows=order_session_parts(s,rows)
+        bound=_part_limit(limit,cfg.personal.model_calls)
+        if bound >= 0: rows=rows[:bound]
         report['parts']=[{'id':r['id'],'source_id':r['source_id'],'generation':r['generation'],'system':EXTRACT_SYSTEM,
                           'text':r['text'],'start':r['start'],'end':r['end']} for r in rows]
         return report
