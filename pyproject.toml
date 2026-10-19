@@ -1,10 +1,12 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
 name = "agentic-memory"
 version = "0.1.0"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 description = "Agentic memory system: ingests Claude Code session transcripts into a multi-timescale, importance-weighted memory store, served over MCP."
 requires-python = ">=3.11,<3.14"
 dependencies = [
