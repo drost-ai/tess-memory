@@ -2,8 +2,8 @@
 
 A canonical createdAt (or filesystem birthtime) is NOT creation authority.
 The operator opts into a host ledger whose session bindings are written only by
-native create/open, never by an import process. This adapter deliberately binds
-the ledger to its sibling sessions root. It is not a hostile-writer defense.
+native create/open, never by an import process. The ledger path and trusted source root are explicit and independently bound.
+It is not a hostile-writer defense.
 """
 from pathlib import Path
 import sqlite3
@@ -26,9 +26,17 @@ def native_creation_proof(config, ds, current, activated_at, observed_at, stamp)
     try:
         ledger = Path(ledger).expanduser().resolve(strict=True)
         root = ds.path.resolve()
+        trusted_root = config.provenance_source_root
+        if trusted_root is None:
+            if config.embedded:
+                return None
+            # Preserve the original standalone trust boundary, never any root.
+            trusted_root = ledger.parent / 'sessions'
+        if root != Path(trusted_root).resolve():
+            return None
         path = Path(current['path'])
         creation = current['creation']
-        if (root != ledger.parent / 'sessions' or path.parent != root
+        if (path.parent != root
             or path.stem != creation['id'] or creation['derived']
             or current['source_origin']['kind'] != 'conversation'
             or not current['pristine_stream']):

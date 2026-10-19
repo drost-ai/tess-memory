@@ -12,6 +12,7 @@ from unittest import mock
 
 from agentic_memory.config import Config, load_config
 from agentic_memory.llm import AgentCoreBackend
+from agent_core.config import ProviderRegistry
 
 
 class ModelSelectionTests(unittest.TestCase):
@@ -26,6 +27,8 @@ class ModelSelectionTests(unittest.TestCase):
             "deepseek-v4-pro": {"kind": "openai", "apiMode": "chat_completions", "defaultModel": "deepseek-v4-pro", "reasoningEffort": "xhigh"},
             "legacy": {"kind": "anthropic", "defaultModel": "legacy-model", "reasoningEffort": "medium"},
         }
+        for profile in self.profiles.values():
+            profile["auth"] = {"kind": "none"}
         self.settings.write_text(json.dumps({"providerProfiles": self.profiles}))
         self.original_settings = self.settings.read_bytes()
         self.options = []
@@ -58,6 +61,10 @@ class ModelSelectionTests(unittest.TestCase):
             effort: str | None = None
             permission_mode: str | None = None
             settings: str | None = None
+            provider_registry: object = None
+            provider_auth_path: str | None = None
+            setting_sources: tuple = ()
+            strict_mcp_config: bool = False
             system_prompt: str | None = None
             adjust_config: object = None
             stream_provider_messages: bool = False
@@ -106,6 +113,12 @@ class ModelSelectionTests(unittest.TestCase):
 
         async def start_runtime(runtime_home=None, *, cwd=None, daemon_enabled=True, session_options=None, listener=None, **_kw):
             test.assertFalse(daemon_enabled)
+            test.assertEqual(Path(runtime_home), test.root / "runtime")
+            test.assertIsInstance(_kw["provider_registry"], ProviderRegistry)
+            options = session_options("test-session", "client")
+            test.assertEqual(options.settings, "{}")
+            test.assertEqual(options.setting_sources, ())
+            test.assertTrue(options.strict_mcp_config)
             return FakeRuntime(cwd, session_options, listener)
 
         self.run_agent_prompt_hook = run_agent_prompt
@@ -123,7 +136,7 @@ class ModelSelectionTests(unittest.TestCase):
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
-        self.cfg = Config(agent_core_path=self.root, agent_core_settings=self.settings,
+        self.cfg = Config(data_dir=self.root / "memory", agent_core_path=self.root, agent_core_settings=self.settings,
                           agent_core_profile="codex", agent_core_model="gpt-5.6-terra",
                           agent_core_reasoning_effort="xhigh",
                           agent_core_fallback_profile="deepseek-v4-pro",
@@ -216,7 +229,7 @@ class ModelSelectionTests(unittest.TestCase):
 
     def test_missing_settings_cannot_silently_change_an_explicit_provider_selection(self):
         self.cfg.agent_core_settings = self.root / "missing.json"
-        with self.assertRaisesRegex(RuntimeError, "existing provider settings"):
+        with self.assertRaisesRegex(ValueError, "explicit provider registry"):
             AgentCoreBackend(self.cfg, probe=False)
 
     def test_toml_loads_requested_models_and_preserves_embedding_settings(self):
@@ -239,7 +252,7 @@ class ModelSelectionTests(unittest.TestCase):
         original = AgentCoreBackend(self.cfg, probe=False).cache_identity
         updated = copy.deepcopy(self.profiles)
         updated['legacy']['defaultModel'] = 'a-new-unrelated-model'
-        updated['codex']['auth'] = {'envVar': 'ROTATED_CREDENTIAL'}
+        updated['codex']['auth'] = {'kind': 'none', 'envVar': 'ROTATED_CREDENTIAL'}
         updated['codex']['defaultModel'] = 'new-default-overridden-by-explicit-pin'
         updated['codex']['reasoningEffort'] = 'low'
         self.settings.write_text(json.dumps({'providerProfiles': updated, 'env': {'ROTATED_CREDENTIAL': 'synthetic-key'}}))
@@ -272,14 +285,13 @@ class ModelSelectionTests(unittest.TestCase):
         original_identity = AgentCoreBackend(self.cfg, probe=False).cache_identity
         self.cfg.agent_core_codex_auth_path = self.root / 'alt-auth.json'
         loader = mock.AsyncMock(side_effect=['first-token', 'refreshed-token'])
-        normalizer = mock.AsyncMock(side_effect=lambda **kw: {'secretRef': kw['value']})
-        modules = {'agent_core.storage': types.SimpleNamespace(load_codex_auth_token=loader),
-                   'agent_core.runtime.secret_provider': types.SimpleNamespace(normalize_runtime_secret_value=normalizer)}
+        normalizer = mock.AsyncMock(side_effect=lambda value, **kw: {'secretRef': value})
         source = {'provider': 'openai', 'openaiApiMode': 'codex', 'openaiToken': 'inherited-token',
                   'openaiCodexAuthPath': '/different/auth.json',
                   'compactionProviderProfile': {'profile': {'kind': 'openai', 'apiMode': 'codex'}, 'openaiToken': 'old'}}
         before = copy.deepcopy(source)
-        with mock.patch.dict(sys.modules, modules):
+        with mock.patch.object(sys.modules["agent_core.config"], "resolve_codex_auth", loader), \
+             mock.patch.object(sys.modules["agent_core.config"], "resolve_provider_secret", normalizer):
             for role, expected in [('primary', 'first-token'), ('search', 'refreshed-token')]:
                 backend = AgentCoreBackend(self.cfg, probe=False) if role == 'primary' else AgentCoreBackend.for_role(self.cfg, role)
                 if role == 'primary':
@@ -301,8 +313,8 @@ class ModelSelectionTests(unittest.TestCase):
         self.cfg.agent_core_codex_auth_path = self.root / 'missing-auth.json'
         loader = mock.AsyncMock(return_value=None)
         normalizer = mock.AsyncMock()
-        with mock.patch.dict(sys.modules, {'agent_core.storage': types.SimpleNamespace(load_codex_auth_token=loader),
-                                          'agent_core.runtime.secret_provider': types.SimpleNamespace(normalize_runtime_secret_value=normalizer)}):
+        with mock.patch.object(sys.modules["agent_core.config"], "resolve_codex_auth", loader), \
+             mock.patch.object(sys.modules["agent_core.config"], "resolve_provider_secret", normalizer):
             backend = AgentCoreBackend(self.cfg, probe=False)
             with self.assertRaisesRegex(RuntimeError, 'no usable credential'):
                 asyncio.run(backend._apply_codex_auth_override({'provider': 'openai', 'openaiApiMode': 'codex', 'openaiToken': 'old'}))
@@ -312,7 +324,9 @@ class ModelSelectionTests(unittest.TestCase):
         path = self.root / 'memory.toml'
         path.write_text('[llm]\ncodex_auth_path="~/.codex-second/auth.json"\n')
         self.assertEqual(load_config(path).agent_core_codex_auth_path, Path('~/.codex-second/auth.json').expanduser())
-        for value in ['"relative.json"', '""', 'true']:
+        path.write_text('[llm]\ncodex_auth_path="relative.json"\n')
+        self.assertEqual(load_config(path).agent_core_codex_auth_path, self.root / 'relative.json')
+        for value in ['""', 'true']:
             path.write_text('[llm]\ncodex_auth_path='+value+'\n')
             with self.assertRaises(ValueError):
                 load_config(path)

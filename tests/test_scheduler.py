@@ -341,24 +341,17 @@ with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()
             root = Path(tmp).resolve()
             source = root / 'source'
             source.mkdir()
-            core = root / 'core' / 'agent_core'
-            core.mkdir(parents=True)
-            core.joinpath('__init__.py').write_text('''async def unused(*a, **k):
-    raise AssertionError("empty ingestion must not invoke a provider")
-resolve_config = resolve_session = run_agent_prompt = start_runtime = unused
-SessionOptions = unused
-''')
             providers = root / 'providers.json'
-            providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused'}}}))
+            providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused', 'auth': {'kind': 'none'}}}}))
             settings = root / 'memory.toml'
             settings.write_text(f'[[data_stores]]\nname="empty"\npath="{source}"\n'
                                 f'[storage]\ndata_dir="{root / "memory"}"\n'
-                                f'[llm]\nprofile="offline"\nagent_core_path="{core.parent}"\nsettings="{providers}"\n'
+                                f'[llm]\nprofile="offline"\nsettings="{providers}"\n'
                                 '[embedding]\nprovider="local"\n')
-            # Supply the synthetic engine as an installed-import fixture; production
-            # code must not regain a checkout-specific sys.path fallback.
-            env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
-                [str(core.parent), os.environ.get('PYTHONPATH', '')])}
+            # Exercise installed modules without synthetic import-path shims.
+            env = {key: value for key, value in os.environ.items()
+                   if key not in {'PYTHONPATH', 'AGENT_CORE_PATH'}
+                   and not key.startswith('AGENTIC_MEMORY_')}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nsettings="{settings}"\n')
             result = subprocess.run([sys.executable, '-m', 'agentic_memory.cli', 'scheduler', '--config', str(config_path),

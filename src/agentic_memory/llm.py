@@ -6,8 +6,8 @@ turn through the engine's runtime and session manager — start_runtime
 (daemon-less) → sessions.open → run_turn → stop — with a real system prompt,
 tools disabled, and no session persistence.
 
-Provider transport and credentials come from the runtime's own configuration:
-when the Tess settings file exists, its provider profile is selected.
+Provider transport and credentials come only from an explicitly selected
+registry profile, through the engine's public configuration/auth APIs.
 Optional model/effort overrides belong to this memory instance;
 otherwise the provider profile's defaults apply. Shared profiles are never
 modified by this package.
@@ -21,6 +21,7 @@ import hashlib
 import json
 import shutil
 import tempfile
+from pathlib import Path
 
 from .config import Config
 
@@ -61,26 +62,25 @@ class AgentCoreBackend:
             raise RuntimeError(f"agent-core import failed: {e}") from e
         self._start_runtime = start_runtime
         self._session_options = SessionOptions
-        self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-")
+        scratch_root = ((cfg.runtime_home / "run" / "memory") if cfg.runtime_home is not None
+                        else cfg.data_dir / "run")
+        scratch_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-", dir=scratch_root)
+        self._runtime_home = Path(self._workdir) / "runtime"
         atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
-        self._settings_path = (
-            str(cfg.agent_core_settings) if cfg.agent_core_settings.is_file() else None
-        )
-        if not self._settings_path and (self._model or self._reasoning_effort):
-            raise RuntimeError("Explicit model/effort overrides require an existing provider settings file")
-        self._profile = (profile or cfg.agent_core_profile) if self._settings_path else None
-        self._profile_kind = None
-        settings_document = {}
-        if self._profile:
-            with open(self._settings_path) as fh:
-                settings_document = json.load(fh)
-                profiles = settings_document.get("providerProfiles") or {}
-            if self._profile not in profiles:
-                raise RuntimeError(
-                    f"profile '{self._profile}' not found in {self._settings_path}"
-                )
-            self._profile_kind = (profiles[self._profile] or {}).get("kind")
-            self.name = f"agent-core:{self._profile}"
+        from agent_core.config import ProviderRegistry
+        registry_path = cfg.provider_registry or cfg.agent_core_settings
+        if registry_path is None:
+            raise ValueError("Explicit provider registry is required")
+        self._registry = ProviderRegistry(registry_path)
+        self._settings_path = str(registry_path)
+        self._profile = profile or cfg.agent_core_profile
+        if not self._profile:
+            raise ValueError("An explicit provider profile is required")
+        selected_profile = self._registry.resolve_profile(self._profile, model=self._model or None)
+        self._profile_kind = selected_profile.get("kind")
+        settings_document = {"providerProfiles": {self._profile: selected_profile}}
+        self.name = f"agent-core:{self._profile}"
         if self._model:
             self.name += f":{self._model}"
         if self._reasoning_effort:
@@ -100,7 +100,7 @@ class AgentCoreBackend:
             if self._model:
                 selected['defaultModel'] = self._model
             if self._reasoning_effort:
-                for key in ('reasoningEffort', 'defaultEffort', 'effort'):
+                for key in ('reasoningEffort', 'defaultEffort', 'effort', 'effortLevel'):
                     if key in selected:
                         selected[key] = self._reasoning_effort
             globals_used = {k: document[k] for k in ('maxTokens', 'thinkingBudget') if k in document}
@@ -111,10 +111,11 @@ class AgentCoreBackend:
             self._probe()
 
     def verify_profile(self):
-        if self._settings_path:
-            with open(self._settings_path) as handle:
-                if self._cache_identity_for(json.load(handle)) != self.cache_identity:
-                    raise RuntimeError('provider settings changed during memory work; retry with fresh configuration')
+        from agent_core.config import ProviderRegistry
+        profile = ProviderRegistry(self._settings_path).resolve_profile(self._profile, model=self._model or None)
+        document = {"providerProfiles": {self._profile: profile}}
+        if self._cache_identity_for(document) != self.cache_identity:
+            raise RuntimeError('provider settings changed during memory work; retry with fresh configuration')
 
     async def _run_turn(self, *, system: str, prompt: str) -> dict:
         """One daemon-less runtime, one session, one non-interactive turn.
@@ -148,17 +149,22 @@ class AgentCoreBackend:
             cwd=cwd,
             # Reuse profile transport/auth; explicit per-instance overrides
             # select the model and effort without rewriting the settings file.
-            provider=self._profile or "anthropic",
+            provider=self._profile,
             model=self._model or None,
             effort=self._reasoning_effort or None,
-            settings=self._settings_path if self._profile else None,
+            provider_registry=self._registry,
+            settings="{}",
+            setting_sources=(),
+            strict_mcp_config=True,
+            provider_auth_path=str(self._codex_auth_path) if self._codex_auth_path else None,
             system_prompt=system,
             adjust_config=adjust,
             stream_provider_messages=bool(observer and self._profile_kind == "openai"),
             extra={"tools": [], "sessionPersistence": False, "inputFormat": "text", "outputFormat": "json"},
         )
         runtime = await self._start_runtime(
-            None, cwd=cwd, daemon_enabled=False, session_options=lambda _sid, _reason: options, listener=_Host()
+            self._runtime_home, cwd=cwd, daemon_enabled=False, provider_registry=self._registry,
+            session_options=lambda _sid, _reason: options, listener=_Host()
         )
         result = None
         try:
@@ -214,16 +220,14 @@ class AgentCoreBackend:
         """
         if not self._codex_auth_path or config.get('provider') != 'openai' or config.get('openaiApiMode') != 'codex':
             return config
-        from agent_core.storage import load_codex_auth_token
-        from agent_core.runtime.secret_provider import normalize_runtime_secret_value
+        from agent_core.config import resolve_codex_auth, resolve_provider_secret
         path = str(self._codex_auth_path)
-        token = await load_codex_auth_token(path)
+        token = await resolve_codex_auth(path)
         if not token:
             raise RuntimeError(f'Configured Codex auth file has no usable credential: {path}')
-        reference = await normalize_runtime_secret_value(
-            value=token, purpose='provider_oauth_token',
-            acceptedPurposes=('provider_api_key', 'provider_oauth_token'),
-            idempotencyScope=f'memory:{self._profile}:{path}:codex-token')
+        reference = await resolve_provider_secret(
+            token, purpose='provider_oauth_token',
+            idempotency_scope=f'memory:{self._profile}:{path}:codex-token')
         result = {**config, 'openaiToken': reference, 'openaiCodexAuthPath': path}
         for key in ('compactionProviderProfile', 'compactionVerificationProviderProfile'):
             binding = config.get(key)

@@ -3,10 +3,9 @@
 Two interchangeable implementations behind one interface:
 
     OpenAICompatEmbedder — remote embeddings via an OpenAI-compatible endpoint,
-        configured from a provider profile in ~/.tess-memory/providers.yaml
-        (default: embeddings -> Qwen3-Embedding-8B @ 4096d).
+        configured from an explicitly selected provider registry profile.
         Asymmetric retrieval format: instruct-prefixed queries, plain passages.
-    LocalEmbedder — sentence-transformers, fully offline.
+    LocalEmbedder — sentence-transformers, cached-only unless download opt-in.
 
 All vectors are L2-normalized so cosine similarity is a plain dot product.
 Vector spaces are not interchangeable: the store records the embedder
@@ -15,7 +14,6 @@ descriptor and refuses to mix (switch provider => re-ingest).
 
 from __future__ import annotations
 
-import json
 from contextlib import nullcontext
 
 import numpy as np
@@ -43,7 +41,8 @@ class Embedder:
 
 
 class LocalEmbedder(Embedder):
-    def __init__(self, model_name: str, batch_size: int = 64):
+    def __init__(self, model_name: str, batch_size: int = 64, *, allow_download: bool = False):
+        self.allow_download = allow_download
         self.model_name = model_name
         self.batch_size = batch_size
         self.descriptor = f"local:{model_name}"
@@ -59,7 +58,7 @@ class LocalEmbedder(Embedder):
             with contextlib.redirect_stdout(sys.stderr):
                 from sentence_transformers import SentenceTransformer
 
-                self._model = SentenceTransformer(self.model_name)
+                self._model = SentenceTransformer(self.model_name, local_files_only=not self.allow_download)
         return self._model
 
     def embed_passages(self, texts: list[str]) -> np.ndarray:
@@ -84,18 +83,22 @@ class LocalEmbedder(Embedder):
 class OpenAICompatEmbedder(Embedder):
     def __init__(self, settings_path, profile_name: str, dims: int, batch_size: int = 64):
         self.batch_size = batch_size
-        settings = json.load(open(settings_path))
-        prof = (settings.get("providerProfiles") or {}).get(profile_name)
-        if not prof:
-            raise RuntimeError(f"profile '{profile_name}' not found in {settings_path}")
-        self._url = (prof.get("baseUrl") or "").rstrip("/") + "/embeddings"
-        self._model = prof.get("defaultModel")
-        env_var = (prof.get("auth") or {}).get("envVar")
-        import os
-
-        self._key = os.environ.get(env_var or "") or (settings.get("env") or {}).get(env_var)
-        if not self._key:
-            raise RuntimeError(f"no credential for embedding profile '{profile_name}' ({env_var})")
+        from agent_core.config import ProviderRegistry
+        if settings_path is None:
+            raise ValueError("Explicit provider registry is required")
+        registry = ProviderRegistry(settings_path)
+        prof = registry.resolve_profile(profile_name)
+        if not prof.get("baseUrl") or not prof.get("defaultModel"):
+            raise ValueError(f"Embedding profile '{profile_name}' requires baseUrl and defaultModel")
+        self._url = prof["baseUrl"].rstrip("/") + "/embeddings"
+        self._model = prof["defaultModel"]
+        auth = registry.resolve_auth(profile_name)
+        self._key = auth.get("apiKey") or auth.get("authToken") or auth.get("openaiToken")
+        self._headers = dict(auth.get("customHeaders") or {})
+        if self._key:
+            self._headers.setdefault("Authorization", f"Bearer {self._key}")
+        if not self._headers and (prof.get("auth") or {}).get("kind") != "none":
+            raise RuntimeError(f"no credential for embedding profile '{profile_name}'")
         self._dims = dims
         self.descriptor = f"{profile_name}:{self._model}:{dims}d"
 
@@ -112,7 +115,7 @@ class OpenAICompatEmbedder(Embedder):
                     check_source_admission()
                     r = httpx.post(
                         self._url,
-                        headers={"Authorization": f"Bearer {self._key}"},
+                        headers=self._headers,
                         json={"model": self._model, "input": inputs, "dimensions": self._dims},
                         timeout=180,
                     )
@@ -150,15 +153,9 @@ class OpenAICompatEmbedder(Embedder):
 
 
 def make_embedder(cfg: Config) -> Embedder:
-    provider = cfg.embed_provider
-    if provider == "local":
-        return LocalEmbedder(cfg.embed_model, cfg.embed_batch_size)
-    try:
-        return OpenAICompatEmbedder(
-            cfg.agent_core_settings, provider, cfg.embed_dims, cfg.embed_batch_size
-        )
-    except RuntimeError as e:
-        import sys
-
-        print(f"[embed] {e}; falling back to local model", file=sys.stderr)
-        return LocalEmbedder(cfg.embed_model, cfg.embed_batch_size)
+    """Construct only the explicitly selected backend; never silently change vector space."""
+    if cfg.embed_provider == "local":
+        return LocalEmbedder(cfg.embed_model, cfg.embed_batch_size,
+                             allow_download=cfg.embedding_allow_download)
+    return OpenAICompatEmbedder(cfg.provider_registry or cfg.agent_core_settings,
+                                cfg.embed_provider, cfg.embed_dims, cfg.embed_batch_size)

@@ -687,12 +687,20 @@ def run() -> None:
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr, force=True)
     for name in ("sentence_transformers", "httpx", "huggingface_hub", "transformers"):
         logging.getLogger(name).setLevel(logging.WARNING)
+    initialize()
     mcp.run()  # stdio transport
 
 
-if CONFIG.personal.enabled:
-    from .autobiography_server import register_personal_tools
-    register_personal_tools(mcp, CONFIG)
+_personal_registered = False
+
+
+def initialize() -> None:
+    """Bind runtime-dependent tools explicitly, never during module import."""
+    global _personal_registered
+    if CONFIG.personal.enabled and not _personal_registered:
+        from .autobiography_server import register_personal_tools
+        register_personal_tools(mcp, CONFIG)
+        _personal_registered = True
 
 
 if __name__ == "__main__":

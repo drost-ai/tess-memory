@@ -15,7 +15,7 @@ import sys
 import threading
 import time
 
-from .config import load_config
+from .config import load_config, load_manifest
 from .embed import LocalEmbedder, OpenAICompatEmbedder, make_embedder
 from .ingest import ingest
 from .llm import AgentCoreBackend
@@ -25,7 +25,16 @@ from .scheduler_config import load_service
 from .scheduler_queue import WorkQueue
 from .store import MemoryStore
 
+# Legacy launchd installer metadata only; workers never use this as an import cwd.
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def _scheduled_config(settings: Path):
+    """Keep canonical embedded providers; instance TOML selects source/storage only."""
+    manifest = os.environ.get('AGENTIC_MEMORY_CONFIG')
+    if manifest:
+        return load_manifest(Path(manifest), store_settings=settings)
+    return load_config(settings)
 
 
 def _gate(config, *, readonly=False):
@@ -40,7 +49,7 @@ def service_status(config):
     for scheduled in config.stores:
         store = None
         try:
-            cfg = load_config(scheduled.settings)
+            cfg = _scheduled_config(scheduled.settings)
             import tomllib
             declared = Path(tomllib.loads(scheduled.settings.read_text())['storage']['data_dir']).expanduser()
             if cfg.data_dir.resolve() != declared.resolve():
@@ -113,15 +122,20 @@ def worker(config_path: Path, run_id: str) -> int:
     thread.start()
     store = None
     try:
-        cfg = load_config(scheduled.settings)
+        cfg = _scheduled_config(scheduled.settings)
         # Keep each destination explicit even in a non-Codex instance.
         import tomllib
         declared = tomllib.loads(scheduled.settings.read_text())['storage']['data_dir']
         if cfg.data_dir.resolve() != Path(declared).expanduser().resolve():
             raise ValueError('environment overrides conflict with scheduled store settings')
         if any(ds.type == 'codex' for ds in cfg.data_stores):
-            from .codex import load_dedicated_config
-            cfg = load_dedicated_config(scheduled.settings)
+            from .codex import load_dedicated_config, validate_dedicated_database
+            if cfg.embedded:
+                if any(ds.type != 'codex' for ds in cfg.data_stores):
+                    raise ValueError('Codex memory requires exclusively Codex sources')
+                validate_dedicated_database(cfg.db_path)
+            else:
+                cfg = load_dedicated_config(scheduled.settings)
         workers = scheduled.workers or cfg.llm_workers
         if run['kind'] == 'detect':
             from .detection import detect_sources
@@ -211,14 +225,26 @@ def worker(config_path: Path, run_id: str) -> int:
 
 
 def _worker_environment():
-    # Routing belongs to the instance file, while normal provider credential
-    # environment variables remain available without being copied to reports.
-    env = {k: v for k, v in os.environ.items() if not k.startswith('AGENTIC_MEMORY_') and k != 'AGENT_CORE_PATH'}
+    # Preserve only the explicitly selected embedded manifest, never ambient
+    # memory overrides or source-checkout import paths. Credential refs remain
+    # ordinary environment variables and are never copied into reports.
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith('AGENTIC_MEMORY_') and k not in {'AGENT_CORE_PATH', 'PYTHONPATH'}}
+    manifest = os.environ.get('AGENTIC_MEMORY_CONFIG')
+    if manifest:
+        if not Path(manifest).is_absolute():
+            raise ValueError('AGENTIC_MEMORY_CONFIG must be an absolute generated manifest path')
+        env['AGENTIC_MEMORY_CONFIG'] = manifest
     env['PYTHONUNBUFFERED'] = '1'
     return env
 
 
 def spawn_worker(config, run):
+    # Validate metadata before opening the log or launching a worker. Installed
+    # modules must work from the runtime home, not the memory source checkout.
+    embedded = bool(os.environ.get('AGENTIC_MEMORY_CONFIG'))
+    cfg = _scheduled_config(config.store(run['instance']).settings) if embedded else None
+    cwd = cfg.runtime_home if embedded else config.path.parent
     directory = config.data_dir / 'runs'
     directory.mkdir(mode=0o700, exist_ok=True)
     log = directory / (run['id'] + '.log')
@@ -226,7 +252,7 @@ def spawn_worker(config, run):
         os.fchmod(output.fileno(), 0o600)
         process = subprocess.Popen([sys.executable, '-u', '-m', 'agentic_memory.cli', 'scheduler-worker',
                                     '--config', str(config.path), '--run-id', run['id']],
-                                   cwd=ROOT, env=_worker_environment(), stdin=subprocess.DEVNULL,
+                                   cwd=cwd, env=_worker_environment(), stdin=subprocess.DEVNULL,
                                    stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
     return process
 
