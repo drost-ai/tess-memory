@@ -253,11 +253,17 @@ SessionOptions = unused
                                 f'[storage]\ndata_dir="{root / "memory"}"\n'
                                 f'[llm]\nprofile="offline"\nagent_core_path="{core.parent}"\nsettings="{providers}"\n'
                                 '[embedding]\nprovider="local"\n')
+            # Supply the synthetic engine as an installed-import fixture; production
+            # code must not regain a checkout-specific sys.path fallback.
+            env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
+                [str(core.parent), os.environ.get('PYTHONPATH', '')])}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nenabled=true\npoll_seconds=14400\nsettings="{settings}"\n')
             result = subprocess.run([sys.executable, '-m', 'agentic_memory.cli', 'scheduler', '--config', str(config_path),
-                                     'ingest-once'], capture_output=True, text=True, timeout=15)
-            self.assertEqual(result.returncode, 0, result.stderr)
+                                     'ingest-once'], capture_output=True, text=True, timeout=15, env=env)
+            diagnostic = result.stderr + result.stdout + ''.join(
+                path.read_text() for path in (root / 'service' / 'runs').glob('*.log'))
+            self.assertEqual(result.returncode, 0, diagnostic)
             completed = json.loads(result.stdout)
             self.assertEqual(completed['outcome'], 'success')
             self.assertEqual(completed['counts'], {'success': 1})
@@ -266,7 +272,7 @@ SessionOptions = unused
             # Repeating immediately must not obey the old four-hour poll.
             again = subprocess.run([sys.executable, '-u', '-m', 'agentic_memory.cli', 'scheduler',
                                     '--config', str(config_path), 'ingest-once'],
-                                   capture_output=True, text=True, timeout=15)
+                                   capture_output=True, text=True, timeout=15, env=env)
             self.assertEqual(again.returncode, 0, again.stderr)
             self.assertEqual(json.loads(again.stdout)['counts'], {'success': 1})
 

@@ -355,11 +355,17 @@ SessionOptions = unused
                                 f'[storage]\ndata_dir="{root / "memory"}"\n'
                                 f'[llm]\nprofile="offline"\nagent_core_path="{core.parent}"\nsettings="{providers}"\n'
                                 '[embedding]\nprovider="local"\n')
+            # Supply the synthetic engine as an installed-import fixture; production
+            # code must not regain a checkout-specific sys.path fallback.
+            env = {**os.environ, 'PYTHONPATH': os.pathsep.join(
+                [str(core.parent), os.environ.get('PYTHONPATH', '')])}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nsettings="{settings}"\n')
             result = subprocess.run([sys.executable, '-m', 'agentic_memory.cli', 'scheduler', '--config', str(config_path),
-                                     'run', '--instance', 'empty'], capture_output=True, text=True, timeout=15)
-            self.assertEqual(result.returncode, 0, result.stderr)
+                                     'run', '--instance', 'empty'], capture_output=True, text=True, timeout=15, env=env)
+            diagnostic = result.stderr + result.stdout + ''.join(
+                path.read_text() for path in (root / 'service' / 'runs').glob('*.log'))
+            self.assertEqual(result.returncode, 0, diagnostic)
             completed = json.loads(result.stdout)
             self.assertEqual(completed['outcome'], 'success')
             self.assertEqual(completed['stats']['model_calls'], 0)
