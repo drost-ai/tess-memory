@@ -18,6 +18,13 @@ from agentic_memory.llm import AgentCoreBackend
 
 
 class EmbeddedConfigurationTests(unittest.TestCase):
+    def test_invalid_provider_configuration_does_not_allocate_scratch_state(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root) / "uninitialized-store"
+            with self.assertRaisesRegex(ValueError, "registry"):
+                AgentCoreBackend(Config(data_dir=directory), probe=False)
+            self.assertFalse(directory.exists())
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)

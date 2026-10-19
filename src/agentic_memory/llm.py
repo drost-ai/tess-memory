@@ -62,12 +62,6 @@ class AgentCoreBackend:
             raise RuntimeError(f"agent-core import failed: {e}") from e
         self._start_runtime = start_runtime
         self._session_options = SessionOptions
-        scratch_root = ((cfg.runtime_home / "run" / "memory") if cfg.runtime_home is not None
-                        else cfg.data_dir / "run")
-        scratch_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-", dir=scratch_root)
-        self._runtime_home = Path(self._workdir) / "runtime"
-        atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
         from agent_core.config import ProviderRegistry
         registry_path = cfg.provider_registry or cfg.agent_core_settings
         if registry_path is None:
@@ -79,6 +73,12 @@ class AgentCoreBackend:
             raise ValueError("An explicit provider profile is required")
         selected_profile = self._registry.resolve_profile(self._profile, model=self._model or None)
         self._profile_kind = selected_profile.get("kind")
+        scratch_root = ((cfg.runtime_home / "run" / "memory") if cfg.runtime_home is not None
+                        else cfg.data_dir / "run")
+        scratch_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-", dir=scratch_root)
+        self._runtime_home = Path(self._workdir) / "runtime"
+        atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
         settings_document = {"providerProfiles": {self._profile: selected_profile}}
         self.name = f"agent-core:{self._profile}"
         if self._model:
