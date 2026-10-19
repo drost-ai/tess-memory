@@ -30,6 +30,8 @@ class PersonalConfig:
     source_mode: str = 'allowlist'
     source_paths: tuple[str, ...] = ()
     source_since: str | None = None
+    # Explicit trust in a the host native session ledger; never auto-discovered.
+    native_creation_ledger: str | None = None
     ai_name: str = ''
     user_name: str = ''
     dream_hour: int = 23
@@ -87,6 +89,11 @@ class PersonalConfig:
         result=cls(**values)
         if result.source_mode not in ('allowlist','native'):
             raise ValueError('personal.source_mode must be allowlist or native')
+        if result.native_creation_ledger is not None:
+            if not isinstance(result.native_creation_ledger, str) or not result.native_creation_ledger.strip():
+                raise ValueError('personal.native_creation_ledger must be a nonempty path')
+            if result.source_mode != 'native':
+                raise ValueError('personal.native_creation_ledger requires native source mode')
         for key in ('ai_name','user_name'):
             if not isinstance(getattr(result,key),str):
                 raise ValueError(f'personal.{key} must be a string')

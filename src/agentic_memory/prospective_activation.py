@@ -18,6 +18,7 @@ import tempfile
 from .autobiography import PersonalError, canonical, digest
 from .personal_sources import selected_sources, parse_boundary, source_origin
 from .readers import CompletedSourceReader
+from .native_creation import creation_metadata, native_creation_proof
 
 
 def _stamp(value):
@@ -122,14 +123,23 @@ class ProspectiveActivation:
             if not isinstance(messages, list):
                 raise ValueError('invalid inline messages')
             positions = {}
+            pristine_stream = bool(body) and not messages
+            event_times = []
             if body:
                 offset, next_index = 0, 0
                 for line in raw.splitlines(keepends=True):
                     begin, offset = offset, offset + len(line)
                     if not line.endswith(b'\n'):
+                        pristine_stream = False
                         break  # partial bytes are still included in baseline byte highwater
                     record = json.loads(line)
                     kind = record.get('type')
+                    event_time = _stamp(record.get('persisted_at'))
+                    if (kind != 'message' or record.get('message_index') != len(event_times)
+                        or record.get('session_id') != meta.get('id') or event_time is None):
+                        pristine_stream = False
+                    if event_time is not None:
+                        event_times.append(event_time)
                     historical = rewrite_fence is None or offset <= rewrite_fence
                     if kind in ('truncate', 'repair'):
                         if not historical:
@@ -152,7 +162,9 @@ class ProspectiveActivation:
                         'message_highwater': len(indices), 'body': str(body.resolve()) if body else None,
                         'byte_highwater': len(raw), 'prefix_hash': hashlib.sha256(raw).hexdigest(),
                         'inline_highwater': len(messages), 'inline_hash': digest(messages),
-                        'source_origin': source_origin(meta)}
+                        'source_origin': source_origin(meta),
+                        'creation': creation_metadata(meta), 'pristine_stream': pristine_stream,
+                        'first_event_at': min(event_times) if event_times else None}
             return baseline, snapshot, raw, messages, positions
         except PersonalError:
             raise
@@ -209,6 +221,8 @@ class ProspectiveActivation:
                 return existing[0]
             at = self.store.clock()
             baseline = self._capture(allowed[ds.name], path)[0]
+            baseline['native_creation_proof'] = native_creation_proof(
+                self.config, allowed[ds.name], baseline, policy['activated_at'], at, _stamp)
             self._insert(policy['activation_version'], at, baseline)
             return baseline
 
@@ -267,17 +281,26 @@ class ProspectiveActivation:
             keys = [digest([k, expected_policy, origin]) for k in keys]
         if type(unit) is not int or not 0 <= unit < len(keys) or not key or keys[unit] != key:
             raise PersonalError('stale_source', 'canonical source unit changed or proof unavailable')
+        # Keep every original integrity check above. Native proof changes only
+        # admission floors, never the stored prefix or a processing cursor.
+        proof = native_creation_proof(self.config, ds, current, policy['activated_at'], observed_at, _stamp)
+        if ('creation' in baseline and baseline['creation'] != current['creation']) or (
+            baseline.get('native_creation_proof') is not None and baseline['native_creation_proof'] != proof):
+            proof = None
+        highwater = 0 if proof else baseline['message_highwater']
+        time_floor = policy['activated_at'] if proof else max(policy['activated_at'], observed_at)
         from .personal_privacy import redact_credentials
         turns = snapshot.transcript.turns if snapshot.transcript else []
         eligible = []
         for role in md.get('roles', []):
             index, stamp = role.get('message_index'), _stamp(role.get('source_event_time'))
             a, b = role.get('start'), role.get('end')
-            if (type(index) is not int or index < baseline['message_highwater'] or stamp is None
-                or stamp <= max(policy['activated_at'], observed_at)
+            if (type(index) is not int or index < highwater or stamp is None
+                or stamp <= time_floor
+                or (proof and (stamp < proof['engine_created_at'] or stamp > self.store.clock()))
                 or type(a) is not int or type(b) is not int or not 0 <= a < b <= row['span_count']):
                 continue
-            if baseline['body'] and (index not in positions or positions[index] < baseline['byte_highwater']):
+            if baseline['body'] and (index not in positions or (not proof and positions[index] < baseline['byte_highwater'])):
                 continue
             matches = [t for t in turns if t.message_index == index and t.message_id == role.get('message_id')
                        and t.role == role.get('role') and _stamp(t.ts) == stamp]

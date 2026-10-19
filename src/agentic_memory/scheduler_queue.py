@@ -81,7 +81,7 @@ class WorkQueue:
         finally:
             db.close()
 
-    def claim(self, *, now=None, instance=None, kind=None, explicit=False):
+    def claim(self, *, now=None, instance=None, kind=None, explicit=False, external_trigger=False):
         now = time.time() if now is None else now
         db = self.connect()
         try:
@@ -106,7 +106,10 @@ class WorkQueue:
                         continue
                     if kind and row['kind'] != kind:
                         continue
-                    if not explicit and (not row['enabled'] or row['due'] > now):
+                    # An external cadence replaces ordinary ingest polling,
+                    # not retry backoff, enabled policy, or force-retry policy.
+                    cadence_override = external_trigger and row['kind'] == 'ingest' and row['attempts'] == 0
+                    if not explicit and (not row['enabled'] or (row['due'] > now and not cadence_override)):
                         continue
                     if row['kind'] == 'recovery' and self.config.store(row['instance']).recovery_hour is None:
                         continue

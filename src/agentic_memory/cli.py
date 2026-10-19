@@ -258,6 +258,9 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
         result = install(path, label=args.label, start=not args.no_start) if args.action == 'install' else service_control(args.action, label=args.label)
         print(json.dumps(result, indent=2))
         return 0
+    if args.action == 'ingest-once':
+        from .scheduler_once import ingest_once
+        return ingest_once(path)
     if args.action == 'serve':
         serve(path)
         return 0
@@ -528,7 +531,7 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser('scheduler', help='Manage persistent ingestion and aggregate queues')
     p.add_argument('--config', required=True)
     commands = p.add_subparsers(dest='action', required=True)
-    for action in ('serve', 'status'):
+    for action in ('serve', 'status', 'ingest-once'):
         commands.add_parser(action).set_defaults(fn=cmd_scheduler)
     command = commands.add_parser('usage', help='Observed model tokens, retries and accounting coverage')
     command.add_argument('--instance')
