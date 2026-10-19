@@ -13,6 +13,7 @@ import os
 import re
 import tomllib
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from .autobiography_config import PersonalConfig
 from pathlib import Path
@@ -515,8 +516,20 @@ def load_manifest(path: Path | str, *, store_settings: Path | str | None = None)
         return result
     with path.open(encoding="utf-8") as fh:
         envelope = json.load(fh, object_pairs_hook=unique_object)
+    return parse_manifest(envelope, store_settings=store_settings)
+
+
+def parse_manifest(document: Mapping[str, object], *, store_settings: Path | str | None = None) -> Config:
+    """Validate the embedded document in memory, without writing a manifest.
+
+    Shares the file loader's metadata-only validation: explicit registry/model
+    metadata may be read, but no credentials, clients, stores or downloads are
+    initialized. The caller's document is never mutated. Optional per-store
+    settings retain the same explicit, constrained TOML overlay contract.
+    """
+    envelope = document
     required = {"schema_version", "mode", "runtime_home", "provider_registry", "config"}
-    if not isinstance(envelope, dict) or set(envelope) - required - {"provenance_ledger", "provenance_source_root"} or required - set(envelope):
+    if not isinstance(envelope, Mapping) or set(envelope) - required - {"provenance_ledger", "provenance_source_root"} or required - set(envelope):
         raise ValueError("Invalid embedded manifest fields")
     if type(envelope["schema_version"]) is not int or envelope["schema_version"] != 1:
         raise ValueError("Unsupported embedded manifest schema_version")

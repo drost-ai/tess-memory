@@ -12,7 +12,7 @@ import unittest
 import yaml
 from unittest.mock import patch, Mock
 
-from agentic_memory.config import DataStore, Config, load_config, load_manifest, validate_config
+from agentic_memory.config import DataStore, Config, load_config, load_manifest, parse_manifest, validate_config
 from agentic_memory.embed import make_embedder
 from agentic_memory.llm import AgentCoreBackend
 
@@ -55,6 +55,50 @@ class EmbeddedConfigurationTests(unittest.TestCase):
     def load(self, envelope=None):
         self.manifest.write_text(json.dumps(self.envelope if envelope is None else envelope))
         return load_manifest(self.manifest)
+
+    def test_in_memory_manifest_matches_file_loader_without_writes_or_mutation(self):
+        from types import MappingProxyType
+        before = copy.deepcopy(self.envelope)
+        expected = self.load()
+        self.manifest.unlink()
+        with patch('agentic_memory.config.load_manifest', side_effect=AssertionError('no manifest file')):
+            actual = parse_manifest(MappingProxyType(self.envelope))
+            validate_config(actual, validate_credentials=False)
+        self.assertEqual(actual, expected)
+        self.assertEqual(self.envelope, before)
+        self.assertFalse(self.manifest.exists())
+        self.assertFalse(list(self.home.iterdir()))
+
+    def test_file_loader_delegates_to_in_memory_validator(self):
+        self.manifest.write_text(json.dumps(self.envelope))
+        sentinel = object()
+        with patch('agentic_memory.config.parse_manifest', return_value=sentinel) as parse:
+            self.assertIs(load_manifest(self.manifest, store_settings='store.toml'), sentinel)
+        parse.assert_called_once_with(self.envelope, store_settings='store.toml')
+
+    def test_in_memory_manifest_preserves_validation_and_store_overlay_contract(self):
+        for updates in ({'schema_version': 2}, {'mode': 'standalone'},
+                        {'runtime_home': 'relative'}, {'config': []}):
+            document = {**self.envelope, **updates}
+            with self.subTest(updates=updates):
+                with self.assertRaises(ValueError) as memory_error:
+                    parse_manifest(document)
+                with self.assertRaises(ValueError) as file_error:
+                    self.load(document)
+                self.assertEqual(str(memory_error.exception), str(file_error.exception))
+        with self.assertRaises(ValueError):
+            parse_manifest([])
+        overlay = self.home / 'store.toml'
+        overlay.write_text('[storage]\ndata_dir="selected-store"\n')
+        before = copy.deepcopy(self.envelope)
+        actual = parse_manifest(self.envelope, store_settings='store.toml')
+        self.assertEqual(actual.data_dir, self.home / 'selected-store')
+        self.manifest.write_text(json.dumps(self.envelope))
+        self.assertEqual(actual, load_manifest(self.manifest, store_settings='store.toml'))
+        self.assertEqual(self.envelope, before)
+        overlay.write_text('[llm]\nprofile="forbidden"\n')
+        with self.assertRaisesRegex(ValueError, 'override only'):
+            parse_manifest(self.envelope, store_settings='store.toml')
 
     def test_empty_home_no_writes_or_ambient_overrides(self):
         with patch.dict(os.environ, {'HOME': str(self.root / 'empty-user-home'),
