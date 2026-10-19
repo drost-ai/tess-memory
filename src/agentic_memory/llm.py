@@ -1,7 +1,7 @@
 """LLM backend for distillation: the agent-core-python runtime, in-process.
 
-agent-core-python is the only supported path. The runtime is imported from its
-checkout (it is dependency-free) and each completion runs one non-interactive
+agent-core-python is a declared dependency. The installed runtime is imported
+without mutating sys.path; each completion runs one non-interactive
 turn through the engine's runtime and session manager — start_runtime
 (daemon-less) → sessions.open → run_turn → stop — with a real system prompt,
 tools disabled, and no session persistence.
@@ -20,7 +20,6 @@ import copy
 import hashlib
 import json
 import shutil
-import sys
 import tempfile
 
 from .config import Config
@@ -53,11 +52,6 @@ class AgentCoreBackend:
         self._model = model or (cfg.agent_core_model if profile is None else "")
         self._reasoning_effort = reasoning_effort or (cfg.agent_core_reasoning_effort if profile is None else "")
         self._codex_auth_path = cfg.agent_core_codex_auth_path
-        root = cfg.agent_core_path
-        if not (root / "agent_core").is_dir():
-            raise RuntimeError(f"agent-core-python not found at {root}")
-        if str(root) not in sys.path:
-            sys.path.insert(0, str(root))
         try:
             # The engine's runtime and session manager (agent-core-python
             # v1-refactor, 2026-09): one daemon-less runtime per call, one
