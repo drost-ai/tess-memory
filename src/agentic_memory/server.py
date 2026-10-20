@@ -68,7 +68,7 @@ Planning plane contract:
 - Harness todo lists are ephemeral; this board is durable. Mirror anything
   that must survive the session into it.
 - A project is the durable logical memory/planning scope. By default it is the
-  session cwd slug (`/Users/x/proj -> -Users-x-proj`), but an instance may bind
+  session cwd slug (`/workspace/example/proj -> -workspace-example-proj`), but an instance may bind
   sessions from many workspaces to one fixed project (for example `assistant`);
   cwd then remains provenance only. Treat list_projects as the authority and
   reuse its exact project key. Absolute cwd paths are accepted for legacy
