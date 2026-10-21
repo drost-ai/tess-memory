@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import asyncio
+import importlib
 import json
 import sys
 import tempfile
@@ -13,6 +15,8 @@ from agentic_memory.config import Config, load_config
 from agentic_memory.llm import AgentCoreBackend
 from agent_core.config import ProviderRegistry
 from agent_core import SessionOptions as EngineSessionOptions
+from agent_core.config.parsing import _parse_setting_sources, _load_merged_settings
+engine_settings = importlib.import_module("agent_core.storage.settings")
 
 
 class ModelSelectionTests(unittest.TestCase):
@@ -140,6 +144,18 @@ class ModelSelectionTests(unittest.TestCase):
             self.assertEqual(options["tools"], [])
             self.assertFalse(options["sessionPersistence"])
         self.assertEqual(self.settings.read_bytes(), self.original_settings)
+
+    def test_real_source_selection_does_not_read_ambient_settings(self):
+        backend = AgentCoreBackend(self.cfg, probe=False)
+        self.assertEqual(backend.complete(system="Synthetic", prompt="Test only"), "OK")
+        options = self.options[-1]  # actual public SessionOptions.config_overrides
+        sources = _parse_setting_sources(options["settingSources"])
+        self.assertEqual(sources, [])
+        with mock.patch.object(engine_settings, "load_settings", new_callable=mock.AsyncMock,
+                               side_effect=AssertionError("ambient source read")) as ambient:
+            merged = asyncio.run(_load_merged_settings(sources, str(self.root), options["settings"]))
+            self.assertEqual(merged, {"providerProfiles": {}})
+            ambient.assert_not_awaited()
 
     def test_cleanup_failure_preserves_paid_response_without_masking_provider_failure(self):
         from agentic_memory.model_usage import UsageObserver, observe_usage
