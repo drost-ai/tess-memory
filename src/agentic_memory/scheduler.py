@@ -38,7 +38,7 @@ def _scheduled_config(settings: Path):
 
 
 def _gate(config, *, readonly=False):
-    return ProviderGate(config.db_path, model_limit=config.model_limit, embedding_limit=config.embedding_limit,
+    return ProviderGate(config.provider_gate_db or config.db_path, model_limit=config.model_limit, embedding_limit=config.embedding_limit,
                         provider_limits=config.provider_limits, readonly=readonly)
 
 
