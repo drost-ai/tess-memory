@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import copy
-import dataclasses
 import json
 import sys
 import tempfile
@@ -13,6 +12,7 @@ from unittest import mock
 from agentic_memory.config import Config, load_config
 from agentic_memory.llm import AgentCoreBackend
 from agent_core.config import ProviderRegistry
+from agent_core import SessionOptions as EngineSessionOptions
 
 
 class ModelSelectionTests(unittest.TestCase):
@@ -53,31 +53,8 @@ class ModelSelectionTests(unittest.TestCase):
 
         # The engine's runtime surface, faked: start_runtime -> sessions.open -> run_turn,
         # resolving the config from the session options exactly as the manager does.
-        @dataclasses.dataclass(frozen=True)
-        class SessionOptions:
-            cwd: str | None = None
-            provider: str | None = None
-            model: str | None = None
-            effort: str | None = None
-            permission_mode: str | None = None
-            settings: str | None = None
-            provider_registry: object = None
-            provider_auth_path: str | None = None
-            setting_sources: tuple = ()
-            strict_mcp_config: bool = False
-            system_prompt: str | None = None
-            adjust_config: object = None
-            stream_provider_messages: bool = False
-            extra: dict = dataclasses.field(default_factory=dict)
-
-            def config_overrides(self, home):
-                overrides = {"runtimeHome": home}
-                for key, value in (("provider", self.provider), ("model", self.model), ("effort", self.effort),
-                                   ("permissionMode", self.permission_mode), ("settings", self.settings), ("systemPrompt", self.system_prompt)):
-                    if value is not None:
-                        overrides[key] = value
-                overrides.update(self.extra)
-                return overrides
+        # Use the real public constructor: a permissive fake hid API drift.
+        SessionOptions = EngineSessionOptions
 
         test = self
 
@@ -117,7 +94,7 @@ class ModelSelectionTests(unittest.TestCase):
             test.assertIsInstance(_kw["provider_registry"], ProviderRegistry)
             options = session_options("test-session", "client")
             test.assertEqual(options.settings, "{}")
-            test.assertEqual(options.setting_sources, ())
+            test.assertEqual(options.config_overrides("home")["settingSources"], "")
             test.assertTrue(options.strict_mcp_config)
             return FakeRuntime(cwd, session_options, listener)
 
@@ -157,6 +134,9 @@ class ModelSelectionTests(unittest.TestCase):
             ("codex", "gpt-5.6-sol", "xhigh"),
         ])
         for options in self.options:
+            self.assertEqual(options["settingSources"], "")
+            self.assertEqual(options["settings"], "{}")
+            self.assertTrue(options["strictMcpConfig"])
             self.assertEqual(options["tools"], [])
             self.assertFalse(options["sessionPersistence"])
         self.assertEqual(self.settings.read_bytes(), self.original_settings)

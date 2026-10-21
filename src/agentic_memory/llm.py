@@ -154,13 +154,12 @@ class AgentCoreBackend:
             effort=self._reasoning_effort or None,
             provider_registry=self._registry,
             settings="{}",
-            setting_sources=(),
             strict_mcp_config=True,
             provider_auth_path=str(self._codex_auth_path) if self._codex_auth_path else None,
             system_prompt=system,
             adjust_config=adjust,
             stream_provider_messages=bool(observer and self._profile_kind == "openai"),
-            extra={"tools": [], "sessionPersistence": False, "inputFormat": "text", "outputFormat": "json"},
+            extra={"settingSources": "", "tools": [], "sessionPersistence": False, "inputFormat": "text", "outputFormat": "json"},
         )
         runtime = await self._start_runtime(
             self._runtime_home, cwd=cwd, daemon_enabled=False, provider_registry=self._registry,
