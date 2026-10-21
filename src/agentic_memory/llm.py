@@ -162,7 +162,7 @@ class AgentCoreBackend:
             extra={"settingSources": "", "tools": [], "sessionPersistence": False, "inputFormat": "text", "outputFormat": "json"},
         )
         runtime = await self._start_runtime(
-            self._runtime_home, cwd=cwd, daemon_enabled=False, provider_registry=self._registry,
+            str(self._runtime_home), cwd=cwd, daemon_enabled=False, provider_registry=self._registry,
             session_options=lambda _sid, _reason: options, listener=_Host()
         )
         result = None
