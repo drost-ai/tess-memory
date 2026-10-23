@@ -25,6 +25,7 @@ def fetcher(*, weights=WEIGHTS, fail=None, calls=None, steps=2):
         with tqdm_class(total=steps) as bar:
             for _ in range(steps):
                 bar.update(1)
+        assert bar.n >= 0  # huggingface_hub compares the bar's count when it finishes
         if fail:
             raise fail
         from pathlib import Path

@@ -102,26 +102,18 @@ def download(home: str | os.PathLike[str], name: str, *, progress: Callable[[int
     report = progress or (lambda done, total: None)
     total = entry["bytes"]
 
-    class Progress:  # tqdm-shaped: huggingface_hub reports bytes through it
+    from tqdm.auto import tqdm
+
+    class Progress(tqdm):  # huggingface_hub reports transfers through a tqdm class
         def __init__(self, *args, **kwargs):
-            self.total = kwargs.get("total")
+            kwargs["disable"] = True  # silent: progress goes to the owner, not a console
+            super().__init__(*args, **kwargs)
 
         def update(self, amount=1):
             if cancel.is_set():
                 raise Cancelled()
             report(min(_size(staging), total), total)
-
-        def __enter__(self):
-            return self
-
-        def __exit__(self, *_):
-            return False
-
-        def close(self):
-            pass
-
-        def __getattr__(self, _name):
-            return lambda *args, **kwargs: None
+            return super().update(amount)
 
     if fetch is None:
         from huggingface_hub import snapshot_download as fetch
