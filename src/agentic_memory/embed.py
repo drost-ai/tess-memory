@@ -41,11 +41,16 @@ class Embedder:
 
 
 class LocalEmbedder(Embedder):
-    def __init__(self, model_name: str, batch_size: int = 64, *, allow_download: bool = False):
+    def __init__(self, model_name: str, batch_size: int = 64, *, allow_download: bool = False,
+                 query_prefix: str | None = None, passage_prefix: str | None = None):
         self.allow_download = allow_download
         self.model_name = model_name
         self.batch_size = batch_size
-        self.descriptor = f"local:{model_name}"
+        self.query_prefix, self.passage_prefix = query_prefix, passage_prefix
+        # Explicit prefixes change the vectors, so they are part of the vector
+        # space's name; without them the descriptor is the historical one.
+        explicit = query_prefix is not None or passage_prefix is not None
+        self.descriptor = f"local:{model_name}" + (f"|q={query_prefix or ''}|p={passage_prefix or ''}" if explicit else "")
         self._model = None
 
     def _load(self):
@@ -65,6 +70,8 @@ class LocalEmbedder(Embedder):
         if not texts:
             return np.empty((0, 1), dtype=np.float32)
         model = self._load()
+        if self.passage_prefix:
+            texts = [self.passage_prefix + text for text in texts]
         vecs = model.encode(
             texts,
             batch_size=self.batch_size,
@@ -75,7 +82,9 @@ class LocalEmbedder(Embedder):
 
     def embed_query(self, query: str) -> np.ndarray:
         model = self._load()
-        prefix = _BGE_QUERY_PREFIX if "bge" in self.model_name.lower() else ""
+        prefix = self.query_prefix
+        if prefix is None:
+            prefix = _BGE_QUERY_PREFIX if "bge" in self.model_name.lower() else ""
         vec = model.encode([prefix + query], normalize_embeddings=True)
         return np.asarray(vec[0], dtype=np.float32)
 
@@ -156,6 +165,7 @@ def make_embedder(cfg: Config) -> Embedder:
     """Construct only the explicitly selected backend; never silently change vector space."""
     if cfg.embed_provider == "local":
         return LocalEmbedder(cfg.embed_model, cfg.embed_batch_size,
-                             allow_download=cfg.embedding_allow_download)
+                             allow_download=cfg.embedding_allow_download,
+                             query_prefix=cfg.embed_query_prefix, passage_prefix=cfg.embed_passage_prefix)
     return OpenAICompatEmbedder(cfg.provider_registry or cfg.agent_core_settings,
                                 cfg.embed_provider, cfg.embed_dims, cfg.embed_batch_size)

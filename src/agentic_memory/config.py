@@ -166,6 +166,10 @@ class Config:
     embed_provider: str = "embeddings"  # profile name, or "local"
     embed_dims: int = 4096
     embed_model: str = "BAAI/bge-small-en-v1.5"  # local fallback model
+    # Explicit model prefixes (e5: "query: "/"passage: "). None keeps the
+    # historical behaviour: the BGE query instruction for BGE names, else none.
+    embed_query_prefix: str | None = None
+    embed_passage_prefix: str | None = None
     embed_batch_size: int = 64
 
     # -- ingest --------------------------------------------------------------
@@ -400,6 +404,11 @@ def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
     cfg.embed_dims = int(emb.get("dims", cfg.embed_dims))
     cfg.embed_model = emb.get("local_model", cfg.embed_model)
     cfg.embed_batch_size = int(emb.get("batch_size", cfg.embed_batch_size))
+    for key in ("query_prefix", "passage_prefix"):
+        if key in emb:
+            if not isinstance(emb[key], str) or len(emb[key]) > 200:
+                raise ValueError(f"[embedding] {key} must be a string of at most 200 characters")
+            setattr(cfg, f"embed_{key}", emb[key])
 
     for key in (
         "max_transcript_chars", "segment_chars", "segment_overlap", "max_segments",
