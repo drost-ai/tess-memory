@@ -1,0 +1,88 @@
+{
+  "model": "Qwen3-Embedding-0.6B",
+  "repo": "Qwen/Qwen3-Embedding-0.6B",
+  "revision": "97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3",
+  "license": "apache-2.0",
+  "download_mb": 1207.5,
+  "device": "cpu",
+  "dims": 1024,
+  "max_seq_length": 32768,
+  "query_prefix": "Instruct: Given a question, retrieve the passages that answer it\nQuery:",
+  "passage_prefix": "",
+  "tokenizer_kwargs": {
+    "padding_side": "left"
+  },
+  "import_s": 2.06,
+  "load_s": 0.35,
+  "corpus_encode_s": 171.1,
+  "corpus_docs_per_s": 3.5,
+  "cpu_utilization": 22.5,
+  "docs_per_s_by_batch": {
+    "8": 4.2,
+    "32": 1.0,
+    "128": 0.2
+  },
+  "query_ms_p50": 203.7,
+  "query_ms_p95": 256.8,
+  "peak_rss_mb": 3990.4,
+  "overall": {
+    "recall@5": 0.81,
+    "recall@10": 0.861,
+    "mrr": 0.707,
+    "queries": 79
+  },
+  "by_category": {
+    "error": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "queries": 6
+    },
+    "long_context": {
+      "recall@5": 0.5,
+      "recall@10": 0.667,
+      "mrr": 0.21,
+      "queries": 6
+    },
+    "multilingual": {
+      "recall@5": 0.5,
+      "recall@10": 0.5,
+      "mrr": 0.52,
+      "queries": 6
+    },
+    "path": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "queries": 5
+    },
+    "personal": {
+      "recall@5": 0.972,
+      "recall@10": 1.0,
+      "mrr": 0.84,
+      "queries": 36
+    },
+    "relationship": {
+      "recall@5": 0.417,
+      "recall@10": 0.5,
+      "mrr": 0.3,
+      "queries": 12
+    },
+    "technical": {
+      "recall@5": 0.875,
+      "recall@10": 1.0,
+      "mrr": 0.83,
+      "queries": 8
+    }
+  },
+  "environment": {
+    "python": "3.10.12",
+    "platform": "Linux-6.8.0-138-generic-x86_64-with-glibc2.35",
+    "machine": "x86_64",
+    "processor": "13th Gen Intel(R) Core(TM) i9-13900KF",
+    "torch": "2.9.1+cpu",
+    "sentence_transformers": "6.2.0",
+    "transformers": "5.20.2",
+    "torch_threads": 24
+  }
+}

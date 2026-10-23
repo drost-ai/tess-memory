@@ -1,0 +1,85 @@
+{
+  "model": "bge-small-en-v1.5",
+  "repo": "BAAI/bge-small-en-v1.5",
+  "revision": "5c38ec7c405ec4b44b94cc5a9bb96e735b38267a",
+  "license": "mit",
+  "download_mb": 134.4,
+  "device": "cpu",
+  "dims": 384,
+  "max_seq_length": 512,
+  "query_prefix": "Represent this sentence for searching relevant passages: ",
+  "passage_prefix": "",
+  "import_s": 2.21,
+  "load_s": 0.1,
+  "corpus_encode_s": 1.0,
+  "corpus_docs_per_s": 598.1,
+  "cpu_utilization": 5.0,
+  "docs_per_s_by_batch": {
+    "8": 393.2,
+    "32": 201.9,
+    "128": 64.5
+  },
+  "query_ms_p50": 6.7,
+  "query_ms_p95": 7.4,
+  "peak_rss_mb": 2367.7,
+  "overall": {
+    "recall@5": 0.911,
+    "recall@10": 0.937,
+    "mrr": 0.793,
+    "queries": 79
+  },
+  "by_category": {
+    "error": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "queries": 6
+    },
+    "long_context": {
+      "recall@5": 0.333,
+      "recall@10": 0.5,
+      "mrr": 0.127,
+      "queries": 6
+    },
+    "multilingual": {
+      "recall@5": 0.5,
+      "recall@10": 0.667,
+      "mrr": 0.441,
+      "queries": 6
+    },
+    "path": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "queries": 5
+    },
+    "personal": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 0.863,
+      "queries": 36
+    },
+    "relationship": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 0.861,
+      "queries": 12
+    },
+    "technical": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 0.854,
+      "queries": 8
+    }
+  },
+  "environment": {
+    "python": "3.12.11",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "Apple M4 Max",
+    "torch": "2.14.1",
+    "sentence_transformers": "6.1.0",
+    "transformers": "5.20.1",
+    "torch_threads": 12
+  }
+}
