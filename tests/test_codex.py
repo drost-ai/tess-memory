@@ -89,6 +89,48 @@ class CodexParserTests(unittest.TestCase):
                 self.assertEqual(st.source_type, "codex")
                 self.assertTrue(st.content_fingerprint)
 
+    def test_tool_schema_declarations_do_not_hide_conversation_or_tool_evidence(self):
+        declaration = {'type': 'additional_tools', 'role': 'developer', 'tools': [
+            {'name': 'inspect', 'parameters': {'type': 'object', 'properties': {'type': {'type': 'string'}}}}]}
+        for legacy in (False, True):
+            with self.subTest(legacy=legacy):
+                path = write_rollout(self.home, legacy=legacy, items=[message('user', 'Inspect the project'), declaration,
+                    {'type': 'function_call_output', 'call_id': 'one', 'output': 'The check passed'},
+                    message('assistant', 'The project is ready')])
+                st, report = self.parse(path)
+                self.assertEqual([t.text for t in st.turns], ['Inspect the project', 'The check passed', 'The project is ready'])
+                self.assertEqual(report.unknown, {})
+
+    def test_function_output_ui_mirror_is_retained_once(self):
+        path = write_rollout(self.home, items=[message('user', 'Inspect the result'),
+            {'type': 'function_call_output', 'call_id': 'one', 'output': 'Useful diagnostic'}, message('assistant', 'Done')])
+        append(path, wrapped('event_msg', {'type': 'item_completed', 'item': {
+            'type': 'FunctionCallOutput', 'id': 'one', 'name': 'inspect', 'output': 'Useful diagnostic'}}))
+        append(path, wrapped('event_msg', {'type': 'item_completed', 'item': {
+            'type': 'FunctionCallOutput', 'id': 'two', 'name': 'inspect', 'output': 'Additional diagnostic'}}))
+        st, report = self.parse(path)
+        text = '\n'.join(t.text for t in st.turns)
+        self.assertEqual(text.count('Useful diagnostic'), 1)
+        self.assertIn('Additional diagnostic', text)
+        self.assertEqual(report.mirrored_items, 1)
+
+    def test_realtime_transcripts_preserve_roles_and_deduplicate_response_mirrors(self):
+        path = write_rollout(self.home, items=[])
+        for payload in [
+            {'type':'realtime_session_started','id':'start'},
+            {'type':'transcript_segment','id':'voice-user','role':'user','text':'Please remember this spoken request'},
+            {'type':'transcript_segment','id':'voice-answer','role':'assistant','text':'I understood the spoken request'},
+            {'type':'realtime_session_closed','id':'closed','outcome':'completed'},
+        ]:
+            append(path, wrapped('realtime_item', payload))
+        st, report = self.parse(path)
+        self.assertEqual([t.role for t in st.turns], ['user','assistant'])
+        self.assertIn('spoken request', st.turns[0].text)
+        append(path, wrapped('response_item', message('assistant','I understood the spoken request')))
+        st, report = self.parse(path)
+        self.assertEqual(sum(t.text=='I understood the spoken request' for t in st.turns), 1)
+        self.assertEqual(report.unknown, {})
+
     def test_early_jsonl_state_framing_is_not_content(self):
         p = write_rollout(self.home, legacy=True,
             items=[{"record_type": "state"}, message("user", "Old request"),

@@ -67,6 +67,18 @@ class IncrementalReaderTests(unittest.TestCase):
         self.assertTrue(result.pending_tail)
         self.assertEqual(len(result.unit_keys()), 1)
 
+    def test_realtime_session_close_publishes_spoken_transcript(self):
+        self.reader()
+        path = write_rollout(self.home, items=[])
+        append(path, wrapped('realtime_item', {'type':'realtime_session_started','id':'start'}))
+        append(path, wrapped('realtime_item', {'type':'transcript_segment','role':'user','id':'user','text':'A spoken request'}))
+        append(path, wrapped('realtime_item', {'type':'transcript_segment','role':'assistant','id':'answer','text':'A spoken answer'}))
+        append(path, wrapped('realtime_item', {'type':'realtime_session_closed','id':'closed','outcome':'completed'}))
+        result = CompletedSourceReader(self.cfg).read(self.ds, path, 'p')
+        self.assertEqual(result.unit_kinds, ['realtime_closed'])
+        self.assertEqual([t.text for t in result.transcript.turns], ['A spoken request','A spoken answer'])
+        self.assertFalse(result.pending_tail)
+
     def test_claude_completed_reason_excludes_pending_tool_exchange(self):
         reader = self.reader("claude-code")
         path = self.home / "session.jsonl"

@@ -35,6 +35,7 @@ _TEXT_TYPES = {"text", "input_text", "output_text"}
 _IGNORED_ITEMS = {
     "reasoning", "compaction", "ghost_snapshot", "tool_search_call",
     "tool_search_output", "image_generation_call", "compaction_summary",
+    "additional_tools",  # availability/schema declarations, not executed work
 }
 _IGNORED_EVENTS = {
     "token_count", "agent_reasoning", "task_started", "task_complete",
@@ -524,6 +525,9 @@ class _Normalizer:
             self.item({"type": "function_call_output", "call_id": identity,
                        "output": p.get("result", p.get("error", ""))},
                       record, position, offset, "ui_output")
+        elif folded == "functioncalloutput":
+            self.item({"type": "function_call_output", "call_id": p.get('call_id') or identity,
+                       "output": p.get('output', '')}, record, position, offset, 'ui_output')
         elif folded in ("filechange", "collabagenttoolcall", "extension", "websearch", "plan"):
             # These UI items can contain evidence absent from response_item.
             clean = {k: v for k, v in p.items() if k not in ("id", "type", "duration")}
@@ -561,6 +565,12 @@ class _Normalizer:
             if p.get("phase") in (None, "final"):
                 self.active_turn = False
                 boundary = "assistant_message"
+        elif record.get('type') == 'realtime_item':
+            if kind == 'transcript_segment' and p.get('role') == 'user':
+                self.active_turn = True
+            elif kind == 'realtime_session_closed':
+                self.active_turn = False
+                boundary = 'realtime_closed'
         if (boundary is None and not self.active_turn and self.boundaries
                 and len(self.events) + len(self.mirrors) + len(self.snapshots) > before):
             boundary = "persisted_metadata"
@@ -584,6 +594,19 @@ class _Normalizer:
             return
         if kind == "turn_context":
             self.turn_id = record.get("payload", {}).get("turn_id", self.turn_id)
+            return
+        if kind == 'realtime_item':
+            p = record.get('payload')
+            if not isinstance(p, dict):
+                raise CodexParseError(f'{self.source.path}:{position}: expected a realtime item object')
+            event_type = p.get('type')
+            if event_type == 'transcript_segment' and p.get('role') in ('user', 'assistant'):
+                self.item({'type': 'message', 'id': p.get('id'), 'role': p['role'],
+                           'content': p.get('text', '')}, record, position, offset, 'realtime_transcript')
+            elif event_type in ('realtime_session_started', 'realtime_session_closed'):
+                self.report.ignored_records += 1
+            else:
+                self.report.unknown[f'realtime:{event_type}'] += 1
             return
         if kind in _IGNORED_RECORDS:
             self.report.ignored_records += 1
@@ -653,7 +676,7 @@ class _Normalizer:
             return
         if kind == "response_item":
             self.item(record.get("payload") or {}, record, position, offset)
-        elif kind in {"message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "reasoning"}:
+        elif kind in {"message", "function_call", "function_call_output", "custom_tool_call", "custom_tool_call_output", "reasoning", "additional_tools"}:
             self.item(record, record, position, offset)
         else:
             self.report.unknown[f"record:{kind}"] += 1
