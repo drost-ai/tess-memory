@@ -334,6 +334,21 @@ class MemoryStore:
     def source_progress(self, path: str):
         return self.db.execute("SELECT * FROM ingest_sources WHERE path=?", (path,)).fetchone()
 
+    def supersede_source_paths(self, session_id: str, path: str) -> None:
+        """Retain old progress as provenance after a verified relocation.
+
+        Called in the publication transaction; no source, memory, embedding or
+        checkpoint is deleted. The original path's indexes remain available.
+        """
+        plain = path[:-4] if path.endswith('.jsonl.zst') else path
+        rows = self.db.execute("SELECT path,state FROM ingest_sources WHERE path!=? AND status!='held' AND (session_id=? OR path=?)",
+                               (path, session_id, plain)).fetchall()
+        for row in rows:
+            state = json.loads(row['state'])
+            state['superseded_by'] = path
+            self.db.execute("UPDATE ingest_sources SET status='superseded',state=?,last_error=NULL,attempts=0,retry_at=0 WHERE path=?",
+                            (json.dumps(state), row['path']))
+
     def record_source(self, *, path: str, session_id: str | None, project: str, source_type: str,
                       signature: str | None, status: str, state: dict, now: float,
                       indexed: bool = False, error: str | None = None) -> None:

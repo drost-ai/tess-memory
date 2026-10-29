@@ -174,7 +174,7 @@ def store_status(store, cfg=None):
     if tracked:
         columns = {r['name'] for r in store.db.execute('PRAGMA table_info(ingest_sources)')}
         retry = 'retry_at' if 'retry_at' in columns else '0 AS retry_at'
-        for row in store.db.execute("SELECT path,session_id,project,status,state,observed_at,indexed_at,last_error," + retry + " FROM ingest_sources WHERE status NOT IN ('indexed','trivial','shadowed') ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'held' THEN 1 ELSE 2 END, observed_at DESC LIMIT 20"):
+        for row in store.db.execute("SELECT path,session_id,project,status,state,observed_at,indexed_at,last_error," + retry + " FROM ingest_sources WHERE status NOT IN ('indexed','trivial','shadowed','superseded') ORDER BY CASE status WHEN 'error' THEN 0 WHEN 'held' THEN 1 ELSE 2 END, observed_at DESC LIMIT 20"):
             problem = dict(row)
             try:
                 state = json.loads(problem.pop('state') or '{}')

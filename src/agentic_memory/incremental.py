@@ -137,6 +137,24 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             except OSError:
                 stats.deferred_active += 1
     fair_scan = limit is not None and session_ids is None and not retry_extractive
+    if session_ids is None:
+        # Absent files never enter discovery. Keep their paid memory and
+        # progress, but report unavailable evidence rather than a parser error.
+        selected_ids = ({'codex:' + s.session_id for s in reader.catalog.sources.values()}
+                        if reader.catalog else set())
+        with store.write_transaction():
+            for row in store.db.execute("SELECT * FROM ingest_sources WHERE status NOT IN ('superseded','shadowed','held','source_unavailable')").fetchall():
+                path = Path(row['path'])
+                if path.is_file() or cfg.data_store_for(path) is None:
+                    continue
+                if (row['session_id'] in selected_ids or
+                        (path.suffix == '.jsonl' and path.with_name(path.name + '.zst').is_file())):
+                    continue
+                state = json.loads(row['state'])
+                state['unavailable_reason'] = 'source file is absent; previous memory and progress retained'
+                store.record_source(path=row['path'], session_id=row['session_id'], project=row['project'],
+                    source_type=row['source_type'], signature=row['observed_signature'], status='source_unavailable',
+                    state=state, now=time.time(), error=state['unavailable_reason'])
     recovery = cfg.recovery_ingestion
     scan_cursor = 'recovery:scan_cursor' if recovery else SCAN_CURSOR
     scan = source_scan_order(found, limit=limit if fair_scan else None,
@@ -197,6 +215,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
             store.record_source(path=str(path), session_id=st.session_id, project=project, source_type=ds.type,
                                 signature=signature, status='pending_tail' if pending else 'indexed',
                                 state=state, now=time.time(), indexed=True)
+            store.supersede_source_paths(st.session_id, str(path))
 
     pool = DistillationPool(llm, fallback_llm, workers=cfg.llm_workers,
                             cache_path=cfg.data_dir / 'distillation-cache.db', log=_log,
@@ -330,9 +349,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 state['recovery_notes'].append('Previously indexed activity is absent from this partial source; the last good memory is retained.')
                             record(ds, path, project, signature, 'pending_tail', state, st.session_id)
                             continue
-                        if st.content_chars < cfg.min_session_chars and not recovery:
-                            if old is not None:
-                                raise SourceChanged('previously indexed source became trivial')
+                        if st.content_chars < cfg.min_session_chars and not recovery and old is None:
                             record(ds, path, project, signature, 'trivial', state, st.session_id)
                             stats.skipped_trivial += 1
                             continue
@@ -376,6 +393,16 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                 state.update(recovered_state(snapshot, signature))
                             adopt(ds, path, project, signature, state, st, old, snapshot.pending_tail, known_status)
                             stats.unchanged += 1
+                            continue
+                        if old is not None and st.content_chars < cfg.min_session_chars:
+                            # Try verified-prefix adoption above even for short
+                            # historical sessions. An unverifiable tiny rewrite
+                            # must not replace a previously paid snapshot.
+                            state.update(recovered_state(snapshot, signature))
+                            state['recovery_only'] = True
+                            state['recovery_notes'] = ['Current source is below the indexing threshold; previous memory retained until sufficient source evidence is available.']
+                            record(ds, path, project, signature, 'retained_snapshot', state, st.session_id)
+                            stats.preserved += 1
                             continue
                         if recovery:
                             state['recovery_only'] = True
@@ -439,6 +466,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                                                  owner_user=owner)
                             store.ensure_project(st.project, owner=owner, team=ds.team)
                             store.replace_session_rows(st.session_id, rows)
+                            store.supersede_source_paths(st.session_id, str(path))
                             info = path.stat()
                             store.mark_file(str(path), 0 if pending else info.st_mtime,
                                             0 if pending else info.st_size, st.session_id, status)

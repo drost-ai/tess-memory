@@ -117,6 +117,10 @@ class CompressedSourceTests(unittest.TestCase):
         self.assertEqual((len(backend.calls),len(embedder.calls)), calls)
         self.assertEqual(rows, [tuple(r) for r in store.db.execute('SELECT m.*,e.vector FROM memories m JOIN embeddings e ON e.memory_id=m.id ORDER BY m.id')])
         self.assertEqual(store.get_session('codex:one')['source_path'], str(archive))
+        old = store.source_progress(str(path))
+        self.assertEqual(old['status'], 'superseded')
+        self.assertEqual(json.loads(old['state'])['superseded_by'], str(archive))
+        self.assertIsNotNone(old['indexed_at'])
 
     def test_transcript_pages_resolve_archived_sources_and_reconstruct_utf8(self):
         path = write_rollout(self.home, items=[message('user','Words and café '*100),message('assistant','Answer '*100)])

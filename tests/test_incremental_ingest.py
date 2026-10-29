@@ -82,6 +82,45 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual((result.unchanged, result.model_calls, result.embedded_passages), (1, 0, 0))
         self.assertEqual(before, (len(self.backend.calls), len(self.embedder.calls)))
 
+    def test_missing_source_is_reported_without_losing_paid_memory_and_can_return(self):
+        self.run_ingest()
+        raw, paid = self.path.read_bytes(), self.paid_rows()
+        calls = len(self.backend.calls), len(self.embedder.calls)
+        self.path.unlink()
+        result = self.run_ingest()
+        self.assertEqual(result.errors, 0)
+        self.assertEqual(self.store.source_progress(str(self.path))['status'], 'source_unavailable')
+        self.assertEqual(self.paid_rows(), paid)
+        self.path.write_bytes(raw)
+        result = self.run_ingest()
+        self.assertEqual((result.model_calls, result.embedded_passages), (0,0))
+        self.assertEqual((len(self.backend.calls), len(self.embedder.calls)), calls)
+        self.assertEqual(self.store.source_progress(str(self.path))['status'], 'indexed')
+
+    def test_short_historical_session_adopts_verified_paid_content(self):
+        self.cfg.min_session_chars = 0
+        write_rollout(self.home, items=[message('user','Short question'),message('assistant','Short answer')])
+        self.run_ingest()
+        before = self.paid_rows()
+        policy = json.loads(self.store.source_progress(str(self.path))['state'])['policy']
+        self.cfg.min_session_chars = 200
+        self.cfg.adopt_published_policies = (policy,)
+        result = self.run_ingest()
+        self.assertEqual((result.errors,result.model_calls), (0,0))
+        self.assertEqual(before, self.paid_rows())
+        self.assertEqual(self.store.source_progress(str(self.path))['status'], 'indexed')
+
+    def test_short_rewrite_retains_snapshot_even_during_recovery(self):
+        self.run_ingest()
+        before = self.paid_rows()
+        write_rollout(self.home, items=[message('user','Hi'),message('assistant','Hello')])
+        for recovery in (False, True):
+            self.cfg.recovery_ingestion = recovery
+            result = self.run_ingest()
+            self.assertEqual((result.errors,result.model_calls), (0,0))
+            self.assertEqual(before, self.paid_rows())
+            self.assertEqual(self.store.source_progress(str(self.path))['status'], 'retained_snapshot')
+
     def test_identical_sessions_share_model_work_but_keep_separate_provenance(self):
         other = write_rollout(self.home, 'two')
         result = self.run_ingest()
