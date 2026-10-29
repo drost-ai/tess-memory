@@ -243,7 +243,10 @@ def _strip_images(value, report: ParseReport):
     if isinstance(value, list):
         return [_strip_images(v, report) for v in value]
     if isinstance(value, dict):
-        if (value.get("type") in _IMAGE_TYPES or any(
+        # Tool schemas also have "type" keys whose values are objects or
+        # arrays. Only a string discriminator can identify an image block.
+        kind = value.get("type")
+        if ((isinstance(kind, str) and kind in _IMAGE_TYPES) or any(
                 str(value.get(key, "")).startswith("image/")
                 for key in ("mimeType", "mime_type", "media_type"))):
             report.images_removed += 1
@@ -265,7 +268,8 @@ def _text_clean(value, report: ParseReport) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        if value.get("type") in _TEXT_TYPES:
+        kind = value.get("type")
+        if isinstance(kind, str) and kind in _TEXT_TYPES:
             return str(value.get("text") or "")
         if "content" in value:
             parts = [_text(value["content"], report)]

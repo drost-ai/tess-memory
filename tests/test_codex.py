@@ -165,6 +165,23 @@ class CodexParserTests(unittest.TestCase):
         self.assertEqual(p.read_bytes(), source)
         self.assertTrue(source.startswith(before))
 
+    def test_structured_type_fields_survive_tool_results_and_nested_images_are_removed(self):
+        payload = {"type": {"type": "string"}, "optional": {"type": ["string", "null"]},
+                   "diagnosis": "Keep structured evidence", "thumbnail": {"type": "image", "data": "SECRET_PIXELS"}}
+        for serialized in (False, True):
+            with self.subTest(serialized=serialized):
+                path = write_rollout(self.home, items=[message("user", "Inspect the schema"),
+                    {"type": "function_call_output", "call_id": "schema", "output": json.dumps(payload) if serialized else payload},
+                    message("assistant", "Schema reviewed")])
+                st, report = self.parse(path)
+                text = '\n'.join(t.text for t in st.turns)
+                self.assertIn("Keep structured evidence", text)
+                self.assertIn('"type":', text)
+                self.assertIn('"optional":', text)
+                self.assertIn('"null"', text)
+                self.assertNotIn("SECRET_PIXELS", text)
+                self.assertGreaterEqual(report.images_removed, 1)
+
     def test_serialized_mime_only_image_payload_is_removed(self):
         output = json.dumps({"result": {"mimeType": "image/png", "data": "ENCODED_IMAGE_PAYLOAD"}, "text": "keep the diagnosis"})
         p = write_rollout(self.home, items=[message("user", "Read the diagnosis"),

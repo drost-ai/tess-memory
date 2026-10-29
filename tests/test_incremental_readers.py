@@ -82,6 +82,29 @@ class IncrementalReaderTests(unittest.TestCase):
         self.assertTrue(result.pending_tail)
         self.assertNotIn("Next task", '\n'.join(t.text for t in result.transcript.turns))
 
+    def test_claude_schema_attachment_does_not_break_cached_prefix_or_later_turns(self):
+        reader = self.reader("claude-code")
+        path = self.home / "session.jsonl"
+        append(path, {"type": "user", "message": {"content": "Original request"}})
+        append(path, {"type": "assistant", "message": {"content": "Original answer", "stop_reason": "end_turn"}})
+        first = reader.read(self.ds, path, "p")
+        append(path, {"type": "attachment", "attachment": {"tools": [{"schema": {
+            "input_schema": {"properties": {
+                "type": {"type": "string"}, "optional": {"type": ["string", "null"]},
+            }},
+        }}]}})
+        append(path, {"type": "user", "message": {"content": "Next request"}})
+        append(path, {"type": "assistant", "message": {"content": "Next answer", "stop_reason": "end_turn"}})
+        second = CompletedSourceReader(self.cfg).read(self.ds, path, "p")
+        self.assertEqual(second.unit_keys()[:1], first.unit_keys())
+        self.assertEqual(second.unit_kinds, ["turn_complete", "turn_complete"])
+        self.assertEqual([t.text for t in second.transcript.turns],
+                         ["Original request", "Original answer", "Next request", "Next answer"])
+        self.assertEqual(second.parsed_records, 3)
+        cached = CompletedSourceReader(self.cfg).read(self.ds, path, "p")
+        self.assertEqual(cached.parsed_records, 0)
+        self.assertEqual(cached.unit_keys(), second.unit_keys())
+
     def test_agent_core_body_changes_without_metadata_change_are_seen_and_repair_applies(self):
         reader = self.reader("agent-core")
         path = self.home / "one.json"
