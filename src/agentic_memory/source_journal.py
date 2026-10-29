@@ -128,6 +128,11 @@ class SourceJournal:
                    after_record: Callable[[dict, int, int, str], None] | None = None,
                    max_record_bytes: int = 64 * 1024 * 1024,
                    end_byte: int | None = None, end_ordinal: int | None = None) -> tuple[dict, SourceRevision]:
+        from .source_io import is_zstd
+        if is_zstd(path):
+            return self._read_compressed_jsonl(path, policy, initial=initial, consume=consume,
+                validate=validate, after_record=after_record, max_record_bytes=max_record_bytes,
+                end_byte=end_byte, end_ordinal=end_ordinal)
         path = path.resolve()
         key = hashlib.sha256(json.dumps([str(path), policy, end_byte, end_ordinal]).encode()).hexdigest()
         info = path.stat()
@@ -186,6 +191,76 @@ class SourceJournal:
             validate(state)
         if not revision.verify():
             raise SourceChanged("source prefix changed while parsing")
+        self._save(key, revision, state)
+        return state, revision
+
+    def _read_compressed_jsonl(self, path, policy, *, initial, consume, validate,
+                               after_record, max_record_bytes, end_byte, end_ordinal):
+        """Archive offsets are logical bytes; revisions cover physical bytes.
+
+        Reuse an unchanged normalized archive. Rewritten archives are streamed
+        afresh rather than attempting to seek into a prior compressed frame.
+        """
+        from .source_io import open_source
+        path = path.resolve()
+        key = hashlib.sha256(json.dumps([str(path), policy, end_byte, end_ordinal, 'zstd-v1']).encode()).hexdigest()
+        old = self._load(key)
+        if old and old[0].unchanged():
+            old[0].parsed_records = 0
+            return old[1], old[0]
+        info = path.stat()
+        state, offset, position, parsed = initial(), 0, 0, 0
+        digest = hashlib.sha256()
+        partial = ordinal_stop = False
+        with open_source(path) as handle:
+            while end_byte is None or offset < end_byte:
+                cap = max_record_bytes + 1
+                if end_byte is not None:
+                    cap = min(cap, end_byte - offset)
+                raw = handle.readline(cap)
+                if not raw:
+                    break
+                if len(raw) > max_record_bytes:
+                    raise SourceReadError('record exceeds configured maximum size')
+                if not raw.endswith(b'\n'):
+                    partial = True
+                    break
+                if raw.strip():
+                    try:
+                        record = json.loads(raw)
+                    except (ValueError, UnicodeError) as exc:
+                        raise SourceReadError(f'invalid JSON record at decoded byte {offset}') from exc
+                    if not isinstance(record, dict):
+                        raise SourceReadError('source record must be an object')
+                    if end_ordinal is not None:
+                        ordinal = record.get('ordinal')
+                        if isinstance(ordinal, int) and not isinstance(ordinal, bool):
+                            if ordinal >= end_ordinal:
+                                ordinal_stop = True
+                                break
+                        elif end_byte is None:
+                            raise SourceReadError('ordinal history requires ordinals or a byte boundary')
+                    consume(state, record, position + 1, offset, offset + len(raw))
+                    parsed += 1
+                position += 1
+                digest.update(raw)
+                offset += len(raw)
+                if after_record:
+                    after_record(state, position, offset, digest.hexdigest())
+        if end_byte is not None and offset < end_byte and not (ordinal_stop or partial):
+            raise SourceReadError('shared-history boundary exceeds available decoded archive bytes')
+        after = path.stat()
+        if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise SourceChanged('compressed source changed while parsing')
+        physical_digest = prefix_digest(path, info.st_size).hexdigest()
+        revision = SourceRevision(str(path), info.st_dev, info.st_ino, info.st_size,
+            physical_digest, info.st_size, info.st_mtime_ns, info.st_ctime_ns,
+            partial, position, parsed, is_snapshot=True)
+        if validate:
+            validate(state)
+        if not revision.verify():
+            raise SourceChanged('compressed source changed while parsing')
         self._save(key, revision, state)
         return state, revision
 

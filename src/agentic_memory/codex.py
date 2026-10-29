@@ -23,6 +23,7 @@ from typing import Iterator
 
 from .config import CodexSettings, DataStore, to_slug
 from .transcript import SessionTranscript, Turn, _clip_middle
+from .source_io import is_zstd, open_source
 
 NORMALIZER_VERSION = 1
 UNATTRIBUTED_PROJECT = "codex-unattributed"
@@ -291,8 +292,11 @@ def _records(path: Path, max_bytes: int, *, end_byte: int | None = None,
              end_ordinal: int | None = None) -> Iterator[tuple[dict, int, int]]:
     """Read a fixed-length snapshot. Never read outside the selected source."""
     size = path.stat().st_size
-    boundary = min(size, end_byte) if end_byte is not None else size
-    with path.open("rb") as handle:
+    if is_zstd(path):
+        boundary = end_byte if end_byte is not None else float('inf')
+    else:
+        boundary = min(size, end_byte) if end_byte is not None else size
+    with open_source(path) as handle:
         if path.suffix == ".json":
             if boundary > max_bytes:
                 raise CodexParseError(f"{path}: JSON snapshot exceeds max_record_bytes={max_bytes}")
@@ -312,6 +316,10 @@ def _records(path: Path, max_bytes: int, *, end_byte: int | None = None,
         while handle.tell() < boundary:
             offset = handle.tell()
             raw = handle.readline(min(max_bytes + 1, boundary - offset))
+            if not raw:
+                if end_byte is not None and offset < end_byte:
+                    raise CodexParseError(f'{path}: shared-history boundary exceeds available transcript bytes')
+                break
             position += 1
             if len(raw) > max_bytes:
                 raise CodexParseError(f"{path}:{position}: record exceeds max_record_bytes={max_bytes}")
@@ -726,9 +734,11 @@ class CodexCatalog:
                 for path in sorted(directory.rglob("rollout-*")):
                     if not path.is_file():
                         continue
-                    if path.suffix not in (".json", ".jsonl"):
+                    if path.suffix not in (".json", ".jsonl") and not is_zstd(path):
                         self.errors[str(path)] = "unsupported rollout extension (compressed history requires a reader)"
                         continue
+                    if is_zstd(path) and path.with_suffix('').is_file():
+                        continue  # prefer the live plain copy of the same physical segment
                     resolved = path.resolve()
                     if not resolved.is_relative_to(root):
                         self.errors[str(path)] = "source symlink is outside the configured root"
@@ -753,7 +763,8 @@ class CodexCatalog:
                         # New shared-history files retain the logical session id
                         # in metadata but reference physical segment UUIDs. Keep
                         # all in-scope segments even when only the newest is listed.
-                        suffix = re.search(r'_([0-9a-f-]{36})$', resolved.stem)
+                        stem = resolved.with_suffix('').stem if is_zstd(resolved) else resolved.stem
+                        suffix = re.search(r'_([0-9a-f-]{36})$', stem)
                         segment_id = suffix.group(1) if suffix else source.session_id
                         self.by_segment_id[segment_id].append(source)
                         old = self.by_id.get(source.session_id)
@@ -807,7 +818,7 @@ class CodexCatalog:
 
     def _read(self, source: Source, end_byte: int | None = None, end_ordinal: int | None = None) -> Normalized:
         stat = source.path.stat()
-        if end_byte is not None and end_byte > stat.st_size:
+        if end_byte is not None and not is_zstd(source.path) and end_byte > stat.st_size:
             raise CodexParseError(f'{source.path}: shared-history boundary exceeds available parent bytes; retain the last good memory')
         key = (source.path, stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, end_byte, end_ordinal)
         meta_revision = (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)

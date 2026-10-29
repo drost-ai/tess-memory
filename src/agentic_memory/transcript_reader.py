@@ -11,6 +11,7 @@ import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+from .source_io import open_source, source_size
 
 
 DEFAULT_PAGE_BYTES = 12_000
@@ -73,6 +74,8 @@ def resolve_transcript_path(
         ]
     else:
         candidates = [source]
+        if source.suffix == '.jsonl':
+            candidates.append(source.with_name(source.name + '.zst'))
 
     found_outside_root = False
     for candidate in candidates:
@@ -110,11 +113,11 @@ def read_transcript_page(
         )
 
     transcript = Path(path)
-    size = transcript.stat().st_size
+    size = source_size(transcript)
     if cursor > size:
         raise ValueError(f"cursor {cursor} is beyond transcript size {size}")
 
-    with transcript.open("rb") as fh:
+    with open_source(transcript) as fh:
         fh.seek(cursor)
         raw = fh.read(min(max_bytes, size - cursor))
 
