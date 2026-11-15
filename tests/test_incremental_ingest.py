@@ -326,28 +326,39 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual(len(maps), 1)
         self.assertNotIn('Remember the durable workspace decision', maps[0])
 
-    def test_work_recorded_under_the_model_naming_policy_is_carried_forward(self):
-        from agentic_memory.incremental import legacy_pipeline_policy, pipeline_policy
+    def test_work_recorded_before_the_policy_stopped_naming_models_is_carried_forward(self):
+        from agentic_memory.incremental import CARRIED_MODELS, pipeline_policy
         self.run_ingest()
         before = self.paid_rows()
         counts = len(self.backend.calls), len(self.embedder.calls)
-        # A store written before the policy stopped naming the models.
-        legacy = legacy_pipeline_policy(self.cfg, self.embedder, self.backend, None)
         current = pipeline_policy(self.cfg, self.embedder)
-        self.assertNotEqual(legacy, current)
+        # A store written by any earlier version: an unknown policy, no record of the models.
         progress = self.store.source_progress(str(self.path))
-        state = json.loads(progress['state']); state['policy'] = legacy
+        state = json.loads(progress['state']); state['policy'] = 'f' * 64; state.pop('models')
         self.store.db.execute('UPDATE ingest_sources SET state=?,observed_signature=? WHERE path=?',
                               (json.dumps(state), 'signature-under-the-old-policy', str(self.path)))
         self.store.commit()
         result = self.run_ingest()
         self.assertEqual((result.unchanged, result.model_calls, result.embedded_passages), (1, 0, 0))
         self.assertEqual(before, self.paid_rows())
-        self.assertEqual(json.loads(self.store.source_progress(str(self.path))['state'])['policy'], current)
+        state = json.loads(self.store.source_progress(str(self.path))['state'])
+        self.assertEqual((state['policy'], state['models']), (current, CARRIED_MODELS))
         # Carried forward once, it no longer depends on which models are configured.
         self.backend.cache_identity = 'a-later-model'
         self.assertEqual(self.run_ingest().model_calls, 0)
         self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
+        # A later real change to the policy applies to it like to any other source.
+        self.cfg.segment_chars = self.cfg.segment_chars + 1
+        self.assertGreater(self.run_ingest().model_calls, 0)
+
+    def test_a_policy_change_still_redistils_work_published_under_the_current_scheme(self):
+        self.run_ingest()
+        self.assertIn('models', json.loads(self.store.source_progress(str(self.path))['state']))
+        self.cfg.segment_chars = self.cfg.segment_chars + 1
+        # It goes through distillation again (identical requests come from the
+        # checkpoint cache), not through the carry-forward.
+        result = self.run_ingest()
+        self.assertEqual((result.unchanged, result.distilled), (0, 1))
 
     def test_explicit_profile_repair_preserves_verified_published_rows(self):
         self.run_ingest();before=self.paid_rows()

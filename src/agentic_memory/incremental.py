@@ -42,10 +42,15 @@ def pipeline_policy(cfg, embedder):
     return content_key(_policy_shape(cfg, embedder))
 
 
+# What a source carried forward from before the policy stopped naming models
+# records as the models that wrote it: unknown, so never equal to a real set.
+CARRIED_MODELS = "carried-forward"
+
+
 def legacy_pipeline_policy(cfg, embedder, llm, fallback):
-    """The policy as stores recorded it while it still named the models. Work
-    published under it by the models configured now is the same work, and is
-    carried forward without a model call."""
+    """The models behind a publication, in the form the policy used to take
+    while it still named them. Recorded with each publication so a session
+    appended after a model change is seeded from its paid rows."""
     return content_key({**_policy_shape(cfg, embedder),
                         "primary": getattr(llm, "cache_identity", getattr(llm, "name", None)),
                         "fallback": getattr(fallback, "cache_identity", getattr(fallback, "name", None))})
@@ -371,11 +376,16 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             continue
                         known_status = old_status or (store.file_status(old['source_path']) if old else None)
                         previous = store.session_rows_with_vectors(st.session_id)
-                        if state.get('policy') == legacy_policy:
-                            # The same work, recorded while the policy still named
-                            # the models: each source is re-read once after the
-                            # upgrade and carried forward here, never redistilled.
+                        if 'models' not in state and state.get('indexed_units') and state.get('policy') not in (None, policy):
+                            # Published before the policy stopped naming models,
+                            # under whichever models and earlier form of the policy
+                            # were current then. That work was paid for: each such
+                            # source is re-read once after the upgrade and carried
+                            # forward here if its content still matches, never
+                            # redistilled because the recorded policy is unknown.
+                            # From then on it follows the policy like any other.
                             state['policy'] = policy
+                            state['models'] = CARRIED_MODELS
                         if (not retry_extractive and state.get('policy') == policy and state.get('indexed_units') == keys and old is not None):
                             state.update(pending_tail=snapshot.pending_tail,
                                          revisions=[asdict(r) for r in snapshot.revisions])
