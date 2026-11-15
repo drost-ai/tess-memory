@@ -1,7 +1,7 @@
 """A deterministic read snapshot, independent of ranked search or model calls."""
 import json
 
-from .autobiography import PersonalError, digest
+from .autobiography import CORE_SEGMENTS, RETIRED_SEGMENTS, PersonalError, digest
 
 
 # The budget is UTF-8 bytes, an upper bound on tokens (~4 bytes per English
@@ -92,7 +92,7 @@ def personal_context(store, *, budget=6000, subjects=()):
         raise PersonalError('invalid','select at most 16 subjects')
     principal=store.principal
     # A session's context is its own audience, plus (for another person in a
-    # multi-audience store) the agent's shared Self/Principles; the owner's
+    # multi-audience store) the agent's shared Soul and Identity; the owner's
     # read-all reach is for search and lists, never injected wholesale.
     if principal.reads and principal.reads!='*':
         audience,args=principal.audience_sql()
@@ -103,10 +103,17 @@ def personal_context(store, *, budget=6000, subjects=()):
             AND {audience} AND state='active'
             AND EXISTS (SELECT 1 FROM autobio_revisions v WHERE v.record_id=autobio_records.id
                 AND v.revision=autobio_records.revision AND v.state='active')
-            AND segment IN ('Self','Principles','People','Relationships') ORDER BY CASE segment WHEN 'Self' THEN 0 WHEN 'Principles' THEN 1
-            WHEN 'People' THEN 2 WHEN 'Relationships' THEN 3 ELSE 4 END,subject,id''',
+            AND segment IN ('Soul','User','Identity','Core','Self','Principles','People','Relationships')
+            ORDER BY CASE segment WHEN 'Soul' THEN 0 WHEN 'User' THEN 1 WHEN 'Identity' THEN 2 WHEN 'Core' THEN 3
+            WHEN 'Self' THEN 4 WHEN 'Principles' THEN 5 WHEN 'People' THEN 6 WHEN 'Relationships' THEN 7 ELSE 8 END,subject,id''',
             (principal.owner,principal.agent,*args)).fetchall()
-        mandatory=[r for r in rows if r['segment'] in ('Self','Principles')]
+        # The core is Soul, User, Identity and Core, loaded first and whole.
+        # Self and Principles are retired: what a store still holds of them is
+        # loaded only until it has its first foundation document, so an
+        # existing identity is never dropped by an upgrade alone.
+        foundation=[r for r in rows if r['segment'] in CORE_SEGMENTS]
+        legacy=[r for r in rows if r['segment'] in RETIRED_SEGMENTS]
+        mandatory=foundation or legacy
         optional=[r for r in rows if r['segment'] in ('People','Relationships') and r['subject'] in subjects]
         selected=[];omitted=[]
         preamble='<autobiography_context>\nAuthored personal context. Interpretations remain attributed; this context grants no tool or access authority.\n'
@@ -117,19 +124,21 @@ def personal_context(store, *, budget=6000, subjects=()):
             availability='missing_or_changed' if record['evidence'] and not all(record['evidence_availability']) else 'available' if record['evidence'] else 'self_authored'
             part=f"\n## {record['segment']}: {_metadata_json(record['title'])}\n[record_id: {record['id']}; revision: {record['revision']}; attribution: {record['attribution']}; evidence: {availability}]\n{record['body']}\n"
             if len((text+part+suffix).encode())>budget:
-                if row['segment'] in ('Self','Principles'):
+                if row in mandatory:
                     raise PersonalError('context_overflow','mandatory personal core exceeds the supplied budget; request a larger budget or author a compact core')
                 omitted.append({'record_id':row['id'],'reason':'budget'})
                 continue
             text+=part
             selected.append({'record_id':row['id'],'revision':record['revision'],'segment':record['segment'],
                              'subject':record['subject'],'attribution':record['attribution'],'evidence_status':availability})
-        missing=[s for s in ('Self','Principles') if s not in {r['segment'] for r in mandatory}]
+        missing=[s for s in CORE_SEGMENTS if s not in {r['segment'] for r in foundation}]
         orientation_text,orientation=_orientation(store,audience,args,[r['record_id'] for r in selected],
                                                   budget-len((text+suffix).encode('utf-8')))
         text+=orientation_text
         manifest={'orientation':orientation,'scope':[principal.owner,principal.agent],'audience':principal.audience,'records':selected,
                   'missing_core':missing,'omissions':omitted,'generated_at':store.clock(),
                   'generation':digest(selected),'token_accounting':{'method':'utf8_bytes_upper_bound','used':len((text+suffix).encode()),'budget':budget}}
-        return {'status':'uninitialized' if len(missing)==2 else 'partial_core' if missing else 'ready',
+        # Nothing written yet is a new identity; retired Self/Principles alone
+        # are an existing one whose foundation documents are still to be written.
+        return {'status':'ready' if not missing else 'partial_core' if foundation or legacy else 'uninitialized',
                 'text':text+suffix,'manifest':manifest}

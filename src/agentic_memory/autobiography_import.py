@@ -2,12 +2,12 @@
 from pathlib import Path
 import hashlib
 import uuid
-from .autobiography import PersonalError, SEGMENTS, MAX_BODY, canonical, digest
+from .autobiography import PersonalError, FOUNDATION_SEGMENTS, MAX_BODY, canonical, digest
 
 
 def preview_seeds(files):
-    if not isinstance(files,dict) or not files or len(files)>6 or set(files)-set(SEGMENTS):
-        raise PersonalError('invalid','select at most one Markdown seed for each known segment')
+    if not isinstance(files,dict) or not files or set(files)-set(FOUNDATION_SEGMENTS):
+        raise PersonalError('invalid','select at most one Markdown seed for each of '+', '.join(FOUNDATION_SEGMENTS))
     records=[]
     for segment,name in sorted(files.items()):
         path=Path(name).expanduser().resolve()

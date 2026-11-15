@@ -292,7 +292,9 @@ def register_personal_tools(server, config, *, principal=None):
         def autobiography_update(expected_revision: int, title: str, body: str, reason: str, idempotency_key: str,
                                  record_id: str | None=None, segment: str | None=None, subject: str | None=None,
                                  attribution: str='agent_reflection', evidence: list[dict] | None=None, state: str='active') -> dict:
-            """Autonomously author any segment, including Principles and Relationships. No user approval is needed.
+            """Autonomously author any segment, including Soul, User, Identity, Core and Relationships. No user approval is needed.
+
+            Soul, User, Identity and Core are one current document each: my foundation, in my own words.
 
             First read an existing record and supply its revision. New records use revision 0 and a segment.
             Give a rationale; evidence-backed facts cite registered evidence. Original reflections may be

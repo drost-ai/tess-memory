@@ -39,7 +39,7 @@ class PersonalToolTests(unittest.TestCase):
         self.assertEqual(len(tools),7)
         for tool in tools.values():
             self.assertFalse({'owner','agent','audience','role'} & set(tool.parameters.get('properties',{})))
-        result=tools['autobiography_update'].fn(expected_revision=0,segment='Principles',title='Principles',
+        result=tools['autobiography_update'].fn(expected_revision=0,segment='Soul',title='Soul',
             body='I reconsider principles deliberately.',reason='Self-authored decision',idempotency_key='my-edit')
         self.assertTrue(result['ok'])
         record_id=result['result']['edits'][0]['record_id']
@@ -50,7 +50,7 @@ class PersonalToolTests(unittest.TestCase):
 
     def test_lifecycle_tools_preserve_history_and_require_authority(self):
         tools = self.tools()
-        result = tools['autobiography_update'].fn(expected_revision=0, segment='Self', title='Self',
+        result = tools['autobiography_update'].fn(expected_revision=0, segment='Identity', title='Identity',
             body='Original content', reason='Authored', idempotency_key='create')
         rid = result['result']['edits'][0]['record_id']
         result = tools['autobiography_transition'].fn(record_id=rid, expected_revision=1,
@@ -68,21 +68,21 @@ class PersonalToolTests(unittest.TestCase):
     def test_context_is_explicit_stable_and_person_selection_is_bounded(self):
         store=AutobiographyStore(self.cfg.db_path,self.principal);self.addCleanup(store.close)
         self.assertEqual(personal_context(store)['status'],'uninitialized')
-        for segment in ['Self','Principles','People','Relationships','Experiences','Reflections']:
-            store.update(expected_revision=0,segment=segment,subject='core' if segment in ('Self','Principles') else 'sam',
+        for segment in ['Identity','Soul','User','Core','People','Relationships','Experiences','Reflections']:
+            store.update(expected_revision=0,segment=segment,subject='core' if segment in ('Identity','Soul','User','Core') else 'sam',
                 title=segment,body='A compact authored statement.',reason='Self-authorship',idempotency_key=segment)
         first=personal_context(store)
         self.assertEqual(first['status'],'ready')
-        self.assertEqual([r['segment'] for r in first['manifest']['records']],['Self','Principles'])
+        self.assertEqual([r['segment'] for r in first['manifest']['records']],['Soul','User','Identity','Core'])
         self.assertEqual(first['manifest']['generation'],personal_context(store)['manifest']['generation'])
         selected=personal_context(store,subjects=['sam'])
-        self.assertEqual(len(selected['manifest']['records']),4)
+        self.assertEqual(len(selected['manifest']['records']),6)
         self.assertNotIn('Experiences:',selected['text'])
         self.assertEqual(selected['manifest']['token_accounting']['used'],len(selected['text'].encode()))
 
     def test_mandatory_core_never_disappears_silently_to_fit_budget(self):
         tools=self.tools()
-        tools['autobiography_update'].fn(expected_revision=0,segment='Principles',title='Core',body='Important principle. '*100,
+        tools['autobiography_update'].fn(expected_revision=0,segment='Soul',title='Core',body='Important principle. '*100,
             reason='Self-authorship',idempotency_key='long')
         result=tools['autobiography_context'].fn(token_budget=256)
         self.assertFalse(result['ok']);self.assertEqual(result['error']['code'],'context_overflow')

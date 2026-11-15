@@ -21,7 +21,8 @@ CREATE TABLE IF NOT EXISTS autobio_shadow_proposals(commit_id TEXT PRIMARY KEY,c
 
 DREAM_SYSTEM='''You are the configured personal AI in a dedicated autobiographical reflection session.
 Use your current core and supplied source-grounded candidates to deliberately reconsider your understanding.
-You may autonomously edit every segment, including Self, Principles and Relationships. No human approval is required.
+You may autonomously edit People, Relationships, Experiences and Reflections. No human approval is required.
+Soul, User, Identity and Core are authored directly and are not yours to edit here; read them as your foundation.
 Evidence, interpretations and original self-authorship remain distinct. Do not turn speculation, fiction, temporary emotion
 or repeated generated text into verified facts. No change is a successful outcome; do not rewrite core just for style.
 Return only JSON {"edits": [...], "outcomes": [...]}.
@@ -73,6 +74,10 @@ class DreamCycle:
         s=self.store;p=s.principal;p.require('dream','operator')
         cfg=self.config.personal
         if not cfg.enabled or not cfg.dream_enabled:return {'status':'disabled'}
+        if initialize:
+            # The core is Soul, User, Identity and Core, written by the agent in
+            # conversation or seeded by an operator: a worker does not author it.
+            raise PersonalError('unsupported','the core is authored directly (Soul, User, Identity, Core); there is no worker initialization')
         self.initialize()
         from .personal_sources import SourceCursors, metadata_eligible, reconciliation_source_manifest
         cursors=SourceCursors(s)

@@ -107,7 +107,7 @@ class DreamTests(unittest.TestCase):
     def test_live_author_update_wins_and_stale_cycle_cannot_blindly_rebase(self):
         cycle=self.dream.prepare()
         author=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='author',session_id='live'));self.addCleanup(author.close)
-        author.update(expected_revision=0,segment='Principles',title='Core',body='A live principle.',reason='Autonomous edit',idempotency_key='live')
+        author.update(expected_revision=0,segment='Soul',title='Soul',body='A live change to who I am.',reason='Autonomous edit',idempotency_key='live')
         with self.assertRaisesRegex(PersonalError,'changed during reflection'):self.commit(cycle)
         self.assertEqual(len(PersonalInbox(self.store).list(state='claimed')['candidates']),1)
 
@@ -165,36 +165,38 @@ class DreamTests(unittest.TestCase):
         result=self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'],status='failed',error='deadline')
         self.assertEqual(result['status'],'failed')
 
-    def test_initialization_leaves_candidates_pending_and_only_creates_missing_core(self):
-        cycle=self.dream.prepare(initialize=True)
-        self.assertEqual(cycle['candidates'],[])
+    def test_a_worker_does_not_initialize_the_core_and_cannot_write_it(self):
+        # The core is Soul, User, Identity and Core, authored directly.
+        with self.assertRaises(PersonalError) as refused:
+            self.dream.prepare(initialize=True)
+        self.assertEqual(refused.exception.code,'unsupported')
         self.assertEqual(PersonalInbox(self.store).list()['candidates'][0]['id'],self.cid)
-
-        with self.assertRaisesRegex(PersonalError,'only author missing core'):
-            self.commit(cycle,edits=self.proposal()['edits'],outcomes=[])
-        edits=[{'expected_revision':0,'segment':segment,'title':segment,'body':'My deliberate current reflection.',
-                'reason':'Initialize my authored core.','attribution':'agent_reflection'} for segment in ('Self','Principles')]
-        self.commit(cycle,edits=edits,outcomes=[])
-        self.dream.finish(cycle['cycle_id'],cycle['fence'],cycle['lease_token'])
-        self.assertEqual(self.dream.prepare(initialize=True)['status'],'already_initialized')
-        self.assertEqual(PersonalInbox(self.store).list()['candidates'][0]['id'],self.cid)
+        cycle=self.dream.prepare()
+        for segment in ('Soul','User','Identity','Core','Self','Principles'):
+            edit={'expected_revision':0,'segment':segment,'title':segment,'body':'My deliberate current reflection.',
+                  'reason':'Initialize my authored core.','attribution':'agent_reflection'}
+            with self.assertRaises(PersonalError):
+                self.commit(cycle,edits=[edit],outcomes=[{'candidate_id':self.cid,'action':'accepted','reason':'Integrated.','edit_indices':[0]}])
+        self.assertEqual(self.store.list_records()['records'],[])
 
     def test_core_snapshot_supplies_identifiers_for_a_bounded_existing_record_update(self):
         author=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='author'));self.addCleanup(author.close)
-        rid=author.update(expected_revision=0,segment='Principles',title='Principles',body='An earlier communication principle.',reason='Earlier authorship',idempotency_key='earlier')['edits'][0]['record_id']
+        rid=author.update(expected_revision=0,segment='People',subject='owner',title='The owner',body='An earlier note on how the owner communicates.',reason='Earlier authorship',idempotency_key='earlier')['edits'][0]['record_id']
+        self.dream=DreamCycle(replace(self.cfg,personal=replace(self.cfg.personal,context_subjects=('owner',))),self.store)
         cycle=self.dream.prepare()
         self.assertIn('record_id: '+rid,cycle['core']['text'])
         self.assertIn('revision: 1',cycle['core']['text'])
-        edit={'record_id':rid,'expected_revision':1,'title':'Principles','body':'Give concise updates and keep uncertainty visible.',
+        edit={'record_id':rid,'expected_revision':1,'title':'The owner','body':'The owner prefers concise updates.',
               'reason':'Deliberate integration of the new preference.','attribution':'agent_reflection'}
         self.commit(cycle,edits=[edit],outcomes=[{'candidate_id':self.cid,'action':'accepted','reason':'Integrated into the existing principle.','edit_indices':[0]}])
         self.assertEqual(author.get(rid)['revision'],2)
 
     def test_dream_can_autonomously_author_every_segment_including_core_commitments(self):
-        from agentic_memory.autobiography import SEGMENTS
+        # Every segment the reconciler works on; Soul, User, Identity and Core are authored directly.
+        from agentic_memory.autobiography import WORKER_SEGMENTS as SEGMENTS
         cycle=self.dream.prepare()
         edits=[{'expected_revision':0,'segment':segment,'title':segment,'body':'My deliberate interpretation of this experience.',
                 'reason':'Autonomous reflection','attribution':'agent_reflection'} for segment in SEGMENTS]
-        receipt=self.commit(cycle,edits=edits,outcomes=[{'candidate_id':self.cid,'action':'accepted','reason':'Integrated into my autobiography.','edit_indices':list(range(6))}])
-        self.assertEqual(len(receipt['edits']),6)
+        receipt=self.commit(cycle,edits=edits,outcomes=[{'candidate_id':self.cid,'action':'accepted','reason':'Integrated into my autobiography.','edit_indices':list(range(len(SEGMENTS)))}])
+        self.assertEqual(len(receipt['edits']),len(SEGMENTS))
         self.assertEqual({r['segment'] for r in self.store.list_records()['records']},set(SEGMENTS))

@@ -63,6 +63,7 @@ def write_transition(store, edit, commit_id, origin):
     elif superseded_by is not None or superseded_by_revision is not None:
         raise PersonalError('invalid', 'replacement is only valid for supersession')
     head = store._head(record_id, write=True)
+    store.require_foundation_author(head['segment'])
     if head['revision'] != expected_revision:
         raise PersonalError('conflict', 'record revision changed before lifecycle transition')
     replacement = None

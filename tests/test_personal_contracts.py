@@ -15,7 +15,7 @@ class PersonalContractTests(unittest.TestCase):
         self.store=AutobiographyStore(self.root/'memory.db',self.principal);self.addCleanup(self.store.close)
 
     def test_same_actor_retry_and_new_actor_retry_are_explicitly_different(self):
-        edit=dict(expected_revision=0,segment='Self',title='Self',body='Deliberate reflection',reason='Initial authorship',idempotency_key='request')
+        edit=dict(expected_revision=0,segment='Identity',title='Identity',body='Deliberate reflection',reason='Initial authorship',idempotency_key='request')
         receipt=self.store.update(**edit)
         reopened=AutobiographyStore(self.store.path,self.principal);self.addCleanup(reopened.close)
         self.assertEqual(reopened.update(**edit),receipt)
@@ -26,7 +26,7 @@ class PersonalContractTests(unittest.TestCase):
 
     def test_restore_missing_evidence_preserves_history_and_rejects_atomically(self):
         path=self.root/'inherited.md';path.write_text('An inherited statement.')
-        files={'Self':str(path)};preview=preview_seeds(files)
+        files={'Identity':str(path)};preview=preview_seeds(files)
         receipt=import_seeds(self.store,files,preview_hash=preview['preview_hash'],idempotency_key='import')
         rid=receipt['edits'][0]['record_id'];path.unlink()
         self.assertEqual(self.store.get(rid,include_inactive=True)['evidence_availability'],[False])
@@ -36,7 +36,7 @@ class PersonalContractTests(unittest.TestCase):
         self.assertEqual(len(self.store.history(rid)['revisions']),1)
 
     def test_logical_erasure_receipt_does_not_claim_forensic_removal(self):
-        receipt=self.store.update(expected_revision=0,segment='Self',title='Self',body='Private sentence.',reason='Self-authored',idempotency_key='initial')
+        receipt=self.store.update(expected_revision=0,segment='Identity',title='Identity',body='Private sentence.',reason='Self-authored',idempotency_key='initial')
         erased=self.store.erase(receipt['edits'][0]['record_id'],expected_revision=1)
         self.assertEqual(erased['erasure_scope'],'logical_application_state');self.assertFalse(erased['forensic_erasure'])
         self.assertEqual(self.store.list_records()['records'],[])

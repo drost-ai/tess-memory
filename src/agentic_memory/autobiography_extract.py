@@ -17,7 +17,7 @@ EXTRACTION_VERSION=1
 PART_CHARS=12000
 EXTRACT_SYSTEM='''You are a personal-memory candidate extractor. You propose evidence-linked candidates; you cannot edit autobiography.
 Return only JSON {"candidates": [...]}, or an empty array.
-Each entry has segment (Self|Principles|People|Relationships|Experiences|Reflections), title, body,
+Each entry has segment (People|Relationships|Experiences|Reflections), title, body,
 attribution (user_statement|observed_fact|agent_reflection|extractor_inference|inherited), and quote.
 The quote must be copied exactly from the supplied source. User statements must quote a user message.
 Distinguish jokes, fiction, possibilities, temporary emotion, quotations and inferences from facts.
