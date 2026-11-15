@@ -1,8 +1,8 @@
 # Getting started
 
-This guide takes you from nothing to an agent that remembers. The first half needs no API
-key and takes a few minutes. The second half adds a model, which is what turns an index of
-transcripts into distilled memory.
+This guide takes you from nothing to an agent that remembers. The first half runs entirely
+on your machine and takes a few minutes. The second half adds a model, which is what turns
+an index of transcripts into distilled memory.
 
 ## Requirements
 
@@ -59,8 +59,8 @@ uv run tess-memory ingest --no-llm
 ```
 
 `--no-llm` skips distillation. Every session is still read, split into searchable chunks,
-embedded and summarised extractively, so you have a working memory with no model calls and
-nothing sent anywhere.
+embedded and summarised extractively, so you have a working memory that never left your
+machine.
 
 Check what it found:
 

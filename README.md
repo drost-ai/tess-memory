@@ -69,7 +69,7 @@ instead of meeting you for the first time every morning.
 
 ## Quickstart
 
-You can try it in two minutes without an API key.
+It runs entirely on your machine. You can be searching your own history in two minutes.
 
 ```sh
 git clone https://github.com/drost-ai/tess-memory.git
@@ -100,7 +100,7 @@ Ingest what your agent has already done, then search it:
 
 ```sh
 export TESS_MEMORY_SETTINGS=~/.tess-memory/settings.toml
-uv run tess-memory ingest --no-llm         # no model calls: transcripts are indexed as they are
+uv run tess-memory ingest --no-llm         # index your transcripts, locally
 uv run tess-memory search "why does checkout fail for an empty cart"
 ```
 
@@ -215,11 +215,13 @@ aspirations:
 
 ## In daily use
 
-Tess Memory is not a prototype. It is the memory behind the agents that build it: Claude
-Code, Codex and Tess Code feed stores holding more than 5,000 sessions and 500,000 memories,
-kept current by its own scheduler. It is also the memory of
-[the host](https://continuityresearch.ai), a personal AI that has kept one continuous
-identity and relationship with its person across model changes and months of conversation.
+Tess Memory is not a prototype. It is the memory behind the agents that build it. Claude
+Code, Codex and Tess Code feed stores holding more than 6,000 sessions and 540,000 memories
+across 2,000 projects, with 2,400 plan items written by the agents themselves, kept current
+by more than 128,000 unattended scheduler runs.
+
+It is also the memory of a personal AI that has kept one continuous identity and one
+relationship with its person across model changes and months of conversation.
 
 ## Documentation
 

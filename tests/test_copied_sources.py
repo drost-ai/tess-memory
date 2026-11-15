@@ -25,7 +25,7 @@ class CopiedSourcesTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)
-        self.origin = self.root / "otherhost" / "sessions"
+        self.origin = self.root / "other-host" / "sessions"
         self.home = self.root / "tess" / "sessions"
 
     def tearDown(self) -> None:
@@ -62,14 +62,14 @@ class CopiedSourcesTest(unittest.TestCase):
         settings = self.root / "settings.toml"
         settings.write_text(
             '[[data_stores]]\nname = "tess"\ntype = "tess-core"\npath = "~/tess/sessions"\n'
-            'project = "assistant"\nskip_copies_of = ["~/otherhost/sessions"]\n\n'
+            'project = "assistant"\nskip_copies_of = ["~/other-host/sessions"]\n\n'
             '[[data_stores]]\nname = "plain"\ntype = "tess-core"\npath = "~/plain"\n',
             encoding="utf-8",
         )
         with mock.patch.dict(os.environ, {"HOME": str(self.root), "TESS_MEMORY_SETTINGS": str(settings)}):
             cfg = load_config()
         tess, plain = cfg.data_stores
-        self.assertEqual(tess.skip_copies_of, [self.root / "otherhost" / "sessions"])
+        self.assertEqual(tess.skip_copies_of, [self.root / "other-host" / "sessions"])
         self.assertEqual(plain.skip_copies_of, [])
 
 

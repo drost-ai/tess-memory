@@ -81,7 +81,7 @@ across audiences.
 ## Turning it on
 
 Personal memory needs a host that binds sessions to a person and injects the context:
-it is designed for agents built on Tess Core, and the host is the reference.
+it is designed for agents built on Tess Core.
 
 ```toml
 [[data_stores]]
