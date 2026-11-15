@@ -654,7 +654,7 @@ class IncrementalIngestTests(unittest.TestCase):
         counts = Counter(text for batch in self.embedder.calls for text in batch)
         self.assertTrue(all(n == 1 for n in counts.values()))
 
-    def test_agent_core_body_mtime_drives_automatic_quiet_window(self):
+    def test_tess_core_body_mtime_drives_automatic_quiet_window(self):
         home = self.root / 'tess-quiet'
         home.mkdir()
         meta = home / 'native.json'
@@ -664,7 +664,7 @@ class IncrementalIngestTests(unittest.TestCase):
         body.write_text('')
         for i, (role, content) in enumerate([('user', 'First task'), ('assistant', 'First answer')]):
             append(body, {'type': 'message', 'message_index': i, 'role': role, 'content': content})
-        self.cfg.data_stores = [DataStore('tess', home, type='agent-core', project='fixed-project')]
+        self.cfg.data_stores = [DataStore('tess', home, type='tess-core', project='fixed-project')]
         self.cfg.min_session_chars = 0
         self.cfg.quiet_seconds = 900
         metadata_mtime = meta.stat().st_mtime
@@ -699,7 +699,7 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertLessEqual(second.model_calls, 6)
         self.assertGreaterEqual(second.request_cache_hits, 30)
 
-    def test_agent_core_ingestion_observes_body_changes_with_unchanged_metadata(self):
+    def test_tess_core_ingestion_observes_body_changes_with_unchanged_metadata(self):
         home = self.root / 'tess'
         home.mkdir()
         meta = home / 'native.json'
@@ -709,7 +709,7 @@ class IncrementalIngestTests(unittest.TestCase):
         body.write_text('')
         for i, (role, content) in enumerate([('user', 'First task'), ('assistant', 'First answer')]):
             append(body, {'type': 'message', 'message_index': i, 'role': role, 'content': content})
-        self.cfg.data_stores = [DataStore('tess', home, type='agent-core', project='fixed-project')]
+        self.cfg.data_stores = [DataStore('tess', home, type='tess-core', project='fixed-project')]
         self.cfg.min_session_chars = 0
         self.assertEqual(self.run_ingest().distilled, 1)
         before = meta.read_bytes(), meta.stat().st_mtime_ns

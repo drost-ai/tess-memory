@@ -60,7 +60,7 @@ class ProspectiveTests(unittest.TestCase):
         text, roles = clean_unit(snapshot.transcript.turns)
         policy = digest([self.cfg.personal.source_mode, self.cfg.personal.source_since])
         origin = baseline['source_origin']
-        md = {'path': str(path), 'source_type': 'agent-core', 'source_store': self.ds.name, 'roles': roles,
+        md = {'path': str(path), 'source_type': 'tess-core', 'source_store': self.ds.name, 'roles': roles,
               'source_policy': policy, 'source_origin': origin,
               'unit': 0, 'raw_unit_key': digest([snapshot.unit_keys()[0], policy, origin])}
         with self.store.transaction():

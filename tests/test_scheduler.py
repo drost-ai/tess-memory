@@ -33,7 +33,7 @@ class SchedulerQueueTests(unittest.TestCase):
         from tess_memory.provider_limits import provider_key
         registry = self.root / 'providers.yaml'
         registry.write_text('providerProfiles:\n  fireworks-test:\n    kind: openai\n    apiMode: chat_completions\n    baseUrl: https://api.fireworks.ai/inference/v1\n    defaultModel: synthetic\n    auth:\n      kind: none\n')
-        cfg = SimpleNamespace(provider_registry=registry, agent_core_settings=self.root / 'must-not-read.json')
+        cfg = SimpleNamespace(provider_registry=registry, engine_settings=self.root / 'must-not-read.json')
         self.assertEqual(provider_key(cfg, 'fireworks-test'), 'fireworks')
 
     def test_separate_supervisors_can_share_provider_gate(self):
@@ -295,7 +295,7 @@ class SchedulerWorkerTests(unittest.TestCase):
             backend = mock.Mock()
             backend.name = 'unused-provider'
             backend.cache_identity = 'unused-model'
-            with mock.patch('tess_memory.scheduler.AgentCoreBackend', return_value=backend), \
+            with mock.patch('tess_memory.scheduler.EngineBackend', return_value=backend), \
                  mock.patch('tess_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path, run['id']), 0)
             backend.complete.assert_not_called()
@@ -339,7 +339,7 @@ class Model:
 class Embedding:
  descriptor='offline'
  def embed_passages(self,*args):raise AssertionError('no final session before reduction')
-with mock.patch('tess_memory.scheduler.AgentCoreBackend',return_value=Model()), mock.patch('tess_memory.scheduler.make_embedder',return_value=Embedding()):
+with mock.patch('tess_memory.scheduler.EngineBackend',return_value=Model()), mock.patch('tess_memory.scheduler.make_embedder',return_value=Embedding()):
  sys.exit(worker(Path(sys.argv[1]),sys.argv[2]))
 '''
             process = subprocess.Popen([sys.executable, '-c', code, str(config), run['id'], str(marker)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -375,7 +375,7 @@ with mock.patch('tess_memory.scheduler.AgentCoreBackend',return_value=Model()), 
                                 '[embedding]\nprovider="local"\n')
             # Exercise installed modules without synthetic import-path shims.
             env = {key: value for key, value in os.environ.items()
-                   if key not in {'PYTHONPATH', 'AGENT_CORE_PATH'}
+                   if key != 'PYTHONPATH'
                    and not key.startswith('TESS_MEMORY_')}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nsettings="{settings}"\n')
@@ -408,7 +408,7 @@ with mock.patch('tess_memory.scheduler.AgentCoreBackend',return_value=Model()), 
                 name = cache_identity = 'synthetic'
                 def complete(self, **kw):
                     return json.dumps({'title': 'Test', 'summary': 'Useful history', 'outcome': 'Complete', 'memories': []})
-            with mock.patch('tess_memory.scheduler.AgentCoreBackend', return_value=Backend()) as ctor, \
+            with mock.patch('tess_memory.scheduler.EngineBackend', return_value=Backend()) as ctor, \
                  mock.patch('tess_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path, run['id']), 0)
             self.assertFalse(ctor.call_args.kwargs['probe'])
@@ -416,7 +416,7 @@ with mock.patch('tess_memory.scheduler.AgentCoreBackend',return_value=Model()), 
             self.assertEqual(saved['outcome'], 'success')
             self.assertEqual(json.loads(saved['stats'])['distilled'], 1)
             run2 = queue.claim(instance='codex', kind='ingest', explicit=True)
-            with mock.patch('tess_memory.scheduler.AgentCoreBackend', return_value=Backend()), \
+            with mock.patch('tess_memory.scheduler.EngineBackend', return_value=Backend()), \
                  mock.patch('tess_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path, run2['id']), 0)
             self.assertEqual(json.loads(queue.get_run(run2['id'])['stats'])['model_calls'], 0)

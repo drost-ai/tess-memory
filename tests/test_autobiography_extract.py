@@ -95,10 +95,10 @@ class ExtractionTests(unittest.TestCase):
         self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM autobio_extractions').fetchone()[0],131)
 
     def test_metadata_only_change_does_not_invalidate_verified_personal_evidence(self):
-        home=self.root/'agent-core';home.mkdir()
+        home=self.root/'tess-core';home.mkdir()
         path=home/'session.json';path.write_text(json.dumps({'id':'session','updatedAt':'before','messages':[
             {'role':'user','content':'I prefer concise updates.'},{'role':'assistant','content':'Acknowledged.'}]}))
-        cfg=replace(self.cfg,data_stores=[DataStore('selected',home,type='agent-core')])
+        cfg=replace(self.cfg,data_stores=[DataStore('selected',home,type='tess-core')])
         extraction=PersonalExtraction(cfg,self.store);part=extraction.prepare()['parts'][0]
         data=json.loads(path.read_text());data['updatedAt']='after';path.write_text(json.dumps(data))
         extraction.prepare()

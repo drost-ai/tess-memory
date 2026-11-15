@@ -32,7 +32,7 @@ from .distill import (
     distill_week,
 )
 from .embed import Embedder
-from .llm import AgentCoreBackend, RefusalError
+from .llm import EngineBackend, RefusalError
 from .store import MemoryRow, MemoryStore
 from .time_utils import week_start as _week_start
 from .transcript import SessionTranscript, chunk_session, render_for_llm
@@ -161,8 +161,8 @@ def ingest(
     cfg: Config,
     store: MemoryStore,
     embedder: Embedder,
-    llm: AgentCoreBackend | None,
-    fallback_llm: AgentCoreBackend | None = None,
+    llm: EngineBackend | None,
+    fallback_llm: EngineBackend | None = None,
     limit: int | None = None,
     retry_extractive: bool = False,
     session_ids: set[str] | None = None,
@@ -197,8 +197,8 @@ def _ingest(
     cfg: Config,
     store: MemoryStore,
     embedder: Embedder,
-    llm: AgentCoreBackend | None,
-    fallback_llm: AgentCoreBackend | None = None,
+    llm: EngineBackend | None,
+    fallback_llm: EngineBackend | None = None,
     limit: int | None = None,
     retry_extractive: bool = False,
     session_ids: set[str] | None = None,
@@ -316,7 +316,7 @@ def _ingest(
         date = (st.started_at or "")[:10]
         calls = calls_pool.session(f"{st.source_type}/{st.session_id}") if calls_pool else None
 
-        def run(backend: AgentCoreBackend) -> SessionDigest:
+        def run(backend: EngineBackend) -> SessionDigest:
             if len(rendered) <= cfg.max_transcript_chars:
                 return distill_session(
                     backend, st.project, date, rendered, cfg.min_importance,

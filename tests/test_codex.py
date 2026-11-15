@@ -407,7 +407,7 @@ class CodexParserTests(unittest.TestCase):
         with mock.patch.object(cli, "CONFIG", Config(data_dir=self.home)), \
              mock.patch("tess_memory.store.MemoryStore", side_effect=AssertionError("no store")), \
              mock.patch("tess_memory.embed.make_embedder", side_effect=AssertionError("no embed")), \
-             mock.patch("tess_memory.llm.AgentCoreBackend", side_effect=AssertionError("no model")), \
+             mock.patch("tess_memory.llm.EngineBackend", side_effect=AssertionError("no model")), \
              contextlib.redirect_stdout(stdout):
             result = cli.main(["inspect-codex", str(self.home)])
         self.assertEqual(result, 0)

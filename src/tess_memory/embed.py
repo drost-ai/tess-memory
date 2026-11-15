@@ -167,5 +167,5 @@ def make_embedder(cfg: Config) -> Embedder:
         return LocalEmbedder(cfg.embed_model, cfg.embed_batch_size,
                              allow_download=cfg.embedding_allow_download,
                              query_prefix=cfg.embed_query_prefix, passage_prefix=cfg.embed_passage_prefix)
-    return OpenAICompatEmbedder(cfg.provider_registry or cfg.agent_core_settings,
+    return OpenAICompatEmbedder(cfg.provider_registry or cfg.engine_settings,
                                 cfg.embed_provider, cfg.embed_dims, cfg.embed_batch_size)

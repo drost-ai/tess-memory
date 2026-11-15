@@ -109,9 +109,9 @@ class PersonalSourceTests(unittest.TestCase):
     def test_foreign_stores_do_not_affect_personal_scope_or_get_mutated(self):
         foreign=self.root/'foreign'; foreign.mkdir()
         stores=[DataStore('codex',foreign,type='codex'),DataStore('claude',foreign,type='claude-code'),
-                DataStore('tess-code',foreign,type='agent-core')]
+                DataStore('tess-code',foreign,type='tess-core')]
         cfg=replace(self.cfg,data_stores=stores)
-        self.assertEqual([d.type for d in selected_sources(cfg)],['agent-core'])
+        self.assertEqual([d.type for d in selected_sources(cfg)],['tess-core'])
         self.assertEqual(selected_sources(cfg)[0].path,self.sessions)
         self.session(); self.extract=PersonalExtraction(cfg,self.store)
         self.assertEqual(len(self.prepared()),1)

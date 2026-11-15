@@ -28,7 +28,7 @@ def _aggregate_flags(parser: argparse.ArgumentParser) -> None:
 def cmd_ingest(args: argparse.Namespace) -> int:
     from .embed import make_embedder
     from .ingest import ingest
-    from .llm import AgentCoreBackend
+    from .llm import EngineBackend
     from .store import MemoryStore
 
     cfg = CONFIG
@@ -45,11 +45,11 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     cfg.ensure_dirs()
     store = MemoryStore(cfg.db_path)
     embedder = make_embedder(cfg)
-    llm = None if args.no_llm else AgentCoreBackend(cfg, probe=not cfg.incremental_ingestion)
+    llm = None if args.no_llm else EngineBackend(cfg, probe=not cfg.incremental_ingestion)
     fallback = None
-    if llm is not None and cfg.agent_core_fallback_profile:
+    if llm is not None and cfg.engine_fallback_profile:
         # probe=False: no API call unless a refusal actually needs it
-        fallback = AgentCoreBackend.for_role(cfg, "fallback")
+        fallback = EngineBackend.for_role(cfg, "fallback")
     for ds in cfg.data_stores:
         print(f"[ingest] data_store {ds.name} ({ds.type}): {ds.path}", file=sys.stderr)
     print(f"[ingest] db={cfg.db_path}", file=sys.stderr)
@@ -140,10 +140,10 @@ def cmd_search(args: argparse.Namespace) -> int:
     embedder = make_embedder(CONFIG)
     hits = None
     if CONFIG.search_agent and not args.static:
-        from .llm import AgentCoreBackend
+        from .llm import EngineBackend
         from .search_agent import agentic_search
 
-        llm = AgentCoreBackend.for_role(CONFIG, "search", probe=True)
+        llm = EngineBackend.for_role(CONFIG, "search", probe=True)
         print(f"[search] retrieval agent: {llm.name}", file=sys.stderr)
         hits, trace = agentic_search(
             CONFIG, store, embedder, llm, args.query,

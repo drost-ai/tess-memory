@@ -30,9 +30,9 @@ def readonly_database(path: Path):
 
 
 def source_members(path: Path, source_type: str) -> list[Path]:
-    """Include physical body files; agent-core metadata is not the whole source."""
+    """Include physical body files; tess-core metadata is not the whole source."""
     members = [path]
-    if source_type == "agent-core":
+    if source_type == "tess-core":
         members += [p for p in (path.parent / path.stem / "full-transcript-with-tools.jsonl",
                                path.with_name(path.stem + ".messages.jsonl")) if p.is_file()]
     return members
@@ -41,7 +41,7 @@ def source_members(path: Path, source_type: str) -> list[Path]:
 def activity_state(path: Path, source_type: str) -> str:
     """Classify only explicit bounded-tail evidence; never infer completion from age."""
     members = source_members(path, source_type)
-    body = members[1] if source_type == "agent-core" and len(members) > 1 else path
+    body = members[1] if source_type == "tess-core" and len(members) > 1 else path
     with body.open("rb") as handle:
         size = body.stat().st_size
         start = max(0, size - 64 * 1024)

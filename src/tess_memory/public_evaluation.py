@@ -12,7 +12,7 @@ import uuid
 import numpy as np
 
 from . import retrieval
-from .llm import AgentCoreBackend
+from .llm import EngineBackend
 from .provider_limits import LimitedBackend, ModelBudget, ProviderGate, provider_key
 from .search_agent import agentic_search
 from .store import MemoryRow, MemoryStore
@@ -32,7 +32,7 @@ def evaluate_public(cfg, cases_path: Path, *, workers=4, limit=None):
     if not cases:
         raise ValueError('no evaluation cases')
     effective = replace(cfg, search_max_rounds=2, search_per_query_limit=12, search_evidence_limit=12)
-    backend = AgentCoreBackend.for_role(effective, 'search', probe=False)
+    backend = EngineBackend.for_role(effective, 'search', probe=False)
     budget = ModelBudget(len(cases) * 4)
     rows = []
     previous = retrieval.CONFIG
@@ -41,7 +41,7 @@ def evaluate_public(cfg, cases_path: Path, *, workers=4, limit=None):
         with tempfile.TemporaryDirectory(prefix='tess-memory-public-eval-') as tmp:
             root = Path(tmp)
             gate = ProviderGate(root / 'limits.db', model_limit=workers)
-            model = LimitedBackend(backend, gate, budget, provider=provider_key(effective, effective.search_profile or effective.agent_core_profile),
+            model = LimitedBackend(backend, gate, budget, provider=provider_key(effective, effective.search_profile or effective.engine_profile),
                                    owner=uuid.uuid4().hex, instance='public-evaluation')
             def run(case, index):
                 store = MemoryStore(root / str(index) / 'memory.db')

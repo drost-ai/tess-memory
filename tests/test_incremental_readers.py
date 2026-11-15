@@ -117,8 +117,8 @@ class IncrementalReaderTests(unittest.TestCase):
         self.assertEqual(cached.parsed_records, 0)
         self.assertEqual(cached.unit_keys(), second.unit_keys())
 
-    def test_agent_core_body_changes_without_metadata_change_are_seen_and_repair_applies(self):
-        reader = self.reader("agent-core")
+    def test_tess_core_body_changes_without_metadata_change_are_seen_and_repair_applies(self):
+        reader = self.reader("tess-core")
         path = self.home / "one.json"
         path.write_text(json.dumps({"id": "one", "cwd": "/work/p"}))
         body = self.home / "one/full-transcript-with-tools.jsonl"
@@ -136,7 +136,7 @@ class IncrementalReaderTests(unittest.TestCase):
         self.assertNotIn("old answer", '\n'.join(t.text for t in last.transcript.turns))
 
     def test_sidecar_uncommitted_tail_and_truncation_do_not_leak(self):
-        reader = self.reader("agent-core")
+        reader = self.reader("tess-core")
         path = self.home / "one.json"
         path.write_text(json.dumps({"id": "one", "cwd": "/work/p"}))
         body = self.home / "one.messages.jsonl"
@@ -156,7 +156,7 @@ class IncrementalReaderTests(unittest.TestCase):
         self.assertFalse(third.pending_tail)
 
     def test_inline_snapshot_strips_images_and_uses_fixed_project(self):
-        reader = self.reader("agent-core")
+        reader = self.reader("tess-core")
         self.ds.project = "assistant"
         path = self.home / "one.json"
         path.write_text(json.dumps({"id": "one", "cwd": "/random/cwd", "messages": [

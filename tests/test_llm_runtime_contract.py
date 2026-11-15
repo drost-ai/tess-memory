@@ -3,7 +3,7 @@ import json
 from dataclasses import replace
 from tess_core import SessionOptions
 from tess_memory.config import Config
-from tess_memory.llm import AgentCoreBackend
+from tess_memory.llm import EngineBackend
 
 
 def test_real_runtime_completion(tmp_path):
@@ -13,8 +13,8 @@ def test_real_runtime_completion(tmp_path):
     registry.write_text(json.dumps({'providerProfiles': {'synthetic': {
         'kind': 'openai', 'apiMode': 'chat_completions', 'defaultModel': 'synthetic',
         'auth': {'kind': 'none'}}}}))
-    backend = AgentCoreBackend(Config(data_dir=root / 'data', provider_registry=registry,
-                                     agent_core_profile='synthetic'), probe=False)
+    backend = EngineBackend(Config(data_dir=root / 'data', provider_registry=registry,
+                                     engine_profile='synthetic'), probe=False)
     calls = []
     async def send(request):
         calls.append(request)

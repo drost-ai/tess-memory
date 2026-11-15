@@ -20,7 +20,7 @@ from . import retrieval
 from .config import Config
 from .distill import _extract_json
 from .embed import Embedder
-from .llm import AgentCoreBackend
+from .llm import EngineBackend
 from .store import MemoryStore
 from .freshness import session_freshness
 
@@ -141,7 +141,7 @@ def _render_pool(pool: dict[str, dict], snippet: int = 450) -> str:
     return "\n".join(lines)
 
 
-def _action_json(llm: AgentCoreBackend, prompt: str) -> dict:
+def _action_json(llm: EngineBackend, prompt: str) -> dict:
     raw = llm.complete(system=AGENT_SYSTEM, prompt=prompt)
     try:
         return _extract_json(raw)
@@ -158,7 +158,7 @@ def agentic_search(
     cfg: Config,
     store: MemoryStore,
     embedder: Embedder,
-    llm: AgentCoreBackend,
+    llm: EngineBackend,
     query: str,
     project: str | None = None,
     level: str | None = None,

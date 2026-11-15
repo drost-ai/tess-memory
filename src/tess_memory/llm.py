@@ -1,6 +1,6 @@
-"""LLM backend for distillation: the agent-core-python runtime, in-process.
+"""LLM backend for distillation: the tess-core runtime, in-process.
 
-agent-core-python is a declared dependency. The installed runtime is imported
+tess-core is a declared dependency. The installed runtime is imported
 without mutating sys.path; each completion runs one non-interactive
 turn through the engine's runtime and session manager — start_runtime
 (daemon-less) → sessions.open → run_turn → stop — with a real system prompt,
@@ -30,8 +30,8 @@ class RefusalError(RuntimeError):
     """The model's safety classifiers declined the request (stopReason=refusal)."""
 
 
-class AgentCoreBackend:
-    name = "agent-core"
+class EngineBackend:
+    name = "tess-core"
 
     @classmethod
     def for_role(cls, cfg: Config, role: str, *, probe: bool = False):
@@ -41,34 +41,34 @@ class AgentCoreBackend:
                        model=cfg.search_model or None,
                        reasoning_effort=cfg.search_reasoning_effort or None)
         if role == "fallback":
-            if not cfg.agent_core_fallback_profile:
+            if not cfg.engine_fallback_profile:
                 raise ValueError("No fallback provider profile is configured")
-            return cls(cfg, probe=probe, profile=cfg.agent_core_fallback_profile,
-                       model=cfg.agent_core_fallback_model or None,
-                       reasoning_effort=cfg.agent_core_fallback_reasoning_effort or None)
+            return cls(cfg, probe=probe, profile=cfg.engine_fallback_profile,
+                       model=cfg.engine_fallback_model or None,
+                       reasoning_effort=cfg.engine_fallback_reasoning_effort or None)
         raise ValueError(f"Unknown backend role: {role}")
 
     def __init__(self, cfg: Config, probe: bool = True, profile: str | None = None,
                  *, model: str | None = None, reasoning_effort: str | None = None) -> None:
-        self._model = model or (cfg.agent_core_model if profile is None else "")
-        self._reasoning_effort = reasoning_effort or (cfg.agent_core_reasoning_effort if profile is None else "")
-        self._codex_auth_path = cfg.agent_core_codex_auth_path
+        self._model = model or (cfg.engine_model if profile is None else "")
+        self._reasoning_effort = reasoning_effort or (cfg.engine_reasoning_effort if profile is None else "")
+        self._codex_auth_path = cfg.engine_codex_auth_path
         try:
-            # The engine's runtime and session manager (agent-core-python
+            # The engine's runtime and session manager (tess-core
             # v1-refactor, 2026-09): one daemon-less runtime per call, one
             # session, one turn. The dict payload contract is unchanged.
             from tess_core import SessionOptions, start_runtime
         except ImportError as e:
-            raise RuntimeError(f"agent-core import failed: {e}") from e
+            raise RuntimeError(f"tess-core import failed: {e}") from e
         self._start_runtime = start_runtime
         self._session_options = SessionOptions
         from tess_core.config import ProviderRegistry
-        registry_path = cfg.provider_registry or cfg.agent_core_settings
+        registry_path = cfg.provider_registry or cfg.engine_settings
         if registry_path is None:
             raise ValueError("Explicit provider registry is required")
         self._registry = ProviderRegistry(registry_path)
         self._settings_path = str(registry_path)
-        self._profile = profile or cfg.agent_core_profile
+        self._profile = profile or cfg.engine_profile
         if not self._profile:
             raise ValueError("An explicit provider profile is required")
         selected_profile = self._registry.resolve_profile(self._profile, model=self._model or None)
@@ -76,11 +76,11 @@ class AgentCoreBackend:
         scratch_root = ((cfg.runtime_home / "run" / "memory") if cfg.runtime_home is not None
                         else cfg.data_dir / "run")
         scratch_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._workdir = tempfile.mkdtemp(prefix="tess-memory-ac-", dir=scratch_root)
+        self._workdir = tempfile.mkdtemp(prefix="tess-memory-engine-", dir=scratch_root)
         self._runtime_home = Path(self._workdir) / "runtime"
         atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
         settings_document = {"providerProfiles": {self._profile: selected_profile}}
-        self.name = f"agent-core:{self._profile}"
+        self.name = f"tess-core:{self._profile}"
         if self._model:
             self.name += f":{self._model}"
         if self._reasoning_effort:
@@ -198,14 +198,14 @@ class AgentCoreBackend:
             raise RefusalError(
                 f"model refused ({self.name}): {text[:200] or 'no output'}"
             )
-        # agent-core reports a missing credential as a normal end_turn text
+        # tess-core reports a missing credential as a normal end_turn text
         # completion, so match only when the error IS the output — a substring
         # check would reject digests that merely quote the phrase.
         if text.lstrip().startswith("No credential is configured"):
-            raise RuntimeError(f"agent-core: {text[:200]}")
+            raise RuntimeError(f"tess-core: {text[:200]}")
         if result.get("stopReason") in ("error", "failed", "cancelled", "permission_denied"):
             raise RuntimeError(
-                f"agent-core turn failed: {result.get('error') or text[:200] or result.get('stopReason')}"
+                f"tess-core turn failed: {result.get('error') or text[:200] or result.get('stopReason')}"
             )
         return text
 
@@ -213,7 +213,7 @@ class AgentCoreBackend:
         """Pin this store's Codex account without changing process-wide env.
 
         Read on every call so ordinary credential refreshes take effect. Apply
-        after agent-core config resolution to override both CODEX_HOME defaults
+        after tess-core config resolution to override both CODEX_HOME defaults
         and inherited auth-path settings; retain its native secret-reference
         handling. Non-Codex providers keep their own credentials.
         """
@@ -238,7 +238,7 @@ class AgentCoreBackend:
     def _apply_reasoning_override(self, config: dict) -> dict:
         """Preserve explicit effort on compatible Chat Completions backends.
 
-        agent-core currently omits reasoning_effort on non-OpenAI hosts and
+        tess-core currently omits reasoning_effort on non-OpenAI hosts and
         normalizes non-GPT model effort. Its requestOptions escape hatch lets
         this instance send the explicitly requested native value. Calls with
         no override (including existing integrations) are unchanged.

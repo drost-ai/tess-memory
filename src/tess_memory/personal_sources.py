@@ -46,7 +46,7 @@ def selected_sources(cfg):
             raise PersonalError('invalid', 'explicit the host source_paths required')
         roots = sorted({Path(x).expanduser().resolve() for x in p.source_paths})
         return [DataStore('personal-tess-' + digest(str(root))[:16], root,
-                          type='agent-core', project=p.agent, exclude=[]) for root in roots]
+                          type='tess-core', project=p.agent, exclude=[]) for root in roots]
     selected = [d for d in cfg.data_stores if d.name in p.source_names]
     if not selected or set(p.source_names) - {d.name for d in selected}:
         raise PersonalError('invalid', 'personal extraction requires an explicit valid source allowlist')

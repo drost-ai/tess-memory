@@ -31,7 +31,7 @@ class CorpusAuditTests(unittest.TestCase):
         meta.write_text(json.dumps({"id": "one", "cwd": "/work/one"}))
         body = home / "one.messages.jsonl"
         body.write_text('{"type":"message","message":{"role":"user","content":"private content"}}\n')
-        cfg = Config(data_stores=[DataStore("test", home, type="agent-core")], data_dir=self.root / "memory")
+        cfg = Config(data_stores=[DataStore("test", home, type="tess-core")], data_dir=self.root / "memory")
         result = inventory(cfg)
         self.assertFalse(cfg.data_dir.exists())
         self.assertEqual(result["sources"][0]["source_bytes"], meta.stat().st_size + body.stat().st_size)

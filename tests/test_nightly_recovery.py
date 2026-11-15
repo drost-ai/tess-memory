@@ -39,7 +39,7 @@ class CalendarRecoveryTests(unittest.TestCase):
             cfg=load_service(config_path);queue=WorkQueue(cfg)
             run=queue.claim(instance='codex',kind='recovery',explicit=True)
             backend=Backend()
-            with mock.patch('tess_memory.scheduler.AgentCoreBackend',return_value=backend), \
+            with mock.patch('tess_memory.scheduler.EngineBackend',return_value=backend), \
                  mock.patch('tess_memory.scheduler.make_embedder',return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path,run['id']),0)
             result=queue.get_run(run['id']);stats=json.loads(result['stats'])
@@ -145,7 +145,7 @@ class IncompleteRecoveryTests(unittest.TestCase):
             if i==1:append(sidecar,{'type':'commit','message_count':2})
         with sidecar.open('ab') as f:f.write(b'{"incomplete":')
         before=sidecar.read_bytes()
-        ds=DataStore('tess',home,type='agent-core')
+        ds=DataStore('tess',home,type='tess-core')
         cfg=replace(self.cfg,data_stores=[ds],recovery_ingestion=True)
         snapshot=CompletedSourceReader(cfg).read(ds,path,'p')
         self.assertEqual([t.text for t in snapshot.transcript.turns],['evidence 0','evidence 1','evidence 2'])

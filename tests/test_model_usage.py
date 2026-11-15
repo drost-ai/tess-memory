@@ -36,7 +36,7 @@ class ModelUsageTests(unittest.TestCase):
                 db.execute('INSERT INTO call_receipts VALUES(?,?,?,?,?,?,?)', ('old', 'store', 'p', 'model', 10, 11, 'success'))
                 db.execute('INSERT INTO model_requests VALUES(?,?,?,?,?,?,?,?)',
                            ('old', 'run', 'incremental//native', 'segment stable', 'hash', 10, 0, '{}'))
-            for adapter in ['agent-core', 'claude-code', 'transcript', '']:
+            for adapter in ['tess-core', 'claude-code', 'transcript', '']:
                 result = gate.source_receipts(instance='store', source_type=adapter, session_id='native', since=10, until=20)
                 self.assertEqual([r['id'] for r in result['receipts']], ['old'])
     def test_wire_details_survive_normalization_and_failed_attempt_usage_is_not_doubled(self):

@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Callable
 
 from .checkpoints import DistillationCheckpoints
-from .llm import AgentCoreBackend
+from .llm import EngineBackend
 from .source_activity import SourceNotQuiet
 
 MEMORY_KINDS = ("decision", "fact", "preference", "solution", "problem", "task_state")
@@ -231,7 +231,7 @@ def _extract_json(text: str) -> dict:
     raise ValueError("unbalanced JSON in LLM output")
 
 
-def _call_json(llm: AgentCoreBackend, system: str, prompt: str) -> dict:
+def _call_json(llm: EngineBackend, system: str, prompt: str) -> dict:
     raw = llm.complete(system=system, prompt=prompt)
     try:
         return _extract_json(raw)
@@ -597,7 +597,7 @@ class SessionCalls:
 
 
 def distill_session(
-    llm: AgentCoreBackend, project: str, date: str, transcript_text: str,
+    llm: EngineBackend, project: str, date: str, transcript_text: str,
     min_importance: float = 0.25,
     *, calls: SessionCalls | None = None,
 ) -> SessionDigest:
@@ -635,7 +635,7 @@ def segment_text(
 
 
 def distill_session_segmented(
-    llm: AgentCoreBackend,
+    llm: EngineBackend,
     project: str,
     date: str,
     transcript_text: str,
@@ -708,7 +708,7 @@ def distill_session_segmented(
 
 
 def distill_profile(
-    llm: AgentCoreBackend, project: str, cwd: str, session_lines: list[str]
+    llm: EngineBackend, project: str, cwd: str, session_lines: list[str]
 ) -> str:
     data = _call_json(
         llm,
@@ -719,7 +719,7 @@ def distill_profile(
 
 
 def distill_week(
-    llm: AgentCoreBackend, week_start: str, session_lines: list[str]
+    llm: EngineBackend, week_start: str, session_lines: list[str]
 ) -> str:
     data = _call_json(
         llm,

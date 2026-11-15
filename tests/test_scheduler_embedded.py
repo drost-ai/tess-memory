@@ -33,13 +33,13 @@ def test_embedded_store_overlay_preserves_canonical_providers_and_is_metadata_on
     manifest, registry, settings = embedded
     before = manifest.read_bytes()
     monkeypatch.setenv('TESS_MEMORY_DATA', '/poison/destination')
-    monkeypatch.setenv('TESS_MEMORY_AC_PROFILE', 'poison')
+    monkeypatch.setenv('TESS_MEMORY_ENGINE_PROFILE', 'poison')
     monkeypatch.setenv('TESS_MEMORY_EMBED_PROVIDER', 'poison')
     monkeypatch.setattr(scheduler, 'MemoryStore', Mock(side_effect=AssertionError('no store during parse')))
     cfg = scheduler._scheduled_config(settings)
     assert cfg.embedded and cfg.runtime_home == tmp_path
     assert cfg.provider_registry == registry
-    assert cfg.agent_core_profile == cfg.search_profile == 'synthetic'
+    assert cfg.engine_profile == cfg.search_profile == 'synthetic'
     assert cfg.embed_provider == 'local'
     assert cfg.data_dir == tmp_path / 'selected-destination'
     assert [(store.name, store.path) for store in cfg.data_stores] == [('selected', tmp_path / 'selected-source')]
@@ -62,12 +62,11 @@ def test_embedded_store_cannot_override_provider_or_personal_policy(embedded, ex
 def test_worker_environment_preserves_only_explicit_memory_manifest(embedded, monkeypatch):
     manifest, _, _ = embedded
     monkeypatch.setenv('PYTHONPATH', '/poison/source')
-    monkeypatch.setenv('AGENT_CORE_PATH', '/poison/engine')
     monkeypatch.setenv('TESS_MEMORY_DATA', '/poison/store')
     env = scheduler._worker_environment()
     assert env['TESS_MEMORY_CONFIG'] == str(manifest)
     assert {key for key in env if key.startswith('TESS_MEMORY_')} == {'TESS_MEMORY_CONFIG'}
-    assert 'PYTHONPATH' not in env and 'AGENT_CORE_PATH' not in env
+    assert 'PYTHONPATH' not in env
     assert os.environ['PYTHONPATH'] == '/poison/source'
 
 

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import agent_core
+from . import engine_sessions
 from .config import Config, DataStore
 from .store import MemoryStore
 from .transcript import discover_transcripts, parse_transcript
@@ -44,21 +44,23 @@ def source_adapter(ds: DataStore, *, codex_catalog=None) -> tuple[list[Discovere
     """
     if ds.type == "claude-code":
         return discover_transcripts(ds.path, ds.exclude), parse_transcript
-    if ds.type == "agent-core":
-        return agent_core.discover_sessions(ds.path, ds.exclude, ds.skip_copies_of), agent_core.parse_session
+    if ds.type == "tess-core":
+        return engine_sessions.discover_sessions(ds.path, ds.exclude, ds.skip_copies_of), engine_sessions.parse_session
     if ds.type == "transcript":
         return (
-            agent_core.discover_transcript_files(ds.path, ds.exclude, ds.project, ds.skip_copies_of),
-            agent_core.parse_transcript_file,
+            engine_sessions.discover_transcript_files(ds.path, ds.exclude, ds.project, ds.skip_copies_of),
+            engine_sessions.parse_transcript_file,
         )
     if ds.type == "codex":
         from .codex import CodexCatalog
 
         catalog = codex_catalog or CodexCatalog([ds])
         return catalog.discover(ds), catalog.parse
+    if ds.type == "agent" + "-core":
+        raise ValueError(f"data_store '{ds.name}': type 'agent" + "-core' is now 'tess-core'; update the store's settings")
     raise ValueError(
         f"data_store '{ds.name}': unknown type '{ds.type}' "
-        "(implemented: 'claude-code', 'agent-core', 'transcript', 'codex')"
+        "(implemented: 'claude-code', 'tess-core', 'transcript', 'codex')"
     )
 
 

@@ -179,7 +179,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
             self.assertIn("cache migration", server.search_memory("cache", project="atlas", mode="static"))
         with mock.patch.object(server, "CONFIG", Config(search_agent=False)), \
              mock.patch.object(server, "_search_llm", None), \
-             mock.patch("tess_memory.llm.AgentCoreBackend.for_role", return_value="backend") as build:
+             mock.patch("tess_memory.llm.EngineBackend.for_role", return_value="backend") as build:
             self.assertIsNone(server._get_search_llm())
             build.assert_not_called()
             self.assertEqual(server._get_search_llm(force=True), "backend")
@@ -191,7 +191,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
              mock.patch("tess_memory.store.MemoryStore", return_value=self.store), \
              mock.patch.object(self.store, "close"), \
              mock.patch("tess_memory.embed.make_embedder", side_effect=AssertionError("embedder initialized")), \
-             mock.patch("tess_memory.llm.AgentCoreBackend.for_role", side_effect=AssertionError("LLM initialized")), \
+             mock.patch("tess_memory.llm.EngineBackend.for_role", side_effect=AssertionError("LLM initialized")), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             args = argparse.Namespace(project="missing", level=None, limit=None, query="anything", static=False)
             self.assertEqual(cli.cmd_search(args), 0)

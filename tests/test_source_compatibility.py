@@ -56,7 +56,7 @@ class ExistingSourceCompatibilityTests(unittest.TestCase):
                         (directory / "full-transcript-with-tools.jsonl").write_text("".join(json.dumps({"type": "message", **m}) + "\n" for m in content))
                     if flavor == "python-sidecar":
                         (source / "session.messages.jsonl").write_text("".join(json.dumps({"type": "message", "message_index": i, "message": m}) + "\n" for i, m in enumerate(content)))
-                    ds = DataStore("tess", source, type="agent-core", project="assistant" if flavor == "python-sidecar" else None)
+                    ds = DataStore("tess", source, type="tess-core", project="assistant" if flavor == "python-sidecar" else None)
                     expected = "assistant" if flavor == "python-sidecar" else "-work-tess"
                 cfg = Config(data_stores=[ds], data_dir=root / "memory")
                 store = MemoryStore(cfg.db_path)
@@ -85,3 +85,29 @@ class ExistingSourceCompatibilityTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RenamedSourceTypeTests(unittest.TestCase):
+    """Stores written while engine sessions were called 'agent-core' sources."""
+
+    def test_opening_a_store_relabels_recorded_engine_sources(self):
+        import sqlite3, tempfile
+        from tess_memory.store import MemoryStore
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "memory.db"
+            store = MemoryStore(path)
+            store.record_source(path="/s/one.json", session_id="one", project="p", source_type="tess-core",
+                                signature="sig", status="indexed", state={"indexed_units": ["u"]}, now=1.0, indexed=True)
+            store.commit(); store.close()
+            with sqlite3.connect(path) as db:
+                db.execute("UPDATE ingest_sources SET source_type='agent' || '-core'")
+            store = MemoryStore(path)
+            self.assertEqual([r[0] for r in store.db.execute("SELECT source_type FROM ingest_sources")], ["tess-core"])
+            self.assertEqual(json.loads(store.source_progress("/s/one.json")["state"]), {"indexed_units": ["u"]})
+            store.close()
+
+    def test_a_settings_file_with_the_old_type_says_what_to_change(self):
+        from tess_memory.attribution import source_adapter
+        from tess_memory.config import DataStore
+        with self.assertRaisesRegex(ValueError, "is now 'tess-core'"):
+            source_adapter(DataStore("tess", Path("/nowhere"), type="agent" + "-core"))

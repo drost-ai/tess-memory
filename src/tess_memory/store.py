@@ -306,6 +306,10 @@ class MemoryStore:
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_sessions_owner ON sessions(owner_user)")
         if self.db.execute("PRAGMA user_version").fetchone()[0] < USERS_SCHEMA_VERSION:
             self.db.execute(f"PRAGMA user_version={USERS_SCHEMA_VERSION}")
+        # Engine sessions were recorded as 'agent-core' sources before the
+        # engine was named tess-core. Only the label changes.
+        if self.db.execute("SELECT 1 FROM ingest_sources WHERE source_type='agent-core' LIMIT 1").fetchone():
+            self.db.execute("UPDATE ingest_sources SET source_type='tess-core' WHERE source_type='agent-core'")
 
     # ---------------- file tracking ----------------
 

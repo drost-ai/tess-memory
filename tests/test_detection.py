@@ -24,8 +24,7 @@ class DetectionTests(unittest.TestCase):
             settings = root/'memory.toml'
             settings.write_text(f'[[data_stores]]\nname="codex"\ntype="codex"\npath="{home}"\n'
                                 f'[storage]\ndata_dir="{root / "memory"}"\n'
-                                '[ingest]\nquiet_seconds=900\n'
-                                '[llm]\nagent_core_path="/nonexistent/no-provider-needed"\n')
+                                '[ingest]\nquiet_seconds=900\n')
             service_path = root/'service.toml'
             service_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\n'
                                     f'name="codex"\nsettings="{settings}"\nenabled=true\n')
@@ -37,7 +36,7 @@ class DetectionTests(unittest.TestCase):
             store = MemoryStore(cfg.db_path)
             try:
                 with ingestion_lock(cfg.data_dir), store.write_transaction(), \
-                     mock.patch('tess_memory.scheduler.AgentCoreBackend', side_effect=AssertionError('detector must not construct models')), \
+                     mock.patch('tess_memory.scheduler.EngineBackend', side_effect=AssertionError('detector must not construct models')), \
                      mock.patch('tess_memory.scheduler.make_embedder', side_effect=AssertionError('detector must not construct embeddings')):
                     store.set_meta('writer-is-active', 'preserve me')
                     first = queue.claim(instance='codex', kind='detect', explicit=True)
@@ -67,7 +66,7 @@ class DetectionTests(unittest.TestCase):
             meta.write_text(json.dumps({'id': 'one', 'cwd': '/project'}))
             body = home/'one.messages.jsonl'
             body.write_text('')
-            cfg = Config(data_stores=[DataStore('tess', home, type='agent-core')], data_dir=root/'db', quiet_seconds=900)
+            cfg = Config(data_stores=[DataStore('tess', home, type='tess-core')], data_dir=root/'db', quiet_seconds=900)
             detect_sources(cfg)
             meta_stat = meta.stat()
             append(body, {'type': 'message', 'message': {'role': 'user', 'content': 'new data'}})

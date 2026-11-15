@@ -58,6 +58,7 @@ def detect_sources(cfg, *, stop_requested=lambda: False):
                 started REAL NOT NULL, finished REAL NOT NULL, sources INTEGER NOT NULL,
                 new_sources INTEGER NOT NULL, changed_sources INTEGER NOT NULL, errors INTEGER NOT NULL);
         ''')
+        db.execute("UPDATE sources SET source_type='tess-core' WHERE source_type='agent-core'")
         with db:
             old = dict(db.execute('SELECT path,signature FROM sources'))
             new = sum(key not in old for key in rows)

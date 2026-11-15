@@ -34,20 +34,20 @@ class CopiedSourcesTest(unittest.TestCase):
     def names(self, ds: DataStore) -> list[str]:
         return [path.name for path, _project, _parent in source_adapter(ds)[0]]
 
-    def test_agent_core_copies_are_skipped_and_native_sessions_kept(self) -> None:
+    def test_tess_core_copies_are_skipped_and_native_sessions_kept(self) -> None:
         write_meta(self.origin, "copied")
         write_meta(self.origin, "resumed")
         write_meta(self.home, "copied")
         write_meta(self.home, "resumed", cwd="/work/tess/continued")  # changed after the copy: still a copy
         write_meta(self.home, "native")
-        ds = DataStore(name="tess", path=self.home, type="agent-core", project="assistant", skip_copies_of=[self.origin])
+        ds = DataStore(name="tess", path=self.home, type="tess-core", project="assistant", skip_copies_of=[self.origin])
         self.assertEqual(self.names(ds), ["native.json"])
 
     def test_without_the_option_every_session_is_discovered(self) -> None:
         write_meta(self.origin, "copied")
         write_meta(self.home, "copied")
         write_meta(self.home, "native")
-        ds = DataStore(name="tess", path=self.home, type="agent-core", project="assistant")
+        ds = DataStore(name="tess", path=self.home, type="tess-core", project="assistant")
         self.assertEqual(self.names(ds), ["copied.json", "native.json"])
 
     def test_transcript_copies_are_skipped(self) -> None:
@@ -61,9 +61,9 @@ class CopiedSourcesTest(unittest.TestCase):
     def test_settings_parse_and_expand_the_origins(self) -> None:
         settings = self.root / "settings.toml"
         settings.write_text(
-            '[[data_stores]]\nname = "tess"\ntype = "agent-core"\npath = "~/tess/sessions"\n'
+            '[[data_stores]]\nname = "tess"\ntype = "tess-core"\npath = "~/tess/sessions"\n'
             'project = "assistant"\nskip_copies_of = ["~/otherhost/sessions"]\n\n'
-            '[[data_stores]]\nname = "plain"\ntype = "agent-core"\npath = "~/plain"\n',
+            '[[data_stores]]\nname = "plain"\ntype = "tess-core"\npath = "~/plain"\n',
             encoding="utf-8",
         )
         with mock.patch.dict(os.environ, {"HOME": str(self.root), "TESS_MEMORY_SETTINGS": str(settings)}):

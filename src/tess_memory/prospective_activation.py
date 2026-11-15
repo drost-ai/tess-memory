@@ -1,6 +1,6 @@
 """Scoped prospective opt-in fences; deliberately independent of extraction progress.
 
-Only canonical agent-core sources currently have trustworthy position adapters.
+Only canonical tess-core sources currently have trustworthy position adapters.
 Other backends fail closed. Source files and their timestamps are trusted local
 inputs, not cryptographically authenticated events. A hostile filesystem writer
 can forge them. Validation must occur in the caller's publication transaction;
@@ -79,8 +79,8 @@ class ProspectiveActivation:
 
     def _selected(self):
         sources = selected_sources(self.config)
-        if any(ds.type != 'agent-core' for ds in sources):
-            raise PersonalError('unsupported_source', 'prospective activation requires canonical agent-core positions')
+        if any(ds.type != 'tess-core' for ds in sources):
+            raise PersonalError('unsupported_source', 'prospective activation requires canonical tess-core positions')
         for ds in sources:
             if not ds.path.is_dir():
                 raise PersonalError('stale_source', 'configured source root is unavailable')
@@ -233,7 +233,7 @@ class ProspectiveActivation:
             raise PersonalError('invalid_evidence', 'source unavailable or changed')
         md = json.loads(row['metadata'])
         ds = next((d for d in self._selected() if d.name == md.get('source_store')), None)
-        if ds is None or md.get('source_type') != 'agent-core':
+        if ds is None or md.get('source_type') != 'tess-core':
             raise PersonalError('invalid_evidence', 'source backend is not selected')
         return row, md, ds
 

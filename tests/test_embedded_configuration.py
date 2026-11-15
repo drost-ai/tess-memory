@@ -14,7 +14,7 @@ from unittest.mock import patch, Mock
 
 from tess_memory.config import DataStore, Config, load_config, load_manifest, parse_manifest, validate_config
 from tess_memory.embed import make_embedder
-from tess_memory.llm import AgentCoreBackend
+from tess_memory.llm import EngineBackend
 
 
 class EmbeddedConfigurationTests(unittest.TestCase):
@@ -22,7 +22,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as root:
             directory = Path(root) / "uninitialized-store"
             with self.assertRaisesRegex(ValueError, "registry"):
-                AgentCoreBackend(Config(data_dir=directory), probe=False)
+                EngineBackend(Config(data_dir=directory), probe=False)
             self.assertFalse(directory.exists())
 
     def setUp(self):
@@ -104,13 +104,13 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         with patch.dict(os.environ, {'HOME': str(self.root / 'empty-user-home'),
                                     'TESS_MEMORY_DATA': '/ambient/data',
                                     'TESS_MEMORY_SOURCE': '/ambient/source',
-                                    'TESS_MEMORY_AC_PROFILE': 'ambient',
+                                    'TESS_MEMORY_ENGINE_PROFILE': 'ambient',
                                     'TESS_MEMORY_USER': 'ambient',
-                                    'TESS_MEMORY_AC_SETTINGS': '/ambient/settings'}):
+                                    'TESS_MEMORY_ENGINE_SETTINGS': '/ambient/settings'}):
             cfg = self.load()
         self.assertEqual(cfg.data_dir, self.home / 'memory')
         self.assertEqual(cfg.data_stores, [])
-        self.assertEqual(cfg.agent_core_profile, 'distill')
+        self.assertEqual(cfg.engine_profile, 'distill')
         self.assertIsNone(cfg.identity_user)
         self.assertFalse(list(self.home.iterdir()))
         self.assertIsNone(cfg.provenance_ledger)
@@ -120,7 +120,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         self.envelope['config'].update({
             'storage': {'data_dir': 'state/memory'},
             'data_stores': [{'path': 'sessions', 'skip_copies_of': ['copies']},
-                            {'path': absolute, 'type': 'agent-core'}],
+                            {'path': absolute, 'type': 'tess-core'}],
             'personal': {'source_mode': 'native', 'source_paths': ['sessions', absolute]},
         })
         self.envelope['provenance_ledger'] = str(self.root / 'elsewhere' / 'ledger.db')
@@ -185,11 +185,11 @@ class EmbeddedConfigurationTests(unittest.TestCase):
 
     def test_metadata_validation_never_constructs_clients_models_or_stores(self):
         self.envelope['config']['llm']['fallback_profile'] = 'fallback'
-        with (patch('tess_memory.llm.AgentCoreBackend', side_effect=AssertionError('client')),
+        with (patch('tess_memory.llm.EngineBackend', side_effect=AssertionError('client')),
              patch('tess_memory.embed.make_embedder', side_effect=AssertionError('embedder')),
              patch('tess_memory.store.MemoryStore', side_effect=AssertionError('store'))):
             cfg = self.load()
-        self.assertEqual(cfg.agent_core_fallback_profile, 'fallback')
+        self.assertEqual(cfg.engine_fallback_profile, 'fallback')
         self.assertFalse(list(self.home.iterdir()))
 
     def test_explicit_manifest_environment_selection(self):
@@ -203,8 +203,8 @@ class EmbeddedConfigurationTests(unittest.TestCase):
             load_config()
         settings = self.root / 'standalone.toml'
         settings.write_text('[llm]\nprofile = "chosen"\n')
-        self.assertEqual(load_config(settings).agent_core_profile, 'chosen')
-        self.assertEqual(Config().agent_core_profile, '')
+        self.assertEqual(load_config(settings).engine_profile, 'chosen')
+        self.assertEqual(Config().engine_profile, '')
         self.assertEqual(Config().data_stores, [])
 
     def test_local_model_downloads_explicit_only(self):
@@ -224,7 +224,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
 
     def test_backend_metadata_and_registry_change_guard(self):
         cfg = self.load()
-        backend = AgentCoreBackend(cfg, probe=False)
+        backend = EngineBackend(cfg, probe=False)
         backend.verify_profile()
         self.profiles['distill']['defaultModel'] = 'changed-model'
         self.registry.write_text(yaml.safe_dump({'profiles': self.profiles}))
@@ -239,7 +239,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         validate_config(cfg)
         self.assertFalse(cfg.personal.enabled)
         self.assertIsNone(cfg.personal.native_creation_ledger)
-        self.assertEqual(cfg.agent_core_profile, '')
+        self.assertEqual(cfg.engine_profile, '')
         self.assertEqual(cfg.search_profile, '')
         self.assertFalse(list(self.home.iterdir()))
 
@@ -280,7 +280,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         cfg = self.load()
         with patch.dict(os.environ, {}, clear=True):
             validate_config(cfg, roles={'distillation'})
-        self.assertEqual(cfg.agent_core_codex_auth_path, auth)
+        self.assertEqual(cfg.engine_codex_auth_path, auth)
         auth.write_text('{}')
         with patch.dict(os.environ, {'UNRELATED_ACCOUNT': 'must-not-fallback'}):
             with self.assertRaises(ValueError):
@@ -293,7 +293,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         self.addCleanup(store.close)
         store.assert_embedder('existing-model:2d')
         store.record_source(path='/explicit/session.jsonl', session_id='session', project='project',
-                            source_type='agent-core', signature='stable', status='indexed',
+                            source_type='tess-core', signature='stable', status='indexed',
                             state={'cursor': 42, 'offset': 1234}, now=1, indexed=True)
         store.db.commit()
         before = list(store.db.iterdump())
@@ -337,8 +337,8 @@ path = "/explicit/archive/sessions"
         with patch.dict(os.environ, {}, clear=True), chdir(neutral):
             cfg = load_config(settings)
         self.assertEqual(cfg.data_dir, directory / 'state')
-        self.assertEqual(cfg.agent_core_settings, directory / 'providers.yaml')
-        self.assertEqual(cfg.agent_core_codex_auth_path, directory / 'credentials/auth.json')
+        self.assertEqual(cfg.engine_settings, directory / 'providers.yaml')
+        self.assertEqual(cfg.engine_codex_auth_path, directory / 'credentials/auth.json')
         self.assertEqual(cfg.embed_model, str(directory / 'models/cached'))
         self.assertEqual(cfg.data_stores[0].path, directory / 'sessions')
         self.assertEqual(cfg.data_stores[0].skip_copies_of, [directory / 'copies', Path('/explicit/copies')])
@@ -346,21 +346,13 @@ path = "/explicit/archive/sessions"
         self.assertEqual(cfg.personal.source_paths, (str(directory / 'sessions'), absolute_source))
         self.assertEqual(cfg.personal.native_creation_ledger, str(directory / 'state/ledger.db'))
         overrides = {'TESS_MEMORY_SETTINGS': str(settings), 'TESS_MEMORY_DATA': 'overridden-state',
-                     'TESS_MEMORY_SOURCE': 'overridden-sessions', 'TESS_MEMORY_AC_SETTINGS': 'override-providers.yaml'}
+                     'TESS_MEMORY_SOURCE': 'overridden-sessions', 'TESS_MEMORY_ENGINE_SETTINGS': 'override-providers.yaml'}
         with patch.dict(os.environ, overrides, clear=True), chdir(neutral):
             overridden = load_config()
         self.assertEqual(overridden.data_dir, directory / 'overridden-state')
         self.assertEqual(overridden.data_stores[0].path, directory / 'overridden-sessions')
-        self.assertEqual(overridden.agent_core_settings, directory / 'override-providers.yaml')
+        self.assertEqual(overridden.engine_settings, directory / 'override-providers.yaml')
         self.assertFalse(list(neutral.iterdir()))
-
-    def test_standalone_checkout_overrides_warn_without_echoing_paths(self):
-        settings = self.root / 'legacy.toml'
-        settings.write_text('[llm]\nagent_core_path="/private-legacy-checkout"\n')
-        with patch.dict(os.environ, {'AGENT_CORE_PATH': '/private-environment-checkout'}), \
-             self.assertWarns(FutureWarning) as caught:
-            load_config(settings)
-        self.assertNotIn('/private', str(caught.warning))
 
     def test_remote_embedding_failure_never_falls_back_to_local(self):
         self.envelope['config']['embedding']['provider'] = 'distill'
@@ -381,11 +373,11 @@ path = "/explicit/archive/sessions"
     def test_store_overlay_is_explicit_and_cannot_replace_runtime_authority(self):
         self.load()
         store = self.home / 'store.toml'
-        store.write_text('[storage]\ndata_dir = "stores/one"\n[[data_stores]]\npath = "sessions"\ntype = "agent-core"\n')
+        store.write_text('[storage]\ndata_dir = "stores/one"\n[[data_stores]]\npath = "sessions"\ntype = "tess-core"\n')
         cfg = load_manifest(self.manifest, store_settings='store.toml')
         self.assertEqual(cfg.data_dir, self.home / 'stores/one')
         self.assertEqual(cfg.data_stores[0].path, self.home / 'sessions')
-        self.assertEqual(cfg.agent_core_profile, 'distill')
+        self.assertEqual(cfg.engine_profile, 'distill')
         self.assertEqual(cfg.provider_registry, self.registry)
         self.assertFalse(cfg.data_dir.exists())
         for invalid in ('[llm]\nprofile="other"', '[personal]\nenabled=true',

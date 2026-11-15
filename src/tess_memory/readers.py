@@ -7,7 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
-from .agent_core import _append_message_turns, _session_cwd
+from .engine_sessions import _append_message_turns, _session_cwd
 from .codex import CodexCatalog, ParseReport, _strip_images
 from .config import Config, DataStore
 from .source_journal import SourceJournal, SourceReadError, SourceRevision
@@ -147,7 +147,7 @@ class CompletedSourceReader:
         policy = f"messages-v{READER_VERSION}:origin-v2:{ds.type}"
         revisions = []
         meta = {}
-        if ds.type == "agent-core":
+        if ds.type == "tess-core":
             # Persist only fields relevant to identity, attribution and body
             # selection; runtime/provider metadata is not model input.
             def metadata(value):
@@ -305,4 +305,4 @@ class CompletedSourceReader:
             st = None
         return ParsedSource(st, ends, kinds, revisions, pending, source_signature(path, ds, self.cfg),
                             sum(r.parsed_records for r in revisions), notes,
-                            [rec.get('_source_message_index',i) for i,rec in enumerate(records)] if ds.type=='agent-core' else None)
+                            [rec.get('_source_message_index',i) for i,rec in enumerate(records)] if ds.type=='tess-core' else None)

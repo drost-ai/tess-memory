@@ -18,7 +18,7 @@ import time
 from .config import load_config, load_manifest
 from .embed import LocalEmbedder, OpenAICompatEmbedder, make_embedder
 from .ingest import ingest
-from .llm import AgentCoreBackend
+from .llm import EngineBackend
 from .locks import IngestionBusy
 from .provider_limits import LimitedBackend, ModelBudget, ProviderGate, process_alive, provider_key
 from .scheduler_config import load_service
@@ -165,12 +165,12 @@ def worker(config_path: Path, run_id: str) -> int:
             key = provider_key(cfg, cfg.embed_provider)
             embedder.request_guard = lambda: gate.acquire(key, 'embedding', owner=run_id, instance=scheduled.name,
                                                          check_admission=check_source_admission)
-        primary = AgentCoreBackend(cfg, probe=False)
-        llm = LimitedBackend(primary, gate, budget, provider=provider_key(cfg, cfg.agent_core_profile), owner=run_id, instance=scheduled.name)
+        primary = EngineBackend(cfg, probe=False)
+        llm = LimitedBackend(primary, gate, budget, provider=provider_key(cfg, cfg.engine_profile), owner=run_id, instance=scheduled.name)
         fallback = None
-        if cfg.agent_core_fallback_profile:
-            backend = AgentCoreBackend.for_role(cfg, 'fallback')
-            fallback = LimitedBackend(backend, gate, budget, provider=provider_key(cfg, cfg.agent_core_fallback_profile), owner=run_id, instance=scheduled.name)
+        if cfg.engine_fallback_profile:
+            backend = EngineBackend.for_role(cfg, 'fallback')
+            fallback = LimitedBackend(backend, gate, budget, provider=provider_key(cfg, cfg.engine_fallback_profile), owner=run_id, instance=scheduled.name)
         levels = None if is_ingest else ('project',) if run['kind'] == 'profiles' else ('digest',)
         if levels:
             store.bootstrap_aggregate_tracking(levels)
@@ -229,7 +229,7 @@ def _worker_environment():
     # memory overrides or source-checkout import paths. Credential refs remain
     # ordinary environment variables and are never copied into reports.
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith('TESS_MEMORY_') and k not in {'AGENT_CORE_PATH', 'PYTHONPATH'}}
+           if not k.startswith('TESS_MEMORY_') and k != 'PYTHONPATH'}
     manifest = os.environ.get('TESS_MEMORY_CONFIG')
     if manifest:
         if not Path(manifest).is_absolute():

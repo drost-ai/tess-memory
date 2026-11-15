@@ -16,7 +16,7 @@ def source_namespace(source_type, session_id):
     """One formatter for ingestion, warming and source-level receipt audits."""
     if source_type == 'codex':
         session_id = 'codex:' + session_id.removeprefix('codex:')
-    elif source_type in {'claude-code', 'agent-core', 'transcript'}:
+    elif source_type in {'claude-code', 'tess-core', 'transcript'}:
         # Existing generic-reader checkpoints use an empty source-type field.
         # Accept configured adapter names in audits without renaming paid keys.
         source_type = ''

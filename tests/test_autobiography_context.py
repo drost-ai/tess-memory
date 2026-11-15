@@ -98,7 +98,7 @@ class OrientationTests(unittest.TestCase):
         # Orientation needs no retrieval, ranked search, model, or evidence access.
         with patch.object(self.store, '_get', side_effect=AssertionError('body read')), \
              patch.object(self.store, 'search', side_effect=AssertionError('search called')), \
-             patch('tess_memory.llm.AgentCoreBackend.complete', side_effect=AssertionError('model called')) as model:
+             patch('tess_memory.llm.EngineBackend.complete', side_effect=AssertionError('model called')) as model:
 
             result = personal_context(self.store)
             model.assert_not_called()

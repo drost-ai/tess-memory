@@ -122,7 +122,7 @@ class ProjectAttributionTests(unittest.TestCase):
                 """
 [[data_stores]]
 name = "runtime"
-type = "agent-core"
+type = "tess-core"
 path = "~/runtime/sessions"
 project = "assistant"
 
@@ -605,7 +605,7 @@ class PlanningAndCliPolicyTests(unittest.TestCase):
     def test_reconcile_cli_has_no_model_or_embedder_construction(self) -> None:
         source = inspect.getsource(cli.cmd_reconcile_attribution)
         self.assertNotIn("make_embedder", source)
-        self.assertNotIn("AgentCoreBackend", source)
+        self.assertNotIn("EngineBackend", source)
         self.assertNotIn(".llm", source)
         self.assertNotIn(".embed", source)
         parser_args = argparse.Namespace(dry_run=True)

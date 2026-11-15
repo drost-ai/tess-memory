@@ -72,7 +72,7 @@ def order_session_parts(store, rows):
                 pass
         if key not in fallback:
             try:
-                fallback[key] = source_activity(Path(md['path']), md.get('source_type', 'agent-core')).modified_at
+                fallback[key] = source_activity(Path(md['path']), md.get('source_type', 'tess-core')).modified_at
             except (OSError, KeyError, ValueError):
                 fallback[key] = 0
     def priority(row):
@@ -103,7 +103,7 @@ class PersonalExtraction:
         report={'enabled':True,'scanned':0,'baselined':0,'quiet':0,'errors':[],'parts':[]}
         found=[]
         for ds in selected:
-            if ds.type=='agent-core':
+            if ds.type=='tess-core':
                 # Personal scope is configured independently of a coding cwd.
                 # Include malformed metadata in the visible retry ledger too.
                 found.extend((ds,path,ds.project or cfg.personal.agent,None) for path in ds.path.glob('*.json'))
@@ -139,9 +139,9 @@ class PersonalExtraction:
                         raise PersonalError('invalid','source resolves outside configured root')
                     require_quiet(path,ds.type,0 if strict else max(0,cfg.quiet_seconds))
                     origin={'kind':'unknown','channel':None,'channel_evidence':'not_recorded_in_canonical_session'}
-                    if ds.type=='agent-core':
+                    if ds.type=='tess-core':
                         metadata=json.loads(path.read_text())
-                        from .agent_core import _session_cwd
+                        from .engine_sessions import _session_cwd
                         from .config import to_slug
                         if ds.is_excluded(to_slug(_session_cwd(metadata) or cfg.personal.agent)):continue
                         origin=source_origin(metadata)

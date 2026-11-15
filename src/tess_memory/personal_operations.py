@@ -284,7 +284,7 @@ class PersonalOperations:
             db=None;telemetry_error=False
             try:
                 db=self.gate.connect()
-                details={**clean_usage,'requested_model':row['model'],'runtime':'agent-core-python','usage_complete':all(k in clean_usage for k in ('input_tokens','output_tokens'))}
+                details={**clean_usage,'requested_model':row['model'],'runtime':'tess-core','usage_complete':all(k in clean_usage for k in ('input_tokens','output_tokens'))}
                 with db:db.execute('INSERT OR REPLACE INTO model_requests VALUES(?,?,?,?,?,?,?,?)',
                     (call_id,operation_id,'personal/'+s.principal.agent,op['kind'],row['cache_key'],0,0,canonical(details)))
             except Exception:telemetry_error=True

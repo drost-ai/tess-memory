@@ -102,9 +102,9 @@ def _get_search_llm(force: bool = False):
         return None
     if _search_llm is None:
         try:
-            from .llm import AgentCoreBackend
+            from .llm import EngineBackend
 
-            _search_llm = AgentCoreBackend.for_role(CONFIG, "search")
+            _search_llm = EngineBackend.for_role(CONFIG, "search")
         except Exception as e:  # noqa: BLE001 — degrade to static search
             import sys
 

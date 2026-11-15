@@ -296,7 +296,7 @@ class FiniteBatchTests(unittest.TestCase):
                                 '[embedding]\nprovider="local"\n')
             # Exercise installed modules without synthetic import-path shims.
             env = {key: value for key, value in os.environ.items()
-                   if key not in {'PYTHONPATH', 'AGENT_CORE_PATH'}
+                   if key != 'PYTHONPATH'
                    and not key.startswith('TESS_MEMORY_')}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nenabled=true\npoll_seconds=14400\nsettings="{settings}"\n')

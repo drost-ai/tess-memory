@@ -1,6 +1,6 @@
-"""Parse agent-core runtime sessions into clean conversations.
+"""Parse tess-core runtime sessions into clean conversations.
 
-agent-core has three runtime implementations (TypeScript, Rust, Python) that
+tess-core has three runtime implementations (TypeScript, Rust, Python) that
 share one session convention: a flat sessions/ directory holding a
 <uuid>.json metadata document per session, plus a <uuid>/ directory with
 full-transcript-with-tools.jsonl. The runtimes diverge in where message
@@ -178,10 +178,10 @@ def discover_transcript_files(
     """Discovery for type="transcript": bare per-session JSONL files.
 
     A directory of root-level <name>.jsonl files, each one whole session in
-    the agent-core transcript message format, with no metadata document —
+    the tess-core transcript message format, with no metadata document —
     e.g. sessions exported from another agent. With no cwd to derive a slug
     from, every session lands in the store's configured `project` (required).
-    Sidecars (*.messages.jsonl) belong to native agent-core sessions that may
+    Sidecars (*.messages.jsonl) belong to native tess-core sessions that may
     share the directory and are skipped, as are per-session subdirectories.
     """
     if not project:

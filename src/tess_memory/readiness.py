@@ -100,7 +100,7 @@ def _embedding(cfg: Config, embedder: Any, load_embedder: Callable[[Config], Any
 
 
 def _processing(cfg: Config) -> tuple[bool, str]:
-    if not cfg.agent_core_profile:
+    if not cfg.engine_profile:
         return False, "no_processing_profile"
     try:
         validate_config(cfg, roles={"distillation"})

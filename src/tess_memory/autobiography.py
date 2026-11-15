@@ -157,6 +157,11 @@ class AutobiographyStore:
                     raise PersonalError('schema_version', 'unsupported personal schema version')
                 from .autobiography_lifecycle import install
                 install(self.db)
+                # Engine sessions were labelled 'agent-core' before the engine
+                # was named tess-core. Only the label in the metadata changes.
+                old, new = '"source_type":"agent-core"', '"source_type":"tess-core"'
+                if self.db.execute("SELECT 1 FROM autobio_sources WHERE instr(metadata,?) LIMIT 1", (old,)).fetchone():
+                    self.db.execute("UPDATE autobio_sources SET metadata=replace(metadata,?,?) WHERE instr(metadata,?)", (old, new, old))
                 scope = canonical([principal.owner, principal.agent])
                 bound = self.db.execute("SELECT value FROM autobio_meta WHERE key='scope'").fetchone()
                 if bound and bound[0] != scope:

@@ -51,7 +51,7 @@ class TranscriptReaderTests(unittest.TestCase):
             with self.assertRaises(PermissionError):
                 resolve_transcript_path(outside, [allowed])
 
-    def test_resolver_prefers_agent_core_full_transcript(self) -> None:
+    def test_resolver_prefers_tess_core_full_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             metadata = root / "abc.json"

@@ -25,7 +25,10 @@ DEFAULT_EXCLUDES = [
     "-private-var-folders*",
     "-private-tmp-claude*",
     "*tess-memory-llm*",
-    "*tess-memory-ac*",
+    "*tess-memory-engine*",
+    # The same scratch directories under the names earlier versions gave them.
+    "*agentic-memory-llm*",
+    "*agentic-memory-ac*",
 ]
 
 
@@ -59,7 +62,7 @@ class DataStore:
     exclude: list[str] = field(default_factory=lambda: list(DEFAULT_EXCLUDES))
     # Optional stable logical project assigned after source-cwd discovery and
     # exclusion. Required for bare "transcript" stores; for claude-code and
-    # agent-core it overrides cwd-derived attribution while cwd stays as
+    # tess-core it overrides cwd-derived attribution while cwd stays as
     # provenance on the session row.
     project: str | None = None
     # Whose sessions these are and the team they work in (Epic U); unset =
@@ -135,21 +138,20 @@ class Config:
     # -- storage -------------------------------------------------------------
     data_dir: Path = field(default_factory=lambda: Path("~/.tess-memory").expanduser())
 
-    # -- llm (agent-core-python is the only backend; provider, model, and
+    # -- llm (tess-core is the only backend; provider, model, and
     #    credentials are governed by its own configuration) ------------------
     # Legacy standalone mapping retained, but no checkout is discovered/imported.
-    agent_core_path: Path | None = None
-    agent_core_settings: Path | None = None
-    agent_core_profile: str = ""
+    engine_settings: Path | None = None
+    engine_profile: str = ""
     # Empty overrides preserve the selected profile's model/effort defaults.
-    agent_core_model: str = ""
-    agent_core_reasoning_effort: str = ""
-    agent_core_codex_auth_path: Path | None = None  # credential routing only; excluded from cache identity
+    engine_model: str = ""
+    engine_reasoning_effort: str = ""
+    engine_codex_auth_path: Path | None = None  # credential routing only; excluded from cache identity
     # Profile to retry with when the primary model refuses (safety classifiers).
     # Empty = no fallback; refused sessions degrade to extractive digests.
-    agent_core_fallback_profile: str = ""
-    agent_core_fallback_model: str = ""
-    agent_core_fallback_reasoning_effort: str = ""
+    engine_fallback_profile: str = ""
+    engine_fallback_model: str = ""
+    engine_fallback_reasoning_effort: str = ""
     llm_workers: int = 4
 
     # -- search agent (bounded agentic retrieval inside search_memory) -------
@@ -283,8 +285,8 @@ def load_config(path: Path | None = None) -> Config:
     if isinstance(auth_path, str) and auth_path.strip():
         llm["codex_auth_path"] = str(anchored(auth_path.strip()))
     cfg = _parse_config(raw)
-    for attribute in ("data_dir", "agent_core_settings", "provider_registry",
-                      "agent_core_codex_auth_path", "agent_core_path",
+    for attribute in ("data_dir", "engine_settings", "provider_registry",
+                      "engine_codex_auth_path",
                       "provenance_ledger", "provenance_source_root"):
         value = getattr(cfg, attribute)
         if value is not None:
@@ -356,21 +358,18 @@ def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
     if "data_dir" in storage:
         cfg.data_dir = _path(storage["data_dir"])
 
-    if "agent_core_path" in llm:
-        warnings.warn("llm.agent_core_path is deprecated and ignored; install agent-core as a dependency", FutureWarning, stacklevel=2)
-        cfg.agent_core_path = _path(llm["agent_core_path"])
     if "settings" in llm:
-        cfg.agent_core_settings = _path(llm["settings"])
+        cfg.engine_settings = _path(llm["settings"])
     if 'codex_auth_path' in llm:
         value = llm['codex_auth_path']
         if not isinstance(value, str) or not value.strip():
             raise ValueError('[llm] codex_auth_path must be a nonempty absolute path')
-        cfg.agent_core_codex_auth_path = _path(value.strip())
-        if not cfg.agent_core_codex_auth_path.is_absolute():
+        cfg.engine_codex_auth_path = _path(value.strip())
+        if not cfg.engine_codex_auth_path.is_absolute():
             raise ValueError('[llm] codex_auth_path must be absolute after expanding ~')
-    cfg.agent_core_profile = llm.get("profile", cfg.agent_core_profile)
-    cfg.agent_core_fallback_profile = llm.get(
-        "fallback_profile", cfg.agent_core_fallback_profile
+    cfg.engine_profile = llm.get("profile", cfg.engine_profile)
+    cfg.engine_fallback_profile = llm.get(
+        "fallback_profile", cfg.engine_fallback_profile
     )
     cfg.llm_workers = int(llm.get("workers", cfg.llm_workers))
 
@@ -378,9 +377,9 @@ def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
     cfg.search_profile = search.get("profile", cfg.search_profile)
     for section_name, section, fields in (
         ("llm", llm, {
-            "model": "agent_core_model", "reasoning_effort": "agent_core_reasoning_effort",
-            "fallback_model": "agent_core_fallback_model",
-            "fallback_reasoning_effort": "agent_core_fallback_reasoning_effort",
+            "model": "engine_model", "reasoning_effort": "engine_reasoning_effort",
+            "fallback_model": "engine_fallback_model",
+            "fallback_reasoning_effort": "engine_fallback_reasoning_effort",
         }),
         ("search", search, {"model": "search_model", "reasoning_effort": "search_reasoning_effort"}),
     ):
@@ -482,15 +481,12 @@ def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
         ]
     if os.environ.get("TESS_MEMORY_DATA"):
         cfg.data_dir = _path(os.environ["TESS_MEMORY_DATA"])
-    if os.environ.get("AGENT_CORE_PATH"):
-        warnings.warn("AGENT_CORE_PATH is deprecated and ignored; install agent-core as a dependency", FutureWarning, stacklevel=2)
-        cfg.agent_core_path = _path(os.environ["AGENT_CORE_PATH"])
-    if os.environ.get("TESS_MEMORY_AC_SETTINGS"):
-        cfg.agent_core_settings = _path(os.environ["TESS_MEMORY_AC_SETTINGS"])
-    if os.environ.get("TESS_MEMORY_AC_PROFILE"):
-        cfg.agent_core_profile = os.environ["TESS_MEMORY_AC_PROFILE"]
-    if os.environ.get("TESS_MEMORY_AC_FALLBACK_PROFILE"):
-        cfg.agent_core_fallback_profile = os.environ["TESS_MEMORY_AC_FALLBACK_PROFILE"]
+    if os.environ.get("TESS_MEMORY_ENGINE_SETTINGS"):
+        cfg.engine_settings = _path(os.environ["TESS_MEMORY_ENGINE_SETTINGS"])
+    if os.environ.get("TESS_MEMORY_ENGINE_PROFILE"):
+        cfg.engine_profile = os.environ["TESS_MEMORY_ENGINE_PROFILE"]
+    if os.environ.get("TESS_MEMORY_ENGINE_FALLBACK_PROFILE"):
+        cfg.engine_fallback_profile = os.environ["TESS_MEMORY_ENGINE_FALLBACK_PROFILE"]
     if os.environ.get("TESS_MEMORY_SEARCH_AGENT"):
         cfg.search_agent = os.environ["TESS_MEMORY_SEARCH_AGENT"].lower() not in (
             "0", "false", "no", "off",
@@ -593,8 +589,8 @@ def parse_manifest(document: Mapping[str, object], *, store_settings: Path | str
     storage = raw.setdefault("storage", {})
     storage["data_dir"] = product_path(storage.get("data_dir", "memory"))
     llm = raw.setdefault("llm", {})
-    if "settings" in llm or "agent_core_path" in llm:
-        raise ValueError("Embedded llm uses the envelope provider_registry, not legacy settings/path")
+    if "settings" in llm:
+        raise ValueError("Embedded llm uses the envelope provider_registry, not a settings file")
     if "codex_auth_path" in llm:
         llm["codex_auth_path"] = product_path(llm["codex_auth_path"])
     personal = raw.setdefault("personal", {})
@@ -674,7 +670,7 @@ def parse_manifest(document: Mapping[str, object], *, store_settings: Path | str
     cfg.embedded = True
     cfg.runtime_home = home
     cfg.provider_registry = registry
-    cfg.agent_core_settings = registry
+    cfg.engine_settings = registry
     cfg.provenance_ledger = ledger
     cfg.provenance_source_root = provenance_root
     return cfg
@@ -689,21 +685,21 @@ def validate_config(cfg: Config, *, validate_credentials: bool = True, roles: se
     All explicitly supplied profiles are metadata-validated regardless.
     """
     from tess_core.config import ProviderRegistry
-    registry_path = cfg.provider_registry or cfg.agent_core_settings
+    registry_path = cfg.provider_registry or cfg.engine_settings
     if registry_path is None:
         raise ValueError("Explicit provider registry is required")
     providers = ProviderRegistry(registry_path)
-    selected = {"distillation": cfg.agent_core_profile, "search": cfg.search_profile,
-                "fallback": cfg.agent_core_fallback_profile, "embedding": cfg.embed_provider}
-    models = {"distillation": cfg.agent_core_model, "search": cfg.search_model,
-              "fallback": cfg.agent_core_fallback_model, "embedding": ""}
+    selected = {"distillation": cfg.engine_profile, "search": cfg.search_profile,
+                "fallback": cfg.engine_fallback_profile, "embedding": cfg.embed_provider}
+    models = {"distillation": cfg.engine_model, "search": cfg.search_model,
+              "fallback": cfg.engine_fallback_model, "embedding": ""}
     if roles is None:
         roles = {"embedding"}
         if cfg.search_agent:
             roles.add("search")
         if cfg.data_stores or cfg.personal.extraction_enabled or cfg.personal.dream_enabled:
             roles.add("distillation")
-            if cfg.agent_core_fallback_profile:
+            if cfg.engine_fallback_profile:
                 roles.add("fallback")
     if roles - set(selected):
         raise ValueError("Unknown provider validation role")
@@ -718,7 +714,7 @@ def validate_config(cfg: Config, *, validate_credentials: bool = True, roles: se
             raise ValueError(f"Explicit {role} profile is required")
         if validate_credentials:
             profile_metadata = providers.resolve_profile(profile, model=models[role] or None)
-            codex_path = (cfg.agent_core_codex_auth_path
+            codex_path = (cfg.engine_codex_auth_path
                           if role != "embedding" and profile_metadata.get("apiMode") == "codex" else None)
             providers.resolve_auth(profile, codex_auth_path=codex_path)
 
