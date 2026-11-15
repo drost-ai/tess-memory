@@ -1256,7 +1256,7 @@ wheels = [
 [[package]]
 name = "tess-core"
 version = "0.1.0"
-source = { git = "ssh://git@github.com/drost-ai/tess-core.git?rev=ca5f419de4073d2aa272fd46614c6f79170ef6d7#ca5f419de4073d2aa272fd46614c6f79170ef6d7" }
+source = { git = "ssh://git@github.com/drost-ai/tess-core.git?rev=d90c51c9c93bd9f7985fb0cea4060c7de598ce31#d90c51c9c93bd9f7985fb0cea4060c7de598ce31" }
 
 [[package]]
 name = "tess-memory"
@@ -1285,7 +1285,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.2" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "sentence-transformers", specifier = ">=3.0" },
-    { name = "tess-core", git = "ssh://git@github.com/drost-ai/tess-core.git?rev=ca5f419de4073d2aa272fd46614c6f79170ef6d7" },
+    { name = "tess-core", git = "ssh://git@github.com/drost-ai/tess-core.git?rev=d90c51c9c93bd9f7985fb0cea4060c7de598ce31" },
 ]
 
 [package.metadata.requires-dev]
