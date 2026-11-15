@@ -631,7 +631,7 @@ def parse_manifest(document: Mapping[str, object], *, store_settings: Path | str
     fallback = llm.get("fallback_profile", "")
     if not isinstance(fallback, str):
         raise ValueError("[llm] fallback_profile must be a string")
-    from agent_core.config import ProviderRegistry
+    from tess_core.config import ProviderRegistry
     providers = ProviderRegistry(registry)
     for section, name, model in (
         ("llm", llm.get("profile"), llm.get("model") or None),
@@ -688,7 +688,7 @@ def validate_config(cfg: Config, *, validate_credentials: bool = True, roles: se
     Hosts may explicitly restrict active roles to jobs they will actually run.
     All explicitly supplied profiles are metadata-validated regardless.
     """
-    from agent_core.config import ProviderRegistry
+    from tess_core.config import ProviderRegistry
     registry_path = cfg.provider_registry or cfg.agent_core_settings
     if registry_path is None:
         raise ValueError("Explicit provider registry is required")

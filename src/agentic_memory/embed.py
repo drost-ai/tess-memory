@@ -92,7 +92,7 @@ class LocalEmbedder(Embedder):
 class OpenAICompatEmbedder(Embedder):
     def __init__(self, settings_path, profile_name: str, dims: int, batch_size: int = 64):
         self.batch_size = batch_size
-        from agent_core.config import ProviderRegistry
+        from tess_core.config import ProviderRegistry
         if settings_path is None:
             raise ValueError("Explicit provider registry is required")
         registry = ProviderRegistry(settings_path)

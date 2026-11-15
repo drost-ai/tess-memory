@@ -1,7 +1,7 @@
 """Exercise the real public runtime through a synthetic provider send only."""
 import json
 from dataclasses import replace
-from agent_core import SessionOptions
+from tess_core import SessionOptions
 from agentic_memory.config import Config
 from agentic_memory.llm import AgentCoreBackend
 

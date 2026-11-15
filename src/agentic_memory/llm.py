@@ -57,12 +57,12 @@ class AgentCoreBackend:
             # The engine's runtime and session manager (agent-core-python
             # v1-refactor, 2026-09): one daemon-less runtime per call, one
             # session, one turn. The dict payload contract is unchanged.
-            from agent_core import SessionOptions, start_runtime
+            from tess_core import SessionOptions, start_runtime
         except ImportError as e:
             raise RuntimeError(f"agent-core import failed: {e}") from e
         self._start_runtime = start_runtime
         self._session_options = SessionOptions
-        from agent_core.config import ProviderRegistry
+        from tess_core.config import ProviderRegistry
         registry_path = cfg.provider_registry or cfg.agent_core_settings
         if registry_path is None:
             raise ValueError("Explicit provider registry is required")
@@ -111,7 +111,7 @@ class AgentCoreBackend:
             self._probe()
 
     def verify_profile(self):
-        from agent_core.config import ProviderRegistry
+        from tess_core.config import ProviderRegistry
         profile = ProviderRegistry(self._settings_path).resolve_profile(self._profile, model=self._model or None)
         document = {"providerProfiles": {self._profile: profile}}
         if self._cache_identity_for(document) != self.cache_identity:
@@ -219,7 +219,7 @@ class AgentCoreBackend:
         """
         if not self._codex_auth_path or config.get('provider') != 'openai' or config.get('openaiApiMode') != 'codex':
             return config
-        from agent_core.config import resolve_codex_auth, resolve_provider_secret
+        from tess_core.config import resolve_codex_auth, resolve_provider_secret
         path = str(self._codex_auth_path)
         token = await resolve_codex_auth(path)
         if not token:

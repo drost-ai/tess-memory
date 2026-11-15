@@ -30,7 +30,7 @@ def process_alive(pid: int | None) -> bool:
 
 def provider_key(cfg, profile_name: str) -> str:
     if getattr(cfg, 'provider_registry', None) is not None:
-        from agent_core.config import ProviderRegistry
+        from tess_core.config import ProviderRegistry
         profile = ProviderRegistry(cfg.provider_registry).resolve_profile(profile_name)
     else:
         with cfg.agent_core_settings.open() as handle:

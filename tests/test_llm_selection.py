@@ -13,10 +13,10 @@ from unittest import mock
 
 from agentic_memory.config import Config, load_config
 from agentic_memory.llm import AgentCoreBackend
-from agent_core.config import ProviderRegistry
-from agent_core import SessionOptions as EngineSessionOptions
-from agent_core.config.parsing import _parse_setting_sources, _load_merged_settings
-engine_settings = importlib.import_module("agent_core.storage.settings")
+from tess_core.config import ProviderRegistry
+from tess_core import SessionOptions as EngineSessionOptions
+from tess_core.config.parsing import _parse_setting_sources, _load_merged_settings
+engine_settings = importlib.import_module("tess_core.storage.settings")
 
 
 class ModelSelectionTests(unittest.TestCase):
@@ -24,7 +24,7 @@ class ModelSelectionTests(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.root = Path(self.tmp.name)
-        (self.root / "agent_core").mkdir()
+        (self.root / "tess_core").mkdir()
         self.settings = self.root / "settings.json"
         self.profiles = {
             "codex": {"kind": "openai", "apiMode": "codex", "defaultModel": "profile-default", "reasoningEffort": "high"},
@@ -104,13 +104,13 @@ class ModelSelectionTests(unittest.TestCase):
 
         self.run_agent_prompt_hook = run_agent_prompt
         self.fake_runtime_factory = FakeRuntime
-        runtime = types.ModuleType("agent_core")
+        runtime = types.ModuleType("tess_core")
         runtime.resolve_config = resolve_config
         runtime.resolve_session = resolve_session
         runtime.run_agent_prompt = run_agent_prompt
         runtime.start_runtime = start_runtime
         runtime.SessionOptions = SessionOptions
-        patches = [mock.patch.dict(sys.modules, {"agent_core": runtime}),
+        patches = [mock.patch.dict(sys.modules, {"tess_core": runtime}),
                    mock.patch.object(sys, "path", list(sys.path)),
                    mock.patch("agentic_memory.llm.tempfile.mkdtemp", return_value=str(self.root)),
                    mock.patch("agentic_memory.llm.atexit.register")]
@@ -286,8 +286,8 @@ class ModelSelectionTests(unittest.TestCase):
                   'openaiCodexAuthPath': '/different/auth.json',
                   'compactionProviderProfile': {'profile': {'kind': 'openai', 'apiMode': 'codex'}, 'openaiToken': 'old'}}
         before = copy.deepcopy(source)
-        with mock.patch.object(sys.modules["agent_core.config"], "resolve_codex_auth", loader), \
-             mock.patch.object(sys.modules["agent_core.config"], "resolve_provider_secret", normalizer):
+        with mock.patch.object(sys.modules["tess_core.config"], "resolve_codex_auth", loader), \
+             mock.patch.object(sys.modules["tess_core.config"], "resolve_provider_secret", normalizer):
             for role, expected in [('primary', 'first-token'), ('search', 'refreshed-token')]:
                 backend = AgentCoreBackend(self.cfg, probe=False) if role == 'primary' else AgentCoreBackend.for_role(self.cfg, role)
                 if role == 'primary':
@@ -309,8 +309,8 @@ class ModelSelectionTests(unittest.TestCase):
         self.cfg.agent_core_codex_auth_path = self.root / 'missing-auth.json'
         loader = mock.AsyncMock(return_value=None)
         normalizer = mock.AsyncMock()
-        with mock.patch.object(sys.modules["agent_core.config"], "resolve_codex_auth", loader), \
-             mock.patch.object(sys.modules["agent_core.config"], "resolve_provider_secret", normalizer):
+        with mock.patch.object(sys.modules["tess_core.config"], "resolve_codex_auth", loader), \
+             mock.patch.object(sys.modules["tess_core.config"], "resolve_provider_secret", normalizer):
             backend = AgentCoreBackend(self.cfg, probe=False)
             with self.assertRaisesRegex(RuntimeError, 'no usable credential'):
                 asyncio.run(backend._apply_codex_auth_override({'provider': 'openai', 'openaiApiMode': 'codex', 'openaiToken': 'old'}))
