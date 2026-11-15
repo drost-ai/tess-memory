@@ -300,7 +300,27 @@ def load_config(path: Path | None = None) -> Config:
                                                    if cfg.personal.native_creation_ledger else None))
     if cfg.embed_model.startswith(("./", "../", "~")):
         cfg.embed_model = str(anchored(cfg.embed_model))
+    _export_settings_environment(cfg.engine_settings)
     return cfg
+
+
+def _export_settings_environment(settings) -> None:
+    """A standalone settings file may carry an ``env`` map (the Tess CLI's
+    settings.json does): the credentials its provider profiles name by
+    ``auth.envVar``. Make them visible to the engine and the embedder for this
+    process and its workers, never overriding the real environment. An
+    embedded host passes credentials itself and is not affected."""
+    if settings is None:
+        return
+    try:
+        document = json.loads(Path(settings).read_text())
+    except (OSError, ValueError):
+        return  # a YAML registry, or a file the registry will report on
+    values = document.get("env") if isinstance(document, dict) else None
+    if isinstance(values, dict):
+        for name, value in values.items():
+            if isinstance(name, str) and isinstance(value, str) and value:
+                os.environ.setdefault(name, value)
 
 
 def _parse_config(raw: dict, *, embedded: bool = False) -> Config:

@@ -28,3 +28,6 @@ packages = ["src/tess_memory"]
 # local checkout over the pin after syncing: uv pip install -e ../../agents/tess-core
 [tool.uv.sources]
 tess-core = { git = "ssh://git@github.com/drost-ai/tess-core.git", rev = "ca5f419de4073d2aa272fd46614c6f79170ef6d7" }
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-xdist>=3.6", "pyyaml>=6"]

@@ -354,6 +354,26 @@ path = "/explicit/archive/sessions"
         self.assertEqual(overridden.engine_settings, directory / 'override-providers.yaml')
         self.assertFalse(list(neutral.iterdir()))
 
+    def test_standalone_settings_env_supplies_credentials_without_overriding_the_environment(self):
+        registry = self.root / 'cli-settings.json'
+        registry.write_text(json.dumps({'env': {'STANDALONE_ONLY_KEY': 'from-file', 'ALREADY_SET_KEY': 'from-file', 'NOT_A_STRING': 7},
+                                        'providerProfiles': {}}))
+        settings = self.root / 'standalone.toml'
+        settings.write_text(f'[llm]\nsettings = "{registry}"\n[storage]\ndata_dir = "{self.root / "standalone-data"}"\n')
+        with patch.dict(os.environ, {'ALREADY_SET_KEY': 'from-environment'}, clear=False):
+            os.environ.pop('STANDALONE_ONLY_KEY', None)
+            load_config(settings)
+            self.assertEqual(os.environ['STANDALONE_ONLY_KEY'], 'from-file')
+            self.assertEqual(os.environ['ALREADY_SET_KEY'], 'from-environment')
+            self.assertNotIn('NOT_A_STRING', os.environ)
+            os.environ.pop('STANDALONE_ONLY_KEY', None)
+
+    def test_an_embedded_host_supplies_its_own_credentials(self):
+        registry_env = 'EMBEDDED_MUST_NOT_APPEAR'
+        os.environ.pop(registry_env, None)
+        self.load()
+        self.assertNotIn(registry_env, os.environ)
+
     def test_remote_embedding_failure_never_falls_back_to_local(self):
         self.envelope['config']['embedding']['provider'] = 'distill'
         cfg = self.load()
