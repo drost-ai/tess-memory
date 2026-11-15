@@ -58,6 +58,54 @@ class FiniteBatchTests(unittest.TestCase):
             code = batch.ingest_once(self.config.path)
         return code, json.loads(output.getvalue())
 
+    def backlog(self, left, *, fail_at=None):
+        """A worker for store 'a' that reports ``left`` sources waiting, pass by pass."""
+        left = list(left)
+        def spawn(config, run):
+            self.runs.append(run)
+            child = subprocess.Popen([sys.executable, '-c', 'raise SystemExit(0)'], start_new_session=True,
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.children.append(child)
+            queue = WorkQueue(config)
+            queue.start(run['id'], child.pid)
+            waiting = left.pop(0) if run['instance'] == 'a' and left else 0
+            failed = fail_at is not None and len(self.runs) == fail_at
+            queue.finish(run['id'], outcome='error' if failed else 'success', remaining=waiting,
+                         stats={'sources_remaining': waiting, 'sources_pending': 0, 'source_text': 'PRIVATE'})
+            return child
+        return spawn
+
+    def catch_up(self, spawn):
+        output = io.StringIO()
+        self.config = replace(self.config, backlog_seconds=0.05)
+        with patch.object(batch, 'load_service', return_value=self.config), \
+             patch.object(batch, 'spawn_worker', side_effect=spawn), redirect_stdout(output):
+            code = batch.ingest_once(self.config.path, until_caught_up=True)
+        return code, json.loads(output.getvalue())
+
+    def test_catch_up_runs_passes_until_no_source_waits(self):
+        code, report = self.catch_up(self.backlog([40, 24, 8, 0]))
+        self.assertEqual((code, report['outcome'], report['remaining']), (0, 'success', 0))
+        self.assertEqual([r['instance'] for r in self.runs], ['a', 'b', 'a', 'a', 'a'])  # b had nothing waiting
+        self.assertEqual(report['passes'], 4)
+        self.assertEqual(report['counts']['success'], 5)
+        self.assertNotIn('PRIVATE', json.dumps(report))
+
+    def test_without_catch_up_a_backlog_still_runs_one_pass(self):
+        code, report = self.invoke(self.backlog([40, 24, 8, 0]))
+        self.assertEqual((code, report['passes'], len(self.runs)), (0, 1, 2))
+
+    def test_catch_up_stops_at_a_failed_pass_and_says_what_waits(self):
+        code, report = self.catch_up(self.backlog([40, 24, 8, 0], fail_at=3))
+        self.assertEqual((code, report['outcome']), (1, 'error'))
+        self.assertEqual(len(self.runs), 3)
+
+    def test_catch_up_stops_when_passes_stop_making_progress(self):
+        code, report = self.catch_up(self.backlog([40] * 50))
+        self.assertEqual(code, 0)
+        self.assertEqual(report['remaining'], 40)
+        self.assertEqual(report['passes'], batch.STALLED_PASSES + 1)
+
     def test_one_batch_all_enabled_serial_capacity_no_backlog_loop(self):
         code, report = self.invoke()
         self.assertEqual(code, 0)
@@ -239,25 +287,24 @@ class FiniteBatchTests(unittest.TestCase):
             root = Path(tmp).resolve()
             source = root / 'source'
             source.mkdir()
-            core = root / 'core' / 'agent_core'
-            core.mkdir(parents=True)
-            core.joinpath('__init__.py').write_text('''async def unused(*a, **k):
-    raise AssertionError("empty ingestion must not invoke a provider")
-resolve_config = resolve_session = run_agent_prompt = start_runtime = unused
-SessionOptions = unused
-''')
             providers = root / 'providers.json'
-            providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused'}}}))
+            providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused', 'auth': {'kind': 'none'}}}}))
             settings = root / 'memory.toml'
             settings.write_text(f'[[data_stores]]\nname="empty"\npath="{source}"\n'
                                 f'[storage]\ndata_dir="{root / "memory"}"\n'
-                                f'[llm]\nprofile="offline"\nagent_core_path="{core.parent}"\nsettings="{providers}"\n'
+                                f'[llm]\nprofile="offline"\nsettings="{providers}"\n'
                                 '[embedding]\nprovider="local"\n')
+            # Exercise installed modules without synthetic import-path shims.
+            env = {key: value for key, value in os.environ.items()
+                   if key not in {'PYTHONPATH', 'AGENT_CORE_PATH'}
+                   and not key.startswith('AGENTIC_MEMORY_')}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nenabled=true\npoll_seconds=14400\nsettings="{settings}"\n')
             result = subprocess.run([sys.executable, '-m', 'agentic_memory.cli', 'scheduler', '--config', str(config_path),
-                                     'ingest-once'], capture_output=True, text=True, timeout=15)
-            self.assertEqual(result.returncode, 0, result.stderr)
+                                     'ingest-once'], capture_output=True, text=True, timeout=15, env=env)
+            diagnostic = result.stderr + result.stdout + ''.join(
+                path.read_text() for path in (root / 'service' / 'runs').glob('*.log'))
+            self.assertEqual(result.returncode, 0, diagnostic)
             completed = json.loads(result.stdout)
             self.assertEqual(completed['outcome'], 'success')
             self.assertEqual(completed['counts'], {'success': 1})
@@ -266,7 +313,7 @@ SessionOptions = unused
             # Repeating immediately must not obey the old four-hour poll.
             again = subprocess.run([sys.executable, '-u', '-m', 'agentic_memory.cli', 'scheduler',
                                     '--config', str(config_path), 'ingest-once'],
-                                   capture_output=True, text=True, timeout=15)
+                                   capture_output=True, text=True, timeout=15, env=env)
             self.assertEqual(again.returncode, 0, again.stderr)
             self.assertEqual(json.loads(again.stdout)['counts'], {'success': 1})
 

@@ -12,7 +12,23 @@ import threading
 import time
 import uuid
 
-SEGMENTS = ('Self', 'Principles', 'People', 'Relationships', 'Experiences', 'Reflections')
+# Soul, User, Identity and Core are the foundation documents an agent is given
+# or writes about itself and its person, kept in their own words. Core is the
+# short list of memories essential to remaining itself, which the agent adds
+# to over time. They are authored directly (the agent in conversation, or an operator's seed): the
+# background extractor and reconciler neither propose nor edit them.
+FOUNDATION_SEGMENTS = ('Soul', 'User', 'Identity', 'Core')
+# What background workers extract into and reconcile.
+WORKER_SEGMENTS = ('People', 'Relationships', 'Experiences', 'Reflections')
+SEGMENTS = FOUNDATION_SEGMENTS + WORKER_SEGMENTS
+# One current document each (subject 'core'), loaded whole into the context:
+# the agent's core is its foundation documents.
+CORE_SEGMENTS = FOUNDATION_SEGMENTS
+# Retired: Self and Principles were the core before the foundation documents.
+# Records already in a store stay readable (by id, in history and search) and
+# can be retired by the author or an operator; nothing new is written to them,
+# and they are loaded only until a store has its first foundation document.
+RETIRED_SEGMENTS = ('Self', 'Principles')
 ATTRIBUTIONS = ('user_statement', 'observed_fact', 'agent_reflection', 'extractor_inference', 'inherited')
 ROLES = ('reader', 'author', 'extractor', 'dream', 'reconciler', 'follow_up_reconciler', 'topic_reconciler', 'care', 'research', 'operator')
 SCHEMA_VERSION = 1
@@ -40,7 +56,9 @@ def identifier(value, name='identifier'):
     return value
 
 
-SHARED_SEGMENTS = ('Self', 'Principles')  # the agent's own identity: shared across audiences
+# The agent's own identity: shared across audiences. User and Core are about
+# the owner and the life shared with them, and stay in the owner's audience.
+SHARED_SEGMENTS = ('Soul', 'Identity') + RETIRED_SEGMENTS
 
 
 @dataclass(frozen=True)
@@ -205,7 +223,7 @@ class AutobiographyStore:
             return self._get(record_id, revision)
 
     def list_records(self, *, segment=None, limit=100, after='', include_inactive=False):
-        if segment is not None and segment not in SEGMENTS:
+        if segment is not None and segment not in SEGMENTS+RETIRED_SEGMENTS:
             raise PersonalError('invalid', 'unknown personal segment')
         limit = max(1, min(int(limit), 100))
         p = self.principal
@@ -262,6 +280,13 @@ class AutobiographyStore:
         return bool(self.db.execute('SELECT 1 FROM autobio_suppressions WHERE owner=? AND agent=? AND source_id=?',
                                    (p.owner,p.agent,source_id)).fetchone())
 
+    def require_foundation_author(self, segment):
+        """Soul, User, Identity and Core change only through the author or an
+        operator, never through a background worker's batch. The same holds
+        for retiring what is left in Self and Principles."""
+        if segment in FOUNDATION_SEGMENTS+RETIRED_SEGMENTS and self.principal.role not in ('author','operator'):
+            raise PersonalError('forbidden',f'{segment} is authored directly; background workers cannot change it')
+
     def _write(self, edit, commit_id, origin):
         if isinstance(edit, dict) and edit.get('operation') == 'lifecycle':
             from .autobiography_lifecycle import write_transition
@@ -299,16 +324,20 @@ class AutobiographyStore:
                 raise PersonalError('conflict','record revision changed; reread before proposing another edit')
             if edit.get('segment',head['segment'])!=head['segment'] or edit.get('subject',head['subject'])!=head['subject']:
                 raise PersonalError('invalid','segment and subject are immutable')
+            if head['segment'] in RETIRED_SEGMENTS:
+                raise PersonalError('invalid',head['segment']+' is retired: its history stays readable, and its content is no longer edited')
+            self.require_foundation_author(head['segment'])
             revision=expected+1
             self.db.execute('UPDATE autobio_records SET title=?,revision=?,state=?,updated=? WHERE id=?',
                             (title,revision,state,now,record_id))
         else:
             if expected!=0 or edit.get('segment') not in SEGMENTS:
                 raise PersonalError('invalid','new records require expected_revision=0 and a segment')
+            self.require_foundation_author(edit['segment'])
             record_id=uuid.uuid4().hex
-            subject=edit.get('subject') or ('core' if edit['segment'] in ('Self','Principles') else record_id)
+            subject=edit.get('subject') or ('core' if edit['segment'] in CORE_SEGMENTS else record_id)
             identifier(subject,'subject')
-            if edit['segment'] in ('Self','Principles') and subject!='core':
+            if edit['segment'] in CORE_SEGMENTS and subject!='core':
                 raise PersonalError('invalid','core segments have one current document')
             revision=1
             try:

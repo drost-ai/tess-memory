@@ -1,0 +1,85 @@
+{
+  "model": "all-MiniLM-L6-v2",
+  "repo": "sentence-transformers/all-MiniLM-L6-v2",
+  "revision": "1110a243fdf4706b3f48f1d95db1a4f5529b4d41",
+  "license": "apache-2.0",
+  "download_mb": 91.6,
+  "device": "mps",
+  "dims": 384,
+  "max_seq_length": 256,
+  "query_prefix": "",
+  "passage_prefix": "",
+  "import_s": 2.14,
+  "load_s": 0.14,
+  "corpus_encode_s": 0.25,
+  "corpus_docs_per_s": 2395.8,
+  "cpu_utilization": 1.09,
+  "docs_per_s_by_batch": {
+    "8": 1103.3,
+    "32": 2294.7,
+    "128": 1280.2
+  },
+  "query_ms_p50": 4.7,
+  "query_ms_p95": 101.9,
+  "peak_rss_mb": 611.0,
+  "overall": {
+    "recall@5": 0.861,
+    "recall@10": 0.861,
+    "mrr": 0.76,
+    "queries": 79
+  },
+  "by_category": {
+    "error": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "queries": 6
+    },
+    "long_context": {
+      "recall@5": 0.0,
+      "recall@10": 0.0,
+      "mrr": 0.009,
+      "queries": 6
+    },
+    "multilingual": {
+      "recall@5": 0.167,
+      "recall@10": 0.167,
+      "mrr": 0.074,
+      "queries": 6
+    },
+    "path": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 1.0,
+      "queries": 5
+    },
+    "personal": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 0.871,
+      "queries": 36
+    },
+    "relationship": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 0.806,
+      "queries": 12
+    },
+    "technical": {
+      "recall@5": 1.0,
+      "recall@10": 1.0,
+      "mrr": 0.938,
+      "queries": 8
+    }
+  },
+  "environment": {
+    "python": "3.12.11",
+    "platform": "macOS-26.6.2-arm64-arm-64bit",
+    "machine": "arm64",
+    "processor": "Apple M4 Max",
+    "torch": "2.14.1",
+    "sentence_transformers": "6.1.0",
+    "transformers": "5.20.1",
+    "torch_threads": 12
+  }
+}

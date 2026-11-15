@@ -11,6 +11,7 @@ class EmbeddingTransportTests(unittest.TestCase):
     def embedder(self):
         e = OpenAICompatEmbedder.__new__(OpenAICompatEmbedder)
         e._url, e._key, e._model, e._dims = 'https://example.invalid/embeddings', 'synthetic', 'test', 2
+        e._headers = {'Authorization': 'Bearer synthetic'}
         return e
 
     def test_response_indices_preserve_input_order_and_guard_wraps_requests(self):

@@ -50,6 +50,7 @@ class ServiceConfig:
     max_retry_seconds: float = 1800
     job_timeout_seconds: float = 3600
     job_drain_seconds: float = 900
+    provider_gate_db: Path | None = None
 
     @property
     def db_path(self):
@@ -69,6 +70,11 @@ def load_service(path: Path) -> ServiceConfig:
     if not service.get('data_dir'):
         raise ValueError('[service] data_dir is required')
     service['data_dir'] = Path(service['data_dir']).expanduser().resolve()
+    if service.get('provider_gate_db') is not None:
+        value = service['provider_gate_db']
+        if not isinstance(value, str) or not Path(value).expanduser().is_absolute():
+            raise ValueError('provider_gate_db must be an absolute path')
+        service['provider_gate_db'] = Path(value).expanduser().resolve()
     stores, names, destinations = [], set(), set()
     for item in raw.get('stores', []):
         values = dict(item)

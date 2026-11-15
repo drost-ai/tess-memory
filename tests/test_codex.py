@@ -404,7 +404,8 @@ class CodexParserTests(unittest.TestCase):
     def test_inspection_command_has_no_models_or_store_writes(self):
         write_rollout(self.home)
         stdout = io.StringIO()
-        with mock.patch("agentic_memory.store.MemoryStore", side_effect=AssertionError("no store")), \
+        with mock.patch.object(cli, "CONFIG", Config(data_dir=self.home)), \
+             mock.patch("agentic_memory.store.MemoryStore", side_effect=AssertionError("no store")), \
              mock.patch("agentic_memory.embed.make_embedder", side_effect=AssertionError("no embed")), \
              mock.patch("agentic_memory.llm.AgentCoreBackend", side_effect=AssertionError("no model")), \
              contextlib.redirect_stdout(stdout):
@@ -529,7 +530,7 @@ class CodexIngestionTests(unittest.TestCase):
         cfg = load_config(p)
         self.assertEqual(cfg.codex.tool_output_chars, 1200)
         self.assertEqual(cfg.tool_result_snippet, 400)
-        self.assertEqual(cfg.data_stores[0].type, "claude-code")
+        self.assertEqual(cfg.data_stores, [])
         p.write_text('[codex]\ntool_output_chars = -1\n')
         with self.assertRaises(ValueError): load_config(p)
 

@@ -295,14 +295,59 @@ class IncrementalIngestTests(unittest.TestCase):
         self.add_unit()
         self.assertEqual(self.run_ingest().model_calls, 2)  # new unit plus merge
 
-    def test_incompatible_tracking_does_not_adopt_changed_content_or_model_policy(self):
+    def test_incompatible_tracking_does_not_adopt_changed_content(self):
         self.run_ingest()
         self.incompatible_tracking()
         write_rollout(self.home, items=[message('user', 'Changed task ' * 20), message('assistant', 'Changed solution ' * 20)])
         self.assertGreater(self.run_ingest().model_calls, 0)
+        # A different model is not a reason to redo verified paid content.
         self.incompatible_tracking()
         self.backend.cache_identity = 'explicitly-changed-model'
-        self.assertGreater(self.run_ingest().model_calls, 0)
+        self.assertEqual(self.run_ingest().model_calls, 0)
+
+    def test_changing_the_model_never_redistils_a_published_session(self):
+        self.run_ingest()
+        before = self.paid_rows()
+        counts = len(self.backend.calls), len(self.embedder.calls)
+        policy = json.loads(self.store.source_progress(str(self.path))['state'])['policy']
+        fallback = Backend(); fallback.name = fallback.cache_identity = 'a-new-fallback'
+        self.backend.name = self.backend.cache_identity = 'a-new-primary'
+        result = ingest(self.cfg, self.store, self.embedder, self.backend, fallback, refresh_aggregates=False)
+        self.assertEqual((result.unchanged, result.model_calls, result.embedded_passages), (1, 0, 0))
+        self.assertEqual(before, self.paid_rows())
+        self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
+        self.assertEqual(fallback.calls, [])
+        self.assertEqual(json.loads(self.store.source_progress(str(self.path))['state'])['policy'], policy)
+        # Only what was appended since is paid for, by whichever model is configured now.
+        self.add_unit()
+        count = len(self.backend.calls)
+        ingest(self.cfg, self.store, self.embedder, self.backend, fallback, refresh_aggregates=False)
+        maps = [p for p in self.backend.calls[count:] if p.startswith('A completed persisted-message')]
+        self.assertEqual(len(maps), 1)
+        self.assertNotIn('Remember the durable workspace decision', maps[0])
+
+    def test_work_recorded_under_the_model_naming_policy_is_carried_forward(self):
+        from agentic_memory.incremental import legacy_pipeline_policy, pipeline_policy
+        self.run_ingest()
+        before = self.paid_rows()
+        counts = len(self.backend.calls), len(self.embedder.calls)
+        # A store written before the policy stopped naming the models.
+        legacy = legacy_pipeline_policy(self.cfg, self.embedder, self.backend, None)
+        current = pipeline_policy(self.cfg, self.embedder)
+        self.assertNotEqual(legacy, current)
+        progress = self.store.source_progress(str(self.path))
+        state = json.loads(progress['state']); state['policy'] = legacy
+        self.store.db.execute('UPDATE ingest_sources SET state=?,observed_signature=? WHERE path=?',
+                              (json.dumps(state), 'signature-under-the-old-policy', str(self.path)))
+        self.store.commit()
+        result = self.run_ingest()
+        self.assertEqual((result.unchanged, result.model_calls, result.embedded_passages), (1, 0, 0))
+        self.assertEqual(before, self.paid_rows())
+        self.assertEqual(json.loads(self.store.source_progress(str(self.path))['state'])['policy'], current)
+        # Carried forward once, it no longer depends on which models are configured.
+        self.backend.cache_identity = 'a-later-model'
+        self.assertEqual(self.run_ingest().model_calls, 0)
+        self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
 
     def test_explicit_profile_repair_preserves_verified_published_rows(self):
         self.run_ingest();before=self.paid_rows()
@@ -314,9 +359,9 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual((result.unchanged,result.model_calls,result.embedded_passages),(1,0,0))
         self.assertEqual(before,self.paid_rows())
         self.assertEqual(counts,(len(self.backend.calls),len(self.embedder.calls)))
-        # The allowlist does not grant adoption for a subsequent unrelated change.
+        # A later model change redoes nothing either: the policy no longer names models.
         self.backend.cache_identity='another-explicit-model'
-        self.assertGreater(self.run_ingest().model_calls,0)
+        self.assertEqual(self.run_ingest().model_calls,0)
 
     def test_explicit_profile_repair_processes_only_appended_units(self):
         self.run_ingest();count=len(self.backend.calls)

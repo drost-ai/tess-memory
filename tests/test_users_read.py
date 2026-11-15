@@ -12,7 +12,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agentic_memory import plan, server
+from agentic_memory import plan, retrieval, server
 from agentic_memory.config import Config
 from agentic_memory.store import MemoryStore
 from test_users_compat import Embedder, build_fixture
@@ -43,6 +43,7 @@ class ReadAccessTests(unittest.TestCase):
         self.store.principal = self.store.resolve_principal(user)
         with mock.patch.object(server, "_get_store", return_value=self.store), \
              mock.patch.object(server, "CONFIG", self.cfg), \
+             mock.patch.object(retrieval, "CONFIG", self.cfg), \
              mock.patch.object(server, "_get_embedder", return_value=self.embedder), \
              mock.patch.object(server, "_get_search_llm", return_value=None):
             self.cfg.identity_user = user

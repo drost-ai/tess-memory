@@ -19,7 +19,7 @@ class AutobiographyTests(unittest.TestCase):
         self.addCleanup(self.store.close)
 
     def create(self,**overrides):
-        edit={'expected_revision':0,'segment':'Self','title':'Current self','body':'I verify current capabilities.',
+        edit={'expected_revision':0,'segment':'Identity','title':'Current self','body':'I verify current capabilities.',
               'reason':'Deliberate self-authorship','idempotency_key':'first'}
         edit.update(overrides)
         return self.store.update(**edit)
@@ -70,7 +70,7 @@ class AutobiographyTests(unittest.TestCase):
         self.assertEqual(errors[0],errors[1])
         self.assertEqual(guest.search('capabilities')['records'],[])
         with self.assertRaisesRegex(PersonalError,'unavailable to this principal'):
-            guest.update(idempotency_key='forbidden',expected_revision=0,segment='Self',title='x',body='x',reason='x')
+            guest.update(idempotency_key='forbidden',expected_revision=0,segment='Identity',title='x',body='x',reason='x')
 
     def test_coding_rows_and_default_search_projection_are_untouched(self):
         coding=MemoryStore(self.path);self.addCleanup(coding.close)
@@ -132,7 +132,7 @@ class AutobiographyTests(unittest.TestCase):
     def test_seed_import_requires_preview_and_is_inherited_retired_and_idempotent(self):
         from agentic_memory.autobiography_import import preview_seeds,import_seeds
         file=self.path.parent/'self.md';file.write_text('An inherited identity claim.')
-        files={'Self':str(file)};preview=preview_seeds(files)
+        files={'Identity':str(file)};preview=preview_seeds(files)
         operator=AutobiographyStore(self.path,replace(self.principal,role='operator'));self.addCleanup(operator.close)
         receipt=import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='seed')
         self.assertEqual(receipt,import_seeds(operator,files,preview_hash=preview['preview_hash'],idempotency_key='seed'))

@@ -127,7 +127,8 @@ class ScopedVectorTests(unittest.TestCase):
             def embed_query(self, query):
                 test.assertFalse(test.store.db.in_transaction)
                 return self.vector
-        with mock.patch.object(self.store, 'embedding_matrix', side_effect=AssertionError('no full matrix')):
+        with mock.patch.object(retrieval, 'CONFIG', Config(data_dir=self.root)), \
+             mock.patch.object(self.store, 'embedding_matrix', side_effect=AssertionError('no full matrix')):
             hits = retrieval.search(self.store, Embedder(self.query), 'row', project='p')
         self.assertTrue(hits)
         self.assertFalse(self.store.db.in_transaction)

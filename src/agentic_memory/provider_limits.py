@@ -29,8 +29,12 @@ def process_alive(pid: int | None) -> bool:
 
 
 def provider_key(cfg, profile_name: str) -> str:
-    with cfg.agent_core_settings.open() as handle:
-        profile = (json.load(handle).get('providerProfiles') or {}).get(profile_name, {})
+    if getattr(cfg, 'provider_registry', None) is not None:
+        from tess_core.config import ProviderRegistry
+        profile = ProviderRegistry(cfg.provider_registry).resolve_profile(profile_name)
+    else:
+        with cfg.agent_core_settings.open() as handle:
+            profile = (json.load(handle).get('providerProfiles') or {}).get(profile_name, {})
     mode = str(profile.get('apiMode', '')).lower()
     host = (urlparse(profile.get('baseUrl') or '').hostname or '').lower()
     kind = str(profile.get('kind', '')).lower()

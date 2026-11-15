@@ -1,24 +1,22 @@
-"""Central configuration for agentic-memory.
+"""Explicit standalone TOML and host-owned embedded manifest configuration.
 
-Precedence, lowest to highest:
-
-    1. built-in defaults (the dataclass field defaults below)
-    2. settings.toml at the project root (or $AGENTIC_MEMORY_SETTINGS)
-    3. environment variables (so the MCP server registration and cron
-       ingestion can override without touching the file)
+Imports are inert. Embedded mode reads only AGENTIC_MEMORY_CONFIG's absolute
+JSON file and its explicit registry; standalone callers select a TOML path or
+AGENTIC_MEMORY_SETTINGS. Legacy environment overrides apply only standalone.
 """
 
 from __future__ import annotations
 
+import json
 import fnmatch
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field
+import warnings
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from .autobiography_config import PersonalConfig
 from pathlib import Path
-
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 # Project slugs that are not real work: ephemeral cwds of our own LLM calls
 # (ingesting those would feed the memory system its own exhaust) and macOS
@@ -90,12 +88,6 @@ def _default_policy():
     return VisibilityPolicy()
 
 
-def _default_stores() -> list[DataStore]:
-    return [
-        DataStore(name="claude-code", path=Path("~/.claude/projects").expanduser())
-    ]
-
-
 @dataclass(frozen=True)
 class CodexSettings:
     """Options applied only to type='codex' sources, never existing parsers."""
@@ -117,7 +109,13 @@ class CodexSettings:
 @dataclass
 class Config:
     # -- data stores ---------------------------------------------------------
-    data_stores: list[DataStore] = field(default_factory=_default_stores)
+    data_stores: list[DataStore] = field(default_factory=list)
+    embedded: bool = False
+    runtime_home: Path | None = None
+    provider_registry: Path | None = None
+    provenance_ledger: Path | None = None
+    provenance_source_root: Path | None = None
+    embedding_allow_download: bool = False
     codex: CodexSettings = field(default_factory=CodexSettings)
 
     # -- planning ------------------------------------------------------------
@@ -139,13 +137,10 @@ class Config:
 
     # -- llm (agent-core-python is the only backend; provider, model, and
     #    credentials are governed by its own configuration) ------------------
-    agent_core_path: Path = field(
-        default_factory=lambda: Path("~/agents/agent-core-python").expanduser()
-    )
-    agent_core_settings: Path = field(
-        default_factory=lambda: Path("~/.tess-memory/providers.yaml").expanduser()
-    )
-    agent_core_profile: str = "strong"
+    # Legacy standalone mapping retained, but no checkout is discovered/imported.
+    agent_core_path: Path | None = None
+    agent_core_settings: Path | None = None
+    agent_core_profile: str = ""
     # Empty overrides preserve the selected profile's model/effort defaults.
     agent_core_model: str = ""
     agent_core_reasoning_effort: str = ""
@@ -171,6 +166,10 @@ class Config:
     embed_provider: str = "embeddings"  # profile name, or "local"
     embed_dims: int = 4096
     embed_model: str = "BAAI/bge-small-en-v1.5"  # local fallback model
+    # Explicit model prefixes (e5: "query: "/"passage: "). None keeps the
+    # historical behaviour: the BGE query instruction for BGE names, else none.
+    embed_query_prefix: str | None = None
+    embed_passage_prefix: str | None = None
     embed_batch_size: int = 64
 
     # -- ingest --------------------------------------------------------------
@@ -258,17 +257,51 @@ def _path(raw: str) -> Path:
 
 def settings_path() -> Path:
     raw = os.environ.get("AGENTIC_MEMORY_SETTINGS")
-    return _path(raw) if raw else _PROJECT_ROOT / "settings.toml"
+    if not raw:
+        raise ValueError("Explicit AGENTIC_MEMORY_CONFIG manifest or AGENTIC_MEMORY_SETTINGS is required")
+    return _path(raw)
 
 
 def load_config(path: Path | None = None) -> Config:
-    path = path or settings_path()
-    try:
-        with path.open("rb") as fh:
-            raw = tomllib.load(fh)
-    except FileNotFoundError:
-        raw = {}
+    """Load an explicitly selected standalone TOML or embedded manifest."""
+    if path is None and os.environ.get("AGENTIC_MEMORY_CONFIG"):
+        return load_manifest(Path(os.environ["AGENTIC_MEMORY_CONFIG"]))
+    path = (Path(path) if path is not None else settings_path()).expanduser().absolute()
+    with path.open("rb") as fh:
+        raw = tomllib.load(fh)
+    base = path.parent
 
+    def anchored(value):
+        value = _path(str(value))
+        return value if value.is_absolute() else base / value
+
+    # The pure parser enforces absolute credential routing. Resolve this one
+    # explicit standalone field before parsing, then anchor all final paths
+    # after legacy environment overrides have been applied.
+    llm = raw.get("llm", {})
+    auth_path = llm.get("codex_auth_path")
+    if isinstance(auth_path, str) and auth_path.strip():
+        llm["codex_auth_path"] = str(anchored(auth_path.strip()))
+    cfg = _parse_config(raw)
+    for attribute in ("data_dir", "agent_core_settings", "provider_registry",
+                      "agent_core_codex_auth_path", "agent_core_path",
+                      "provenance_ledger", "provenance_source_root"):
+        value = getattr(cfg, attribute)
+        if value is not None:
+            setattr(cfg, attribute, anchored(value))
+    cfg.data_stores = [replace(ds, path=anchored(ds.path),
+                              skip_copies_of=[anchored(p) for p in ds.skip_copies_of])
+                       for ds in cfg.data_stores]
+    cfg.personal = replace(cfg.personal,
+                           source_paths=tuple(str(anchored(p)) for p in cfg.personal.source_paths),
+                           native_creation_ledger=(str(anchored(cfg.personal.native_creation_ledger))
+                                                   if cfg.personal.native_creation_ledger else None))
+    if cfg.embed_model.startswith(("./", "../", "~")):
+        cfg.embed_model = str(anchored(cfg.embed_model))
+    return cfg
+
+
+def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
     cfg = Config()
     cfg.personal = PersonalConfig.parse(raw.get('personal', {}))
     cfg.codex = CodexSettings(**raw.get("codex", {}))
@@ -305,7 +338,7 @@ def load_config(path: Path | None = None) -> Config:
             fallback=str(visibility.get("fallback", defaults.fallback)),
         )
     identity = raw.get("identity", {})
-    user = os.environ.get("AGENTIC_MEMORY_USER") or identity.get("user")
+    user = (None if embedded else os.environ.get("AGENTIC_MEMORY_USER")) or identity.get("user")
     if user:
         from .principals import principal_id
         cfg.identity_user = principal_id(str(user).strip())
@@ -324,6 +357,7 @@ def load_config(path: Path | None = None) -> Config:
         cfg.data_dir = _path(storage["data_dir"])
 
     if "agent_core_path" in llm:
+        warnings.warn("llm.agent_core_path is deprecated and ignored; install agent-core as a dependency", FutureWarning, stacklevel=2)
         cfg.agent_core_path = _path(llm["agent_core_path"])
     if "settings" in llm:
         cfg.agent_core_settings = _path(llm["settings"])
@@ -370,6 +404,11 @@ def load_config(path: Path | None = None) -> Config:
     cfg.embed_dims = int(emb.get("dims", cfg.embed_dims))
     cfg.embed_model = emb.get("local_model", cfg.embed_model)
     cfg.embed_batch_size = int(emb.get("batch_size", cfg.embed_batch_size))
+    for key in ("query_prefix", "passage_prefix"):
+        if key in emb:
+            if not isinstance(emb[key], str) or len(emb[key]) > 200:
+                raise ValueError(f"[embedding] {key} must be a string of at most 200 characters")
+            setattr(cfg, f"embed_{key}", emb[key])
 
     for key in (
         "max_transcript_chars", "segment_chars", "segment_overlap", "max_segments",
@@ -429,6 +468,13 @@ def load_config(path: Path | None = None) -> Config:
                 raise ValueError(f'[retrieval] {key} must be an integer >= {minimum}')
             setattr(cfg, key, value)
 
+    if "allow_download" in emb:
+        if not isinstance(emb["allow_download"], bool):
+            raise ValueError("[embedding] allow_download must be a boolean")
+        cfg.embedding_allow_download = emb["allow_download"]
+    if embedded:
+        return cfg
+
     # ---- environment overrides (highest precedence) ----
     if os.environ.get("AGENTIC_MEMORY_SOURCE"):
         cfg.data_stores = [
@@ -437,6 +483,7 @@ def load_config(path: Path | None = None) -> Config:
     if os.environ.get("AGENTIC_MEMORY_DATA"):
         cfg.data_dir = _path(os.environ["AGENTIC_MEMORY_DATA"])
     if os.environ.get("AGENT_CORE_PATH"):
+        warnings.warn("AGENT_CORE_PATH is deprecated and ignored; install agent-core as a dependency", FutureWarning, stacklevel=2)
         cfg.agent_core_path = _path(os.environ["AGENT_CORE_PATH"])
     if os.environ.get("AGENTIC_MEMORY_AC_SETTINGS"):
         cfg.agent_core_settings = _path(os.environ["AGENTIC_MEMORY_AC_SETTINGS"])
@@ -460,4 +507,237 @@ def load_config(path: Path | None = None) -> Config:
     return cfg
 
 
-CONFIG = load_config()
+def _absolute(value, name: str) -> Path:
+    if not isinstance(value, str) or not value or not Path(value).is_absolute():
+        raise ValueError(f"{name} must be an absolute path")
+    return Path(value)
+
+
+def load_manifest(path: Path | str, *, store_settings: Path | str | None = None) -> Config:
+    """Validate an embedded manifest without clients, stores, credentials or downloads."""
+    path = _absolute(str(path), "AGENTIC_MEMORY_CONFIG")
+    def unique_object(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"Duplicate manifest field: {key}")
+            result[key] = value
+        return result
+    with path.open(encoding="utf-8") as fh:
+        envelope = json.load(fh, object_pairs_hook=unique_object)
+    return parse_manifest(envelope, store_settings=store_settings)
+
+
+def parse_manifest(document: Mapping[str, object], *, store_settings: Path | str | None = None) -> Config:
+    """Validate the embedded document in memory, without writing a manifest.
+
+    Shares the file loader's metadata-only validation: explicit registry/model
+    metadata may be read, but no credentials, clients, stores or downloads are
+    initialized. The caller's document is never mutated. Optional per-store
+    settings retain the same explicit, constrained TOML overlay contract.
+    """
+    envelope = document
+    required = {"schema_version", "mode", "runtime_home", "provider_registry", "config"}
+    if not isinstance(envelope, Mapping) or set(envelope) - required - {"provenance_ledger", "provenance_source_root"} or required - set(envelope):
+        raise ValueError("Invalid embedded manifest fields")
+    if type(envelope["schema_version"]) is not int or envelope["schema_version"] != 1:
+        raise ValueError("Unsupported embedded manifest schema_version")
+    if envelope["mode"] != "embedded":
+        raise ValueError("Manifest mode must be embedded")
+    home = _absolute(envelope["runtime_home"], "runtime_home")
+    registry = _absolute(envelope["provider_registry"], "provider_registry")
+    raw = envelope["config"]
+    if not isinstance(raw, dict):
+        raise ValueError("Manifest config must be an object")
+    raw = json.loads(json.dumps(raw))  # do not mutate the caller's independent mapping
+    if store_settings is not None:
+        store_path = Path(store_settings)
+        if str(store_settings).startswith("~"):
+            raise ValueError("Store settings must not use ambient ~ expansion")
+        if not store_path.is_absolute():
+            store_path = home / store_path
+        with store_path.open("rb") as fh:
+            store_raw = tomllib.load(fh)
+        if set(store_raw) - {"data_stores", "storage"}:
+            raise ValueError("Embedded store settings may override only data_stores and storage.data_dir")
+        store_storage = store_raw.get("storage", {})
+        if not isinstance(store_storage, dict) or set(store_storage) - {"data_dir"}:
+            raise ValueError("Embedded store settings storage may contain only data_dir")
+        if "data_stores" in store_raw:
+            raw["data_stores"] = store_raw["data_stores"]
+        if "data_dir" in store_storage:
+            if not isinstance(raw.get("storage", {}), dict):
+                raise ValueError("[storage] must be an object")
+            raw.setdefault("storage", {})["data_dir"] = store_storage["data_dir"]
+    sections = {"personal", "codex", "planning", "storage", "llm", "search", "embedding", "ingest", "retrieval", "visibility", "identity"}
+    if set(raw) - sections - {"data_stores"}:
+        raise ValueError("Unknown memory config section")
+    for section in sections:
+        if section in raw and not isinstance(raw[section], dict):
+            raise ValueError(f"[{section}] must be an object")
+    def product_path(value):
+        if not isinstance(value, str) or not value or value.startswith("~"):
+            raise ValueError("Manifest paths must be nonempty, without ambient ~ expansion")
+        p = Path(value)
+        return str(p if p.is_absolute() else home / p)
+    stores = raw.get("data_stores", [])
+    if not isinstance(stores, list) or any(not isinstance(d, dict) or "path" not in d for d in stores):
+        raise ValueError("data_stores must be a list of objects with path")
+    for store in stores:
+        store["path"] = product_path(store["path"])
+        for key in ("skip_copies_of", "exclude"):
+            values = store.get(key, [])
+            if not isinstance(values, list) or any(not isinstance(v, str) for v in values):
+                raise ValueError(f"data_stores.{key} must be a list of strings")
+        store["skip_copies_of"] = [product_path(p) for p in store.get("skip_copies_of", [])]
+    storage = raw.setdefault("storage", {})
+    storage["data_dir"] = product_path(storage.get("data_dir", "memory"))
+    llm = raw.setdefault("llm", {})
+    if "settings" in llm or "agent_core_path" in llm:
+        raise ValueError("Embedded llm uses the envelope provider_registry, not legacy settings/path")
+    if "codex_auth_path" in llm:
+        llm["codex_auth_path"] = product_path(llm["codex_auth_path"])
+    personal = raw.setdefault("personal", {})
+    if "source_paths" in personal:
+        if not isinstance(personal["source_paths"], list):
+            raise ValueError("personal.source_paths must be a list of paths")
+        personal["source_paths"] = [product_path(p) for p in personal["source_paths"]]
+    if "native_creation_ledger" in personal:
+        raise ValueError("Embedded provenance requires top-level provenance_ledger")
+    ledger = None
+    provenance_root = None
+    if "provenance_source_root" in envelope:
+        provenance_root = _absolute(envelope["provenance_source_root"], "provenance_source_root")
+    if personal.get("source_mode") == "native" and provenance_root is None:
+        raise ValueError("Native source mode requires explicit provenance_source_root")
+    if "provenance_ledger" in envelope:
+        ledger = _absolute(envelope["provenance_ledger"], "provenance_ledger")
+        if personal.get("source_mode") == "native":
+            personal["native_creation_ledger"] = str(ledger)
+    search = raw.setdefault("search", {})
+    if "agent" in search and not isinstance(search["agent"], bool):
+        raise ValueError("[search] agent must be a boolean")
+    required_roles = [("embedding", "provider")]
+    if stores or personal.get("extraction_enabled") or personal.get("dream_enabled"):
+        required_roles.append(("llm", "profile"))
+    if search.get("agent", True):
+        required_roles.append(("search", "profile"))
+    for section, key in (("llm", "profile"), ("search", "profile"), ("embedding", "provider")):
+        value = raw.get(section, {}).get(key)
+        if value is not None and (not isinstance(value, str) or not value.strip()):
+            raise ValueError(f"Embedded [{section}] {key} must be a nonempty string")
+        if (section, key) in required_roles and value is None:
+            raise ValueError(f"Embedded [{section}] {key} must be explicit")
+    fallback = llm.get("fallback_profile", "")
+    if not isinstance(fallback, str):
+        raise ValueError("[llm] fallback_profile must be a string")
+    from tess_core.config import ProviderRegistry
+    providers = ProviderRegistry(registry)
+    for section, name, model in (
+        ("llm", llm.get("profile"), llm.get("model") or None),
+        ("search", search.get("profile"), search.get("model") or None),
+        ("fallback", fallback, llm.get("fallback_model") or None),
+    ):
+        if name:
+            providers.resolve_profile(name, model=model)
+    embedding = raw["embedding"]
+    local_model = embedding.get("local_model")
+    if isinstance(local_model, str) and local_model.startswith(("/", "./", "../", "~")):
+        embedding["local_model"] = product_path(local_model)
+        model_path = Path(embedding["local_model"])
+        if not model_path.is_dir():
+            raise ValueError("Explicit local embedding model directory is missing or inaccessible")
+        for metadata_name in ("config_sentence_transformers.json", "config.json"):
+            metadata_file = model_path / metadata_name
+            if not metadata_file.exists():
+                continue
+            with metadata_file.open(encoding="utf-8") as fh:
+                metadata = json.load(fh)
+            if not isinstance(metadata, dict):
+                raise ValueError("Local embedding model metadata must be an object")
+            dimension = metadata.get("sentence_embedding_dimension")
+            if dimension is not None:
+                if type(dimension) is not int or dimension < 1:
+                    raise ValueError("Local embedding model metadata has invalid sentence_embedding_dimension")
+                if "dims" in embedding and embedding["dims"] != dimension:
+                    raise ValueError("Configured embedding dims do not match local model metadata")
+    for key in ("dims", "batch_size"):
+        if key in embedding and (type(embedding[key]) is not int or embedding[key] < 1):
+            raise ValueError(f"[embedding] {key} must be a positive integer")
+    if embedding["provider"] != "local":
+        profile = providers.resolve_profile(embedding["provider"])
+        if not profile.get("baseUrl") or not profile.get("defaultModel"):
+            raise ValueError("Embedding profile requires baseUrl and defaultModel")
+    elif "local_model" in embedding and (not isinstance(embedding["local_model"], str) or not embedding["local_model"].strip()):
+        raise ValueError("[embedding] local_model must be a nonempty string")
+    cfg = _parse_config(raw, embedded=True)
+    cfg.embedded = True
+    cfg.runtime_home = home
+    cfg.provider_registry = registry
+    cfg.agent_core_settings = registry
+    cfg.provenance_ledger = ledger
+    cfg.provenance_source_root = provenance_root
+    return cfg
+
+
+def validate_config(cfg: Config, *, validate_credentials: bool = True, roles: set[str] | None = None) -> None:
+    """Validate selected metadata/auth without clients, stores, models, or network.
+
+    Default active roles are embedding, enabled agentic search, and distillation
+    (plus its fallback) when sources or personal model jobs are configured.
+    Hosts may explicitly restrict active roles to jobs they will actually run.
+    All explicitly supplied profiles are metadata-validated regardless.
+    """
+    from tess_core.config import ProviderRegistry
+    registry_path = cfg.provider_registry or cfg.agent_core_settings
+    if registry_path is None:
+        raise ValueError("Explicit provider registry is required")
+    providers = ProviderRegistry(registry_path)
+    selected = {"distillation": cfg.agent_core_profile, "search": cfg.search_profile,
+                "fallback": cfg.agent_core_fallback_profile, "embedding": cfg.embed_provider}
+    models = {"distillation": cfg.agent_core_model, "search": cfg.search_model,
+              "fallback": cfg.agent_core_fallback_model, "embedding": ""}
+    if roles is None:
+        roles = {"embedding"}
+        if cfg.search_agent:
+            roles.add("search")
+        if cfg.data_stores or cfg.personal.extraction_enabled or cfg.personal.dream_enabled:
+            roles.add("distillation")
+            if cfg.agent_core_fallback_profile:
+                roles.add("fallback")
+    if roles - set(selected):
+        raise ValueError("Unknown provider validation role")
+    for role, profile in selected.items():
+        if role == "embedding" and profile == "local":
+            continue
+        if profile:
+            providers.resolve_profile(profile, model=models[role] or None)
+        if role not in roles:
+            continue
+        if not profile:
+            raise ValueError(f"Explicit {role} profile is required")
+        if validate_credentials:
+            profile_metadata = providers.resolve_profile(profile, model=models[role] or None)
+            codex_path = (cfg.agent_core_codex_auth_path
+                          if role != "embedding" and profile_metadata.get("apiMode") == "codex" else None)
+            providers.resolve_auth(profile, codex_auth_path=codex_path)
+
+
+class _LazyConfig:
+    """Compatibility binding: importing modules never reads runtime configuration."""
+    def __init__(self):
+        object.__setattr__(self, "_value", None)
+
+    def _get(self):
+        if self._value is None:
+            object.__setattr__(self, "_value", load_config())
+        return self._value
+
+    def __getattr__(self, name):
+        return getattr(self._get(), name)
+
+    def __setattr__(self, name, value):
+        setattr(self._get(), name, value)
+
+
+CONFIG = _LazyConfig()

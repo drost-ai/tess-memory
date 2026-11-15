@@ -16,7 +16,7 @@ class IndexRepairTests(unittest.TestCase):
         self.store=AutobiographyStore(self.path,self.principal,clock=lambda:self.now[0]);self.addCleanup(self.store.close)
 
     def create(self, **changes):
-        edit=dict(expected_revision=0,segment='Principles',title='Principle',body='Durable sentinel',reason='Deliberate authorship',idempotency_key='first')
+        edit=dict(expected_revision=0,segment='Soul',title='Principle',body='Durable sentinel',reason='Deliberate authorship',idempotency_key='first')
         return self.store.update(**{**edit,**changes})['edits'][0]['record_id']
 
     def test_crash_gap_survives_reopen_and_repair_changes_no_authored_history(self):

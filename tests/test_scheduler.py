@@ -28,6 +28,31 @@ class SchedulerQueueTests(unittest.TestCase):
                                     parallel_stores=2, retry_seconds=10, max_retry_seconds=30)
         self.queue = WorkQueue(self.config)
 
+    def test_provider_gate_routing_uses_explicit_yaml_registry(self):
+        from types import SimpleNamespace
+        from agentic_memory.provider_limits import provider_key
+        registry = self.root / 'providers.yaml'
+        registry.write_text('providerProfiles:\n  fireworks-test:\n    kind: openai\n    apiMode: chat_completions\n    baseUrl: https://api.fireworks.ai/inference/v1\n    defaultModel: synthetic\n    auth:\n      kind: none\n')
+        cfg = SimpleNamespace(provider_registry=registry, agent_core_settings=self.root / 'must-not-read.json')
+        self.assertEqual(provider_key(cfg, 'fireworks-test'), 'fireworks')
+
+    def test_separate_supervisors_can_share_provider_gate(self):
+        from agentic_memory.scheduler import _gate, supervisor_lock
+        shared = self.config.db_path
+        other = replace(self.config, data_dir=self.root / 'other', provider_gate_db=shared)
+        WorkQueue(other)
+        with supervisor_lock(self.config), supervisor_lock(other):
+            first = _gate(self.config)
+            second = _gate(other)
+            self.assertNotEqual(self.config.db_path, other.db_path)
+            self.assertEqual(first.path, second.path)
+            with first.acquire('codex', 'model', owner='first', instance='a'):
+                db = second.connect()
+                try:
+                    self.assertEqual(db.execute('SELECT COUNT(*) FROM call_leases').fetchone()[0], 1)
+                finally:
+                    db.close()
+
     def test_one_job_per_store_even_across_queue_connections(self):
         one = self.queue.claim(now=10**10)
         other = WorkQueue(self.config)
@@ -341,25 +366,24 @@ with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()
             root = Path(tmp).resolve()
             source = root / 'source'
             source.mkdir()
-            core = root / 'core' / 'agent_core'
-            core.mkdir(parents=True)
-            core.joinpath('__init__.py').write_text('''async def unused(*a, **k):
-    raise AssertionError("empty ingestion must not invoke a provider")
-resolve_config = resolve_session = run_agent_prompt = start_runtime = unused
-SessionOptions = unused
-''')
             providers = root / 'providers.json'
-            providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused'}}}))
+            providers.write_text(json.dumps({'providerProfiles': {'offline': {'kind': 'openai', 'defaultModel': 'unused', 'auth': {'kind': 'none'}}}}))
             settings = root / 'memory.toml'
             settings.write_text(f'[[data_stores]]\nname="empty"\npath="{source}"\n'
                                 f'[storage]\ndata_dir="{root / "memory"}"\n'
-                                f'[llm]\nprofile="offline"\nagent_core_path="{core.parent}"\nsettings="{providers}"\n'
+                                f'[llm]\nprofile="offline"\nsettings="{providers}"\n'
                                 '[embedding]\nprovider="local"\n')
+            # Exercise installed modules without synthetic import-path shims.
+            env = {key: value for key, value in os.environ.items()
+                   if key not in {'PYTHONPATH', 'AGENT_CORE_PATH'}
+                   and not key.startswith('AGENTIC_MEMORY_')}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nsettings="{settings}"\n')
             result = subprocess.run([sys.executable, '-m', 'agentic_memory.cli', 'scheduler', '--config', str(config_path),
-                                     'run', '--instance', 'empty'], capture_output=True, text=True, timeout=15)
-            self.assertEqual(result.returncode, 0, result.stderr)
+                                     'run', '--instance', 'empty'], capture_output=True, text=True, timeout=15, env=env)
+            diagnostic = result.stderr + result.stdout + ''.join(
+                path.read_text() for path in (root / 'service' / 'runs').glob('*.log'))
+            self.assertEqual(result.returncode, 0, diagnostic)
             completed = json.loads(result.stdout)
             self.assertEqual(completed['outcome'], 'success')
             self.assertEqual(completed['stats']['model_calls'], 0)

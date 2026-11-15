@@ -8,8 +8,9 @@ version = "0.1.0"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
 description = "Agentic memory system: ingests Claude Code session transcripts into a multi-timescale, importance-weighted memory store, served over MCP."
-requires-python = ">=3.11,<3.14"
+requires-python = ">=3.12,<3.14"
 dependencies = [
+    "tess-core>=0.1.0",
     "mcp>=1.2",
     "sentence-transformers>=3.0",
     "numpy>=1.26",
@@ -22,3 +23,8 @@ agentic-memory = "agentic_memory.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/agentic_memory"]
+
+# The engine is pinned to an exact commit. To work on both at once, install a
+# local checkout over the pin after syncing: uv pip install -e ../../agents/tess-core
+[tool.uv.sources]
+tess-core = { git = "ssh://git@github.com/drost-ai/tess-core.git", rev = "ca5f419de4073d2aa272fd46614c6f79170ef6d7" }

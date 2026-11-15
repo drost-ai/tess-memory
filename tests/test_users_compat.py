@@ -118,6 +118,7 @@ def tool_outputs(store: MemoryStore, cfg: Config, embedder: Embedder) -> dict[st
     }
     with mock.patch.object(server, "_get_store", return_value=store), \
          mock.patch.object(server, "CONFIG", cfg), \
+         mock.patch.object(retrieval, "CONFIG", cfg), \
          mock.patch.object(server, "_get_embedder", return_value=embedder), \
          mock.patch.object(server, "_get_search_llm", return_value=None):
         return {name: _TS.sub("<TS>", call()) for name, call in calls.items()}

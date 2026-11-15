@@ -266,7 +266,9 @@ class CompletedSourceReader:
             turn_start = len(st.turns)
             _append_message_turns(st, role, content, ts)
             metadata = msg.get('metadata') if isinstance(msg.get('metadata'), dict) else {}
-            origin = metadata.get('agentCoreOrigin', msg.get('origin'))
+            # The engine's key, then the one its earlier versions (and imported
+            # transcripts from them) wrote.
+            origin = metadata.get('tessCoreOrigin', metadata.get('agentCoreOrigin', msg.get('origin')))
             human = origin is None or (isinstance(origin, dict) and origin.get('actor') == 'user'
                 and origin.get('intentAuthority') == 'request' and origin.get('synthetic') is False)
             for turn in st.turns[turn_start:]:

@@ -4,9 +4,11 @@ import json
 import sqlite3
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from agentic_memory import server
+from agentic_memory.config import Config
 from agentic_memory.transcript_reader import (
     MIN_PAGE_BYTES,
     get_session_source_path,
@@ -95,19 +97,12 @@ class TranscriptReaderTests(unittest.TestCase):
             class FakeDataStore:
                 path = root
 
-            old_data_dir = server.CONFIG.data_dir
-            old_data_stores = server.CONFIG.data_stores
-            try:
-                server.CONFIG.data_dir = root
-                server.CONFIG.data_stores = [FakeDataStore()]
+            with mock.patch.object(server, "CONFIG", Config(data_dir=root, data_stores=[FakeDataStore()])):
                 result = json.loads(
                     server.get_session_transcript(
                         "session-1", cursor=0, max_bytes=MIN_PAGE_BYTES
                     )
                 )
-            finally:
-                server.CONFIG.data_dir = old_data_dir
-                server.CONFIG.data_stores = old_data_stores
 
             self.assertEqual(result["session_id"], "session-1")
             self.assertEqual(result["source_format"], "jsonl")

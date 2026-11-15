@@ -68,7 +68,7 @@ Planning plane contract:
 - Harness todo lists are ephemeral; this board is durable. Mirror anything
   that must survive the session into it.
 - A project is the durable logical memory/planning scope. By default it is the
-  session cwd slug (`/Users/x/proj -> -Users-x-proj`), but an instance may bind
+  session cwd slug (`/workspace/example/proj -> -workspace-example-proj`), but an instance may bind
   sessions from many workspaces to one fixed project (for example `assistant`);
   cwd then remains provenance only. Treat list_projects as the authority and
   reuse its exact project key. Absolute cwd paths are accepted for legacy
@@ -687,12 +687,20 @@ def run() -> None:
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr, force=True)
     for name in ("sentence_transformers", "httpx", "huggingface_hub", "transformers"):
         logging.getLogger(name).setLevel(logging.WARNING)
+    initialize()
     mcp.run()  # stdio transport
 
 
-if CONFIG.personal.enabled:
-    from .autobiography_server import register_personal_tools
-    register_personal_tools(mcp, CONFIG)
+_personal_registered = False
+
+
+def initialize() -> None:
+    """Bind runtime-dependent tools explicitly, never during module import."""
+    global _personal_registered
+    if CONFIG.personal.enabled and not _personal_registered:
+        from .autobiography_server import register_personal_tools
+        register_personal_tools(mcp, CONFIG)
+        _personal_registered = True
 
 
 if __name__ == "__main__":

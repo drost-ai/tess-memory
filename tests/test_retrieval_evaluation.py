@@ -187,7 +187,8 @@ class RetrievalEvaluationTests(unittest.TestCase):
 
     def test_cli_empty_scope_avoids_provider_initialization(self):
         self.add("Unrelated corpus", project="elsewhere")
-        with mock.patch("agentic_memory.store.MemoryStore", return_value=self.store), \
+        with mock.patch.object(cli, "CONFIG", self.cfg), \
+             mock.patch("agentic_memory.store.MemoryStore", return_value=self.store), \
              mock.patch.object(self.store, "close"), \
              mock.patch("agentic_memory.embed.make_embedder", side_effect=AssertionError("embedder initialized")), \
              mock.patch("agentic_memory.llm.AgentCoreBackend.for_role", side_effect=AssertionError("LLM initialized")), \

@@ -28,7 +28,7 @@ class OrientationTests(unittest.TestCase):
     def create(self, segment='Experiences', subject=None, title='A title', body='SECRET BODY', store=None):
         self.serial += 1
         receipt = (store or self.store).update(
-            expected_revision=0, segment=segment, subject=subject or ('core' if segment in ('Self', 'Principles') else f's{self.serial:04}'),
+            expected_revision=0, segment=segment, subject=subject or ('core' if segment in ('Identity', 'Soul') else f's{self.serial:04}'),
             title=title, body=body, reason='authored', idempotency_key=f'create-{self.serial}')
         return receipt['edits'][0]['record_id']
 
@@ -55,12 +55,12 @@ class OrientationTests(unittest.TestCase):
         self.assertFalse(result['manifest']['orientation']['text_included'])
 
     def test_foundation_priority_and_manifest_semantics(self):
-        core = self.create('Self', body='FOUNDATION')
-        principle = self.create('Principles', body='PRINCIPLE')
+        core = self.create('Identity', body='FOUNDATION')
+        principle = self.create('Soul', body='PRINCIPLE')
         person = self.create('People', subject='sam', body='PERSON')
         experience = self.create()
         result = personal_context(self.store, subjects=['sam'], budget=64000)
-        self.assertEqual([r['record_id'] for r in result['manifest']['records']], [core, principle, person])
+        self.assertEqual([r['record_id'] for r in result['manifest']['records']], [principle, core, person])  # Soul, Identity, then the person
         self.assertEqual([r['record_id'] for r in result['manifest']['orientation']['inventory']['entries']], [experience])
         self.assertNotIn('SECRET BODY', result['text'])
         self.assertIn('FOUNDATION', result['text'])
@@ -145,7 +145,7 @@ class OrientationTests(unittest.TestCase):
         self.assertEqual(pointers[record]['revision'], 3)
 
     def test_owner_readall_and_shared_core_privacy(self):
-        core = self.create('Self', body='SHARED CORE')
+        core = self.create('Identity', body='SHARED CORE')
         owner_memory = self.create(title='OWNER SECRET')
         kim = self.open(replace(self.principal, audience='kim', reads='owner'))
         kim_memory = self.create(title='KIM SECRET', store=kim)

@@ -38,7 +38,7 @@ class AudienceTests(unittest.TestCase):
 
     def test_each_person_reads_their_own_plus_the_shared_self_and_the_owner_reads_all(self):
         owner = self.store()
-        self_id = self.write(owner, "Self", "Who Tess is", "Tess is curious and careful.", "self")
+        self_id = self.write(owner, "Identity", "Who Tess is", "Tess is curious and careful.", "self")
         self.write(owner, "People", "Sam's sister", "Sam's sister lives in Kandy.", "sam-people", subject="sister")
         ana = self.store("ana")
         self.write(ana, "People", "Ana's dog", "Ana has a dog named Pixel.", "ana-people", subject="pixel")

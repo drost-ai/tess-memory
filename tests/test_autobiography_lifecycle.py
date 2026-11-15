@@ -19,7 +19,7 @@ class LifecycleTests(unittest.TestCase):
         self.store = AutobiographyStore(self.path, self.principal, clock=lambda: 1)
         self.addCleanup(lambda: self.store.close())
 
-    def create(self, subject='core', segment='Self', **kwargs):
+    def create(self, subject='core', segment='Identity', **kwargs):
         return self.store.update(expected_revision=0, segment=segment, subject=subject,
             title='Original title', body='Ancient sapphire memory', reason='Authored deliberately',
             idempotency_key='create-' + subject + segment, **kwargs)['edits'][0]['record_id']

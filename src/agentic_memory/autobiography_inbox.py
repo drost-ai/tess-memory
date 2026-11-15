@@ -1,7 +1,7 @@
 """Personal candidate read surface; publication is independent of coding ingestion."""
 import json
 import uuid
-from .autobiography import PersonalError, SEGMENTS, ATTRIBUTIONS, canonical, digest
+from .autobiography import PersonalError, WORKER_SEGMENTS, ATTRIBUTIONS, canonical, digest
 
 INBOX_SCHEMA='''
 CREATE TABLE IF NOT EXISTS autobio_candidates(
@@ -80,7 +80,7 @@ class PersonalInbox:
                 require_no_credentials(canonical(proposal))
                 if not isinstance(proposal,dict) or set(proposal)-{'segment','title','body','attribution','quote','target_record_id'}:
                     raise PersonalError('invalid','invalid candidate fields')
-                if proposal.get('segment') not in SEGMENTS or proposal.get('attribution') not in ATTRIBUTIONS:
+                if proposal.get('segment') not in WORKER_SEGMENTS or proposal.get('attribution') not in ATTRIBUTIONS:
                     raise PersonalError('invalid','candidate segment or attribution is invalid')
                 for key,maximum in [('title',200),('body',4000),('quote',2000)]:
                     if not isinstance(proposal.get(key),str) or not proposal[key].strip() or len(proposal[key])>maximum:

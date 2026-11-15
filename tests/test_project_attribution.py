@@ -62,7 +62,7 @@ def insert_session(
     session_id: str,
     project: str,
     path: Path,
-    cwd: str = "/Users/sam/runtime",
+    cwd: str = "/workspace/example/runtime",
 ) -> None:
     store.upsert_session(
         id=session_id,
@@ -100,8 +100,8 @@ class ProjectAttributionTests(unittest.TestCase):
                 root / "-private-tmp-claude-123" / "excluded.jsonl",
                 "/private/tmp/claude-123",
             )
-            included = root / "-Users-sam-runtime" / "included.jsonl"
-            write_claude_transcript(included, "/Users/sam/runtime")
+            included = root / "-workspace-example-runtime" / "included.jsonl"
+            write_claude_transcript(included, "/workspace/example/runtime")
             ds = DataStore(
                 name="runtime",
                 path=root,
@@ -112,7 +112,7 @@ class ProjectAttributionTests(unittest.TestCase):
 
             found, _ = source_adapter(ds)
 
-            self.assertEqual(found, [(included, "-Users-sam-runtime", None)])
+            self.assertEqual(found, [(included, "-workspace-example-runtime", None)])
             self.assertEqual(ds.resolve_project(found[0][1]), "assistant")
 
     def test_config_loads_fixed_attribution_and_planning_lock(self) -> None:
@@ -144,8 +144,8 @@ lock_writes_to_default = true
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             source_root = base / "transcripts"
-            source_project = "-Users-sam-agents-otherhost"
-            cwd = "/Users/sam/agents/otherhost"
+            source_project = "-workspace-example-agents-sample-agent"
+            cwd = "/workspace/example/agents/sample-agent"
             transcript = source_root / source_project / "future-session.jsonl"
             write_claude_transcript(transcript, cwd)
             cfg = Config(
@@ -186,9 +186,9 @@ class ReconciliationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             source_root = base / "transcripts"
-            old_project = "-Users-sam-agents-otherhost"
+            old_project = "-workspace-example-agents-sample-agent"
             transcript = source_root / old_project / "session-1.jsonl"
-            write_claude_transcript(transcript, "/Users/sam/agents/otherhost")
+            write_claude_transcript(transcript, "/workspace/example/agents/sample-agent")
             cfg = Config(
                 data_stores=[
                     DataStore(
@@ -207,7 +207,7 @@ class ReconciliationTests(unittest.TestCase):
                     session_id="session-1",
                     project=old_project,
                     path=transcript,
-                    cwd="/Users/sam/agents/otherhost",
+                    cwd="/workspace/example/agents/sample-agent",
                 )
                 retained_ids = store.add_memories([
                     MemoryRow(
@@ -327,7 +327,7 @@ class ReconciliationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             transcript = base / "source" / "old-project" / "session-1.jsonl"
-            write_claude_transcript(transcript, "/Users/sam/runtime")
+            write_claude_transcript(transcript, "/workspace/example/runtime")
             store = MemoryStore(base / "memory.db")
             try:
                 insert_session(
