@@ -25,13 +25,28 @@ from .time_utils import week_start
 from .transcript import chunk_session
 
 
-def pipeline_policy(cfg, embedder, llm, fallback):
-    return content_key({"version": 1, "segment_chars": cfg.segment_chars, "overlap": cfg.segment_overlap,
-                        "fanout": cfg.incremental_reduce_fanout, "importance": cfg.min_importance,
-                        "chunk_chars": cfg.chunk_chars, "tool_snippet": cfg.tool_result_snippet,
-                        "min_session_chars": cfg.min_session_chars,
-                        "embedding": embedder.descriptor,
-                        "prompts": content_key([SESSION_SYSTEM, STABLE_MAP_PROMPT, REDUCE_PROMPT]),
+def _policy_shape(cfg, embedder):
+    return {"version": 1, "segment_chars": cfg.segment_chars, "overlap": cfg.segment_overlap,
+            "fanout": cfg.incremental_reduce_fanout, "importance": cfg.min_importance,
+            "chunk_chars": cfg.chunk_chars, "tool_snippet": cfg.tool_result_snippet,
+            "min_session_chars": cfg.min_session_chars,
+            "embedding": embedder.descriptor,
+            "prompts": content_key([SESSION_SYSTEM, STABLE_MAP_PROMPT, REDUCE_PROMPT])}
+
+
+def pipeline_policy(cfg, embedder):
+    """What a published distillation depends on: how sources are cut, the
+    prompts, and the embedding space. The model that wrote it is not part of
+    it: models change all the time, and a session someone already paid to
+    distil is not redone because the primary or fallback model changed."""
+    return content_key(_policy_shape(cfg, embedder))
+
+
+def legacy_pipeline_policy(cfg, embedder, llm, fallback):
+    """The policy as stores recorded it while it still named the models. Work
+    published under it by the models configured now is the same work, and is
+    carried forward without a model call."""
+    return content_key({**_policy_shape(cfg, embedder),
                         "primary": getattr(llm, "cache_identity", getattr(llm, "name", None)),
                         "fallback": getattr(fallback, "cache_identity", getattr(fallback, "name", None))})
 
@@ -120,7 +135,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
     store.assert_embedder(embedder.descriptor)
     reader = CompletedSourceReader(cfg)
     cache = DistillationCheckpoints(cfg.data_dir / 'distillation-cache.db')
-    policy = pipeline_policy(cfg, embedder, llm, fallback_llm)
+    policy = pipeline_policy(cfg, embedder)
+    legacy_policy = legacy_pipeline_policy(cfg, embedder, llm, fallback_llm)
     hold_signature = content_key(cfg.ingestion_hold_texts)
     found = []
     from .audit import source_members
@@ -338,6 +354,11 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             continue
                         known_status = old_status or (store.file_status(old['source_path']) if old else None)
                         previous = store.session_rows_with_vectors(st.session_id)
+                        if state.get('policy') == legacy_policy:
+                            # The same work, recorded while the policy still named
+                            # the models: each source is re-read once after the
+                            # upgrade and carried forward here, never redistilled.
+                            state['policy'] = policy
                         if (not retry_extractive and state.get('policy') == policy and state.get('indexed_units') == keys and old is not None):
                             state.update(pending_tail=snapshot.pending_tail,
                                          revisions=[asdict(r) for r in snapshot.revisions])
@@ -358,9 +379,13 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         # A specifically authorized old policy may adopt only
                         # an exactly verified paid prefix; request caches still
                         # retain their original model identities.
+                        # Request checkpoints are keyed by model, so after a model
+                        # change an appended session would pay for its earlier
+                        # units again. Seed it from its verified paid rows instead.
+                        other_models = same_policy and not seed and state.get('models') != legacy_policy
                         if (not retry_extractive and
                                 (not indexed or (same_policy and (not tracking_matches or not seed_matches))
-                                 or state.get('policy') in cfg.adopt_published_policies)):
+                                 or other_models or state.get('policy') in cfg.adopt_published_policies)):
                             seed = _bootstrap(snapshot, old, previous, cfg)
                             if seed:
                                 seed['status'] = known_status
@@ -417,7 +442,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         pending_units = len(current.unit_keys()) - len(keys)
                         pending = current.pending_tail or pending_units > 0
                         signature = content_key([current.observed_signature, policy])
-                        publication = {"policy": policy, "indexed_units": keys, "seed": seed,
+                        publication = {"policy": policy, "models": legacy_policy, "indexed_units": keys, "seed": seed,
                                        "pending_tail": current.pending_tail, "pending_units": pending_units,
                                        "boundary_kinds": snapshot.unit_kinds,
                                        "indexed_through_at": st.ended_at, "revisions": [asdict(r) for r in snapshot.revisions],

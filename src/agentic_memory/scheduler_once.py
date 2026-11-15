@@ -18,6 +18,8 @@ from .scheduler_queue import WorkQueue
 MAX_SHUTDOWN_GRACE = 60.0
 POLL_SECONDS = 0.1
 _TERMINAL = {'success', 'partial', 'busy', 'error', 'worker_lost', 'cancelled', 'timeout'}
+# A catch-up ends when this many passes in a row leave no less work than the best so far.
+STALLED_PASSES = 5
 
 
 def _signal_group(process, sig):
@@ -44,11 +46,18 @@ def _cleanup(active, grace):
         process.wait()
 
 
-def ingest_once(config_path: Path) -> int:
+def ingest_once(config_path: Path, *, until_caught_up: bool = False) -> int:
     """Run each enabled ingest job at most once and print a safe summary.
 
     Existing retry backoff, durable leases, worker caps, hold policy and
     provider gates remain authoritative. No explicit/retry override is used.
+
+    ``until_caught_up`` keeps going: while a store that just ran still has
+    sources waiting, its next pass runs as soon as the queue makes it due
+    (the backlog delay), until nothing waits. Each pass keeps its own source,
+    model-call and time limits; there is no limit on the number of passes. A
+    failed pass ends the catch-up (its retry backoff stands), and so does a
+    run of passes that leaves no less work than before.
     """
     cancelled = []
     old_signals = {}
@@ -56,6 +65,7 @@ def ingest_once(config_path: Path) -> int:
         for sig in (signal.SIGTERM, signal.SIGINT):
             old_signals[sig] = signal.signal(sig, lambda number, _: cancelled.append(number))
     results = []
+    passes = remaining = 0
     outcome, code = 'error', 1
     try:
         config = load_service(config_path)
@@ -64,65 +74,98 @@ def ingest_once(config_path: Path) -> int:
         with supervisor_lock(config):
             queue = WorkQueue(config)
             gate = _gate(config)
-            for identifier in queue.recover():
-                gate.release_owner(identifier)
             enabled = {store.name for store in config.stores if store.enabled}
-            now = time.time()
-            pending = []
-            for job in queue.status()['jobs']:
-                if job['instance'] not in enabled or job['kind'] != 'ingest':
-                    continue
-                if job['state'] == 'running':
-                    results.append({'instance': job['instance'], 'status': 'busy'})
-                elif job['attempts'] == 0 or job['due'] <= now:
-                    pending.append(job['instance'])
-                else:
-                    results.append({'instance': job['instance'], 'status': 'backoff'})
             active = {}
             timed_out = set()
             grace = min(config.job_drain_seconds, MAX_SHUTDOWN_GRACE)
+            best = None
+            stalled = 0
+            only = None  # after the first pass, only the stores with sources still waiting
             try:
-                while (pending or active) and not cancelled:
-                    for identifier, (process, started) in list(active.items()):
-                        elapsed = time.monotonic() - started
-                        if process.poll() is None and elapsed >= config.job_timeout_seconds:
-                            if identifier not in timed_out:
-                                timed_out.add(identifier)
-                                _signal_group(process, signal.SIGTERM)
-                            if elapsed >= config.job_timeout_seconds + grace:
-                                _signal_group(process, signal.SIGKILL)
-                        if process.poll() is None:
-                            continue
-                        process.wait()
-                        # A worker must not leave grandchildren behind on exit.
-                        _signal_group(process, signal.SIGKILL)
-                        state = queue.get_run(identifier)
-                        status = state['outcome']
-                        if identifier in timed_out:
-                            status = 'timeout'
-                        elif status not in _TERMINAL or process.returncode != 0:
-                            status = 'worker_lost' if status in ('starting', 'running') else 'error'
-                        if state['outcome'] in ('starting', 'running'):
-                            queue.finish(identifier, outcome=status)
+                while True:
+                    for identifier in queue.recover():
                         gate.release_owner(identifier)
-                        results.append({'instance': state['instance'], 'status': status})
-                        del active[identifier]
-                    while pending and len(active) < config.parallel_stores and not cancelled:
-                        instance = pending.pop(0)
-                        run = queue.claim(instance=instance, kind='ingest', external_trigger=True)
-                        if run is None:
-                            results.append({'instance': instance, 'status': 'busy'})
+                    now = time.time()
+                    pending = []
+                    first = len(results)
+                    for job in queue.status()['jobs']:
+                        if job['instance'] not in enabled or job['kind'] != 'ingest':
                             continue
-                        try:
-                            process = spawn_worker(config, run)
-                        except Exception:
-                            queue.finish(run['id'], outcome='error', error='worker launch failed')
-                            results.append({'instance': instance, 'status': 'error'})
+                        if only is not None and job['instance'] not in only:
                             continue
-                        # Register immediately, before any fallible database operation.
-                        active[run['id']] = (process, time.monotonic())
-                        queue.start(run['id'], process.pid, allow_finished=True)
-                    if active and not cancelled:
+                        if job['state'] == 'running':
+                            results.append({'instance': job['instance'], 'status': 'busy'})
+                        elif job['attempts'] == 0 or job['due'] <= now:
+                            pending.append(job['instance'])
+                        else:
+                            results.append({'instance': job['instance'], 'status': 'backoff'})
+                    while (pending or active) and not cancelled:
+                        for identifier, (process, started) in list(active.items()):
+                            elapsed = time.monotonic() - started
+                            if process.poll() is None and elapsed >= config.job_timeout_seconds:
+                                if identifier not in timed_out:
+                                    timed_out.add(identifier)
+                                    _signal_group(process, signal.SIGTERM)
+                                if elapsed >= config.job_timeout_seconds + grace:
+                                    _signal_group(process, signal.SIGKILL)
+                            if process.poll() is None:
+                                continue
+                            process.wait()
+                            # A worker must not leave grandchildren behind on exit.
+                            _signal_group(process, signal.SIGKILL)
+                            state = queue.get_run(identifier)
+                            status = state['outcome']
+                            if identifier in timed_out:
+                                status = 'timeout'
+                            elif status not in _TERMINAL or process.returncode != 0:
+                                status = 'worker_lost' if status in ('starting', 'running') else 'error'
+                            if state['outcome'] in ('starting', 'running'):
+                                queue.finish(identifier, outcome=status)
+                            gate.release_owner(identifier)
+                            results.append({'instance': state['instance'], 'status': status})
+                            del active[identifier]
+                        while pending and len(active) < config.parallel_stores and not cancelled:
+                            instance = pending.pop(0)
+                            run = queue.claim(instance=instance, kind='ingest', external_trigger=True)
+                            if run is None:
+                                results.append({'instance': instance, 'status': 'busy'})
+                                continue
+                            try:
+                                process = spawn_worker(config, run)
+                            except Exception:
+                                queue.finish(run['id'], outcome='error', error='worker launch failed')
+                                results.append({'instance': instance, 'status': 'error'})
+                                continue
+                            # Register immediately, before any fallible database operation.
+                            active[run['id']] = (process, time.monotonic())
+                            queue.start(run['id'], process.pid, allow_finished=True)
+                        if active and not cancelled:
+                            time.sleep(POLL_SECONDS)
+                    passes += 1
+                    remaining = 0
+                    if not until_caught_up or cancelled:
+                        break
+                    latest = results[first:]
+                    if any(r['status'] in ('error', 'worker_lost', 'timeout') for r in latest):
+                        break
+                    ran = {r['instance'] for r in latest if r['status'] in ('success', 'partial')}
+                    waiting = {}
+                    for job in queue.status()['jobs']:
+                        if job['kind'] == 'ingest' and job['instance'] in ran:
+                            stats = job['last_stats'] or {}
+                            left = int(stats.get('sources_remaining') or 0) + int(stats.get('sources_pending') or 0)
+                            if left:
+                                waiting[job['instance']] = (job['due'], left)
+                    remaining = sum(left for _, left in waiting.values())
+                    if not waiting:
+                        break
+                    stalled = 0 if best is None or remaining < best else stalled + 1
+                    best = remaining if best is None else min(best, remaining)
+                    if stalled >= STALLED_PASSES:
+                        break
+                    only = set(waiting)
+                    due = min(due for due, _ in waiting.values())
+                    while time.time() < due and not cancelled:
                         time.sleep(POLL_SECONDS)
                 if cancelled:
                     outcome, code = 'cancelled', 128 + cancelled[0]
@@ -157,5 +200,6 @@ def ingest_once(config_path: Path) -> int:
         outcome, code = 'cancelled', 128 + cancelled[0]
     print(json.dumps({'schema_version': 1, 'command': 'ingest-once',
                       'outcome': outcome, 'counts': dict(Counter(r['status'] for r in results)),
+                      'passes': passes, 'remaining': remaining,
                       'stores': results}), flush=True)
     return code

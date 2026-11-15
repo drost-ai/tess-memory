@@ -260,7 +260,7 @@ def cmd_scheduler(args: argparse.Namespace) -> int:
         return 0
     if args.action == 'ingest-once':
         from .scheduler_once import ingest_once
-        return ingest_once(path)
+        return ingest_once(path, until_caught_up=args.until_caught_up)
     if args.action == 'serve':
         serve(path)
         return 0
@@ -532,7 +532,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument('--config', required=True)
     commands = p.add_subparsers(dest='action', required=True)
     for action in ('serve', 'status', 'ingest-once'):
-        commands.add_parser(action).set_defaults(fn=cmd_scheduler)
+        command = commands.add_parser(action)
+        if action == 'ingest-once':
+            command.add_argument('--until-caught-up', action='store_true',
+                                 help='keep running passes while sources wait, until every store is caught up')
+        command.set_defaults(fn=cmd_scheduler)
     command = commands.add_parser('usage', help='Observed model tokens, retries and accounting coverage')
     command.add_argument('--instance')
     command.add_argument('--since', help='ISO timestamp with timezone; defaults to 24 hours ago')
