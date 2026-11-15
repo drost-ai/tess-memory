@@ -167,9 +167,8 @@ class DreamTests(unittest.TestCase):
 
     def test_a_worker_does_not_initialize_the_core_and_cannot_write_it(self):
         # The core is Soul, User, Identity and Core, authored directly.
-        with self.assertRaises(PersonalError) as refused:
+        with self.assertRaises(TypeError):
             self.dream.prepare(initialize=True)
-        self.assertEqual(refused.exception.code,'unsupported')
         self.assertEqual(PersonalInbox(self.store).list()['candidates'][0]['id'],self.cid)
         cycle=self.dream.prepare()
         for segment in ('Soul','User','Identity','Core','Self','Principles'):

@@ -161,10 +161,10 @@ def register_personal_tools(server, config, *, principal=None):
             return op
 
         @expose
-        def autobiography_reconcile_claim(operation_id: str, operation_fence: int, initialize: bool=False) -> dict:
+        def autobiography_reconcile_claim(operation_id: str, operation_fence: int) -> dict:
             from .dream_cycle import DreamCycle
             op=reconcile_operation(operation_id,operation_fence)
-            return DreamCycle(config,store()).prepare(deadline=op['deadline'],initialize=initialize,
+            return DreamCycle(config,store()).prepare(deadline=op['deadline'],
                 admission=lambda:reconcile_operation(operation_id,operation_fence),full_lease=True)
 
         @expose
@@ -181,11 +181,11 @@ def register_personal_tools(server, config, *, principal=None):
                 admission=lambda:reconcile_operation(operation_id,operation_fence))
 
         @expose
-        def autobiography_cycle_prepare(operation_id: str | None=None, operation_fence: int | None=None, initialize: bool=False) -> dict:
+        def autobiography_cycle_prepare(operation_id: str | None=None, operation_fence: int | None=None) -> dict:
             """Service operation: claim a bounded reflection batch with a fenced lease."""
             from .dream_cycle import DreamCycle
             deadline=operations()._operation(operation_id,operation_fence)['deadline'] if operation_id else None
-            return DreamCycle(config,store()).prepare(deadline=deadline,initialize=initialize)
+            return DreamCycle(config,store()).prepare(deadline=deadline)
 
         @expose
         def autobiography_cycle_renew(cycle_id: str, fence: int, lease_token: str) -> dict:
