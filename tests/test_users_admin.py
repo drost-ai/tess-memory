@@ -9,10 +9,10 @@ from contextlib import redirect_stdout
 from pathlib import Path
 from unittest import mock
 
-from agentic_memory import admin, cli, server
-from agentic_memory.config import Config
-from agentic_memory.principals import Principal
-from agentic_memory.store import MemoryRow, MemoryStore
+from tess_memory import admin, cli, server
+from tess_memory.config import Config
+from tess_memory.principals import Principal
+from tess_memory.store import MemoryRow, MemoryStore
 
 
 class AdminTests(unittest.TestCase):

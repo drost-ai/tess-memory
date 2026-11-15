@@ -4,7 +4,7 @@ against a store the new code has opened.
 
 - Golden: every MCP tool's output over a fixture store built through the
   public APIs, compared with outputs recorded from the code before Epic U
-  (tests/fixtures/users_compat_golden.json; AGENTIC_MEMORY_UPDATE_GOLDEN=1
+  (tests/fixtures/users_compat_golden.json; TESS_MEMORY_UPDATE_GOLDEN=1
   rewrites it, which only ever happens on purpose).
 - Concurrency: many processes open a store created by the old code at the
   same instant; every open succeeds and the store ends up fully migrated.
@@ -27,9 +27,9 @@ from unittest import mock
 
 import numpy as np
 
-from agentic_memory import plan, retrieval, server
-from agentic_memory.config import Config
-from agentic_memory.store import MemoryRow, MemoryStore
+from tess_memory import plan, retrieval, server
+from tess_memory.config import Config
+from tess_memory.store import MemoryRow, MemoryStore
 
 BASE = "910d5c0"  # main when Epic U began (2026-10-07)
 GOLDEN = Path(__file__).parent / "fixtures" / "users_compat_golden.json"
@@ -140,7 +140,7 @@ class GoldenTests(unittest.TestCase):
                     outputs = tool_outputs(store, cfg, embedder)
             finally:
                 store.close()
-        if os.environ.get("AGENTIC_MEMORY_UPDATE_GOLDEN") == "1":
+        if os.environ.get("TESS_MEMORY_UPDATE_GOLDEN") == "1":
             GOLDEN.parent.mkdir(exist_ok=True)
             GOLDEN.write_text(json.dumps(outputs, indent=2, sort_keys=True) + "\n")
         expected = json.loads(GOLDEN.read_text())
@@ -175,7 +175,7 @@ class OldCodeTests(unittest.TestCase):
         self.db = self.root / "memory.db"
         made = _run(self.old, f"""
             from pathlib import Path
-            from agentic_memory.store import MemoryStore, MemoryRow
+            from tess_memory.store import MemoryStore, MemoryRow
             s = MemoryStore(Path({str(self.db)!r}))
             with s.write_transaction():
                 s.upsert_session(id='old-1', project='alpha', title='old session', ended_at='2026-01-01')
@@ -189,7 +189,7 @@ class OldCodeTests(unittest.TestCase):
         code = f"""
             import time
             from pathlib import Path
-            from agentic_memory.store import MemoryStore
+            from tess_memory.store import MemoryStore
             time.sleep(max(0, {__import__('time').time() + 1.5} - time.time()))  # a common start instant
             s = MemoryStore(Path({str(self.db)!r}))
             s.close()
@@ -208,7 +208,7 @@ class OldCodeTests(unittest.TestCase):
         MemoryStore(self.db).close()  # the new code opens (and migrates) it
         result = _run(self.old, f"""
             from pathlib import Path
-            from agentic_memory.store import MemoryStore, MemoryRow
+            from tess_memory.store import MemoryStore, MemoryRow
             s = MemoryStore(Path({str(self.db)!r}))
             with s.write_transaction():
                 s.add_memories([MemoryRow('memory', 'solution', 'old code still writes', session_id='old-1', project='alpha')])

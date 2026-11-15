@@ -9,12 +9,12 @@ import sys
 import unittest
 from unittest import mock
 
-from agentic_memory.scheduler_config import ServiceConfig, ScheduledStore, load_service
-from agentic_memory.scheduler_queue import WorkQueue
-from agentic_memory.scheduler import worker, service_status, serve, owned_worker, stop_run, run_outcome
-from agentic_memory.ingest import IngestStats
-from agentic_memory.provider_limits import ProviderGate
-from agentic_memory.scheduler_install import build_plist, owned_plist, service_control
+from tess_memory.scheduler_config import ServiceConfig, ScheduledStore, load_service
+from tess_memory.scheduler_queue import WorkQueue
+from tess_memory.scheduler import worker, service_status, serve, owned_worker, stop_run, run_outcome
+from tess_memory.ingest import IngestStats
+from tess_memory.provider_limits import ProviderGate
+from tess_memory.scheduler_install import build_plist, owned_plist, service_control
 from test_codex import RecordingEmbedder, write_rollout
 
 
@@ -30,14 +30,14 @@ class SchedulerQueueTests(unittest.TestCase):
 
     def test_provider_gate_routing_uses_explicit_yaml_registry(self):
         from types import SimpleNamespace
-        from agentic_memory.provider_limits import provider_key
+        from tess_memory.provider_limits import provider_key
         registry = self.root / 'providers.yaml'
         registry.write_text('providerProfiles:\n  fireworks-test:\n    kind: openai\n    apiMode: chat_completions\n    baseUrl: https://api.fireworks.ai/inference/v1\n    defaultModel: synthetic\n    auth:\n      kind: none\n')
         cfg = SimpleNamespace(provider_registry=registry, agent_core_settings=self.root / 'must-not-read.json')
         self.assertEqual(provider_key(cfg, 'fireworks-test'), 'fireworks')
 
     def test_separate_supervisors_can_share_provider_gate(self):
-        from agentic_memory.scheduler import _gate, supervisor_lock
+        from tess_memory.scheduler import _gate, supervisor_lock
         shared = self.config.db_path
         other = replace(self.config, data_dir=self.root / 'other', provider_gate_db=shared)
         WorkQueue(other)
@@ -98,11 +98,11 @@ class SchedulerQueueTests(unittest.TestCase):
         queue.status.return_value = {'jobs': []}
         for store in self.config.stores:
             store.settings.touch()
-        with mock.patch('agentic_memory.scheduler.load_service', return_value=self.config), \
-             mock.patch('agentic_memory.scheduler.WorkQueue', return_value=queue), \
-             mock.patch('agentic_memory.scheduler._gate') as gate, \
-             mock.patch('agentic_memory.scheduler.supervisor_lock', return_value=nullcontext()), \
-             mock.patch('agentic_memory.scheduler.signal.signal'):
+        with mock.patch('tess_memory.scheduler.load_service', return_value=self.config), \
+             mock.patch('tess_memory.scheduler.WorkQueue', return_value=queue), \
+             mock.patch('tess_memory.scheduler._gate') as gate, \
+             mock.patch('tess_memory.scheduler.supervisor_lock', return_value=nullcontext()), \
+             mock.patch('tess_memory.scheduler.signal.signal'):
             serve(self.config.path, stop_event=stop)
         self.assertEqual(queue.supervisor_heartbeat.call_count, 2)
         queue.finish.assert_not_called()
@@ -126,13 +126,13 @@ class SchedulerQueueTests(unittest.TestCase):
         queue.claim.return_value = None
         for store in self.config.stores:
             store.settings.touch()
-        with mock.patch('agentic_memory.scheduler.load_service', return_value=self.config), \
-             mock.patch('agentic_memory.scheduler.WorkQueue', return_value=queue), \
-             mock.patch('agentic_memory.scheduler._gate') as gate, \
-             mock.patch('agentic_memory.scheduler.supervisor_lock', return_value=nullcontext()), \
-             mock.patch('agentic_memory.scheduler.signal.signal'), \
-             mock.patch('agentic_memory.scheduler.owned_worker', side_effect=[None, True]) as probe, \
-             mock.patch('agentic_memory.scheduler.stop_run') as terminate:
+        with mock.patch('tess_memory.scheduler.load_service', return_value=self.config), \
+             mock.patch('tess_memory.scheduler.WorkQueue', return_value=queue), \
+             mock.patch('tess_memory.scheduler._gate') as gate, \
+             mock.patch('tess_memory.scheduler.supervisor_lock', return_value=nullcontext()), \
+             mock.patch('tess_memory.scheduler.signal.signal'), \
+             mock.patch('tess_memory.scheduler.owned_worker', side_effect=[None, True]) as probe, \
+             mock.patch('tess_memory.scheduler.stop_run') as terminate:
             serve(self.config.path, stop_event=stop)
         self.assertEqual(probe.call_count, 2)
         queue.finish.assert_not_called()
@@ -152,7 +152,7 @@ class SchedulerQueueTests(unittest.TestCase):
     def test_lost_worker_requeues_and_old_completion_cannot_clear_new_run(self):
         run = self.queue.claim(instance='a', kind='ingest', explicit=True)
         self.queue.start(run['id'], 99999999)
-        with mock.patch('agentic_memory.scheduler_queue.process_alive', return_value=False):
+        with mock.patch('tess_memory.scheduler_queue.process_alive', return_value=False):
             self.assertEqual(self.queue.recover(), [run['id']])
         new = self.queue.claim(instance='a', kind='ingest', explicit=True)
         self.assertFalse(self.queue.finish(run['id']))
@@ -236,35 +236,35 @@ class WorkerOwnershipTests(unittest.TestCase):
 
     def test_probe_timeout_or_os_failure_is_unknown_instead_of_unowned(self):
         for error in (subprocess.TimeoutExpired('ps', 3), OSError('probe unavailable')):
-            with mock.patch('agentic_memory.scheduler.process_alive', return_value=True), \
-                 mock.patch('agentic_memory.scheduler.subprocess.run', side_effect=error):
+            with mock.patch('tess_memory.scheduler.process_alive', return_value=True), \
+                 mock.patch('tess_memory.scheduler.subprocess.run', side_effect=error):
                 self.assertIsNone(owned_worker(123, 'run'))
 
     def test_live_unreadable_probe_is_unknown_and_dead_process_is_unowned(self):
         from types import SimpleNamespace
         for result in (SimpleNamespace(returncode=1, stdout=''), SimpleNamespace(returncode=0, stdout=''),
                        SimpleNamespace(returncode=0, stdout='"unfinished quotation')):
-            with mock.patch('agentic_memory.scheduler.process_alive', return_value=True), \
-                 mock.patch('agentic_memory.scheduler.subprocess.run', return_value=result):
+            with mock.patch('tess_memory.scheduler.process_alive', return_value=True), \
+                 mock.patch('tess_memory.scheduler.subprocess.run', return_value=result):
                 self.assertIsNone(owned_worker(123, 'run'))
-        with mock.patch('agentic_memory.scheduler.process_alive', return_value=False), \
-             mock.patch('agentic_memory.scheduler.subprocess.run') as probe:
+        with mock.patch('tess_memory.scheduler.process_alive', return_value=False), \
+             mock.patch('tess_memory.scheduler.subprocess.run') as probe:
             self.assertIs(owned_worker(123, 'run'), False)
             probe.assert_not_called()
 
     def test_positive_ownership_requires_the_expected_worker_command_and_run_id(self):
         from types import SimpleNamespace
-        command = '/repo/.venv/bin/python -u -m agentic_memory.cli scheduler-worker --config /config --run-id mine'
-        with mock.patch('agentic_memory.scheduler.process_alive', return_value=True), \
-             mock.patch('agentic_memory.scheduler.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=command)):
+        command = '/repo/.venv/bin/python -u -m tess_memory.cli scheduler-worker --config /config --run-id mine'
+        with mock.patch('tess_memory.scheduler.process_alive', return_value=True), \
+             mock.patch('tess_memory.scheduler.subprocess.run', return_value=SimpleNamespace(returncode=0, stdout=command)):
             self.assertIs(owned_worker(123, 'mine'), True)
             self.assertIs(owned_worker(123, 'different'), False)
 
     def test_stop_run_never_signals_a_process_with_unconfirmed_ownership(self):
-        with mock.patch('agentic_memory.scheduler.WorkQueue') as queue, \
-             mock.patch('agentic_memory.scheduler.owned_worker', return_value=None), \
-             mock.patch('agentic_memory.scheduler.os.killpg') as signal_group, \
-             mock.patch('agentic_memory.scheduler.os.getpgid') as group_id:
+        with mock.patch('tess_memory.scheduler.WorkQueue') as queue, \
+             mock.patch('tess_memory.scheduler.owned_worker', return_value=None), \
+             mock.patch('tess_memory.scheduler.os.killpg') as signal_group, \
+             mock.patch('tess_memory.scheduler.os.getpgid') as group_id:
             queue.return_value.get_run.return_value = {'pid': 123}
             self.assertFalse(stop_run(None, 'run', force=True))
             signal_group.assert_not_called()
@@ -273,8 +273,8 @@ class WorkerOwnershipTests(unittest.TestCase):
 
 class SchedulerWorkerTests(unittest.TestCase):
     def test_hot_source_finishes_at_poll_cadence_without_provider_work(self):
-        from agentic_memory.scheduler_config import load_service
-        from agentic_memory.scheduler_queue import WorkQueue
+        from tess_memory.scheduler_config import load_service
+        from tess_memory.scheduler_queue import WorkQueue
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             source = root / 'source'
@@ -295,8 +295,8 @@ class SchedulerWorkerTests(unittest.TestCase):
             backend = mock.Mock()
             backend.name = 'unused-provider'
             backend.cache_identity = 'unused-model'
-            with mock.patch('agentic_memory.scheduler.AgentCoreBackend', return_value=backend), \
-                 mock.patch('agentic_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
+            with mock.patch('tess_memory.scheduler.AgentCoreBackend', return_value=backend), \
+                 mock.patch('tess_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path, run['id']), 0)
             backend.complete.assert_not_called()
             finished = queue.get_run(run['id'])
@@ -308,8 +308,8 @@ class SchedulerWorkerTests(unittest.TestCase):
     def test_sigterm_drains_paid_completion_before_worker_exits(self):
         import signal
         from test_codex import write_rollout
-        from agentic_memory.scheduler_config import load_service
-        from agentic_memory.scheduler_queue import WorkQueue
+        from tess_memory.scheduler_config import load_service
+        from tess_memory.scheduler_queue import WorkQueue
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp).resolve()
             source = root / 'source'
@@ -329,7 +329,7 @@ class SchedulerWorkerTests(unittest.TestCase):
             code = '''import json,time,sys
 from pathlib import Path
 from unittest import mock
-from agentic_memory.scheduler import worker
+from tess_memory.scheduler import worker
 class Model:
  name='offline'
  def complete(self,**kwargs):
@@ -339,7 +339,7 @@ class Model:
 class Embedding:
  descriptor='offline'
  def embed_passages(self,*args):raise AssertionError('no final session before reduction')
-with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()), mock.patch('agentic_memory.scheduler.make_embedder',return_value=Embedding()):
+with mock.patch('tess_memory.scheduler.AgentCoreBackend',return_value=Model()), mock.patch('tess_memory.scheduler.make_embedder',return_value=Embedding()):
  sys.exit(worker(Path(sys.argv[1]),sys.argv[2]))
 '''
             process = subprocess.Popen([sys.executable, '-c', code, str(config), run['id'], str(marker)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -376,10 +376,10 @@ with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()
             # Exercise installed modules without synthetic import-path shims.
             env = {key: value for key, value in os.environ.items()
                    if key not in {'PYTHONPATH', 'AGENT_CORE_PATH'}
-                   and not key.startswith('AGENTIC_MEMORY_')}
+                   and not key.startswith('TESS_MEMORY_')}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nsettings="{settings}"\n')
-            result = subprocess.run([sys.executable, '-m', 'agentic_memory.cli', 'scheduler', '--config', str(config_path),
+            result = subprocess.run([sys.executable, '-m', 'tess_memory.cli', 'scheduler', '--config', str(config_path),
                                      'run', '--instance', 'empty'], capture_output=True, text=True, timeout=15, env=env)
             diagnostic = result.stderr + result.stdout + ''.join(
                 path.read_text() for path in (root / 'service' / 'runs').glob('*.log'))
@@ -408,16 +408,16 @@ with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()
                 name = cache_identity = 'synthetic'
                 def complete(self, **kw):
                     return json.dumps({'title': 'Test', 'summary': 'Useful history', 'outcome': 'Complete', 'memories': []})
-            with mock.patch('agentic_memory.scheduler.AgentCoreBackend', return_value=Backend()) as ctor, \
-                 mock.patch('agentic_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
+            with mock.patch('tess_memory.scheduler.AgentCoreBackend', return_value=Backend()) as ctor, \
+                 mock.patch('tess_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path, run['id']), 0)
             self.assertFalse(ctor.call_args.kwargs['probe'])
             saved = WorkQueue(config).get_run(run['id'])
             self.assertEqual(saved['outcome'], 'success')
             self.assertEqual(json.loads(saved['stats'])['distilled'], 1)
             run2 = queue.claim(instance='codex', kind='ingest', explicit=True)
-            with mock.patch('agentic_memory.scheduler.AgentCoreBackend', return_value=Backend()), \
-                 mock.patch('agentic_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
+            with mock.patch('tess_memory.scheduler.AgentCoreBackend', return_value=Backend()), \
+                 mock.patch('tess_memory.scheduler.make_embedder', return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path, run2['id']), 0)
             self.assertEqual(json.loads(queue.get_run(run2['id'])['stats'])['model_calls'], 0)
 
@@ -438,13 +438,13 @@ with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             cfg = ServiceConfig(path=root / 'config.toml', data_dir=root / 'service', stores=())
-            value = build_plist(cfg, 'com.agentic-memory.test')
+            value = build_plist(cfg, 'com.tess-memory.test')
             self.assertTrue(value['RunAtLoad'])
             self.assertTrue(value['KeepAlive'])
             self.assertIn('serve', value['ProgramArguments'])
             path = root / 'agent.plist'
             path.write_bytes(plistlib.dumps(value))
-            self.assertEqual(owned_plist(path)['Label'], 'com.agentic-memory.test')
+            self.assertEqual(owned_plist(path)['Label'], 'com.tess-memory.test')
             path.write_bytes(plistlib.dumps({'ProgramArguments': ['/bin/true']}))
             with self.assertRaisesRegex(ValueError, 'not owned'):
                 owned_plist(path)
@@ -462,11 +462,11 @@ with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=Model()
             if args[1] == 'print':
                 return SimpleNamespace(returncode=0 if len(calls) == 1 else 113)
             return SimpleNamespace(returncode=0)
-        with mock.patch('agentic_memory.scheduler_install.sys.platform', 'darwin'), \
-             mock.patch('agentic_memory.scheduler_install.owned_plist', return_value={'Label': 'com.agentic-memory.test'}), \
-             mock.patch('agentic_memory.scheduler_install.subprocess.run', side_effect=command), \
-             mock.patch('agentic_memory.scheduler_install.time.sleep'):
-            self.assertTrue(service_control('restart', label='com.agentic-memory.test')['loaded'])
+        with mock.patch('tess_memory.scheduler_install.sys.platform', 'darwin'), \
+             mock.patch('tess_memory.scheduler_install.owned_plist', return_value={'Label': 'com.tess-memory.test'}), \
+             mock.patch('tess_memory.scheduler_install.subprocess.run', side_effect=command), \
+             mock.patch('tess_memory.scheduler_install.time.sleep'):
+            self.assertTrue(service_control('restart', label='com.tess-memory.test')['loaded'])
         self.assertEqual(bootstraps, 2)
 
 

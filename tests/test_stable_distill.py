@@ -5,11 +5,11 @@ import tempfile
 import threading
 import unittest
 
-from agentic_memory.config import Config
-from agentic_memory.distill import DistillationPool, SESSION_SYSTEM
-from agentic_memory.readers import ParsedSource
-from agentic_memory.stable_distill import stable_digest, stable_map_prompts
-from agentic_memory.transcript import SessionTranscript, Turn
+from tess_memory.config import Config
+from tess_memory.distill import DistillationPool, SESSION_SYSTEM
+from tess_memory.readers import ParsedSource
+from tess_memory.stable_distill import stable_digest, stable_map_prompts
+from tess_memory.transcript import SessionTranscript, Turn
 
 
 class StableReductionTests(unittest.TestCase):

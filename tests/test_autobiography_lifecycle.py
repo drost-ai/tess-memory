@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalError, PersonalPrincipal
-from agentic_memory.autobiography_context import personal_context
+from tess_memory.autobiography import AutobiographyStore, PersonalError, PersonalPrincipal
+from tess_memory.autobiography_context import personal_context
 
 
 class LifecycleTests(unittest.TestCase):

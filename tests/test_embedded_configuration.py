@@ -12,9 +12,9 @@ import unittest
 import yaml
 from unittest.mock import patch, Mock
 
-from agentic_memory.config import DataStore, Config, load_config, load_manifest, parse_manifest, validate_config
-from agentic_memory.embed import make_embedder
-from agentic_memory.llm import AgentCoreBackend
+from tess_memory.config import DataStore, Config, load_config, load_manifest, parse_manifest, validate_config
+from tess_memory.embed import make_embedder
+from tess_memory.llm import AgentCoreBackend
 
 
 class EmbeddedConfigurationTests(unittest.TestCase):
@@ -61,7 +61,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         before = copy.deepcopy(self.envelope)
         expected = self.load()
         self.manifest.unlink()
-        with patch('agentic_memory.config.load_manifest', side_effect=AssertionError('no manifest file')):
+        with patch('tess_memory.config.load_manifest', side_effect=AssertionError('no manifest file')):
             actual = parse_manifest(MappingProxyType(self.envelope))
             validate_config(actual, validate_credentials=False)
         self.assertEqual(actual, expected)
@@ -72,7 +72,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
     def test_file_loader_delegates_to_in_memory_validator(self):
         self.manifest.write_text(json.dumps(self.envelope))
         sentinel = object()
-        with patch('agentic_memory.config.parse_manifest', return_value=sentinel) as parse:
+        with patch('tess_memory.config.parse_manifest', return_value=sentinel) as parse:
             self.assertIs(load_manifest(self.manifest, store_settings='store.toml'), sentinel)
         parse.assert_called_once_with(self.envelope, store_settings='store.toml')
 
@@ -102,11 +102,11 @@ class EmbeddedConfigurationTests(unittest.TestCase):
 
     def test_empty_home_no_writes_or_ambient_overrides(self):
         with patch.dict(os.environ, {'HOME': str(self.root / 'empty-user-home'),
-                                    'AGENTIC_MEMORY_DATA': '/ambient/data',
-                                    'AGENTIC_MEMORY_SOURCE': '/ambient/source',
-                                    'AGENTIC_MEMORY_AC_PROFILE': 'ambient',
-                                    'AGENTIC_MEMORY_USER': 'ambient',
-                                    'AGENTIC_MEMORY_AC_SETTINGS': '/ambient/settings'}):
+                                    'TESS_MEMORY_DATA': '/ambient/data',
+                                    'TESS_MEMORY_SOURCE': '/ambient/source',
+                                    'TESS_MEMORY_AC_PROFILE': 'ambient',
+                                    'TESS_MEMORY_USER': 'ambient',
+                                    'TESS_MEMORY_AC_SETTINGS': '/ambient/settings'}):
             cfg = self.load()
         self.assertEqual(cfg.data_dir, self.home / 'memory')
         self.assertEqual(cfg.data_stores, [])
@@ -185,17 +185,17 @@ class EmbeddedConfigurationTests(unittest.TestCase):
 
     def test_metadata_validation_never_constructs_clients_models_or_stores(self):
         self.envelope['config']['llm']['fallback_profile'] = 'fallback'
-        with (patch('agentic_memory.llm.AgentCoreBackend', side_effect=AssertionError('client')),
-             patch('agentic_memory.embed.make_embedder', side_effect=AssertionError('embedder')),
-             patch('agentic_memory.store.MemoryStore', side_effect=AssertionError('store'))):
+        with (patch('tess_memory.llm.AgentCoreBackend', side_effect=AssertionError('client')),
+             patch('tess_memory.embed.make_embedder', side_effect=AssertionError('embedder')),
+             patch('tess_memory.store.MemoryStore', side_effect=AssertionError('store'))):
             cfg = self.load()
         self.assertEqual(cfg.agent_core_fallback_profile, 'fallback')
         self.assertFalse(list(self.home.iterdir()))
 
     def test_explicit_manifest_environment_selection(self):
         self.load()
-        with patch.dict(os.environ, {'AGENTIC_MEMORY_CONFIG': str(self.manifest),
-                                    'AGENTIC_MEMORY_SETTINGS': '/must-not-read'}):
+        with patch.dict(os.environ, {'TESS_MEMORY_CONFIG': str(self.manifest),
+                                    'TESS_MEMORY_SETTINGS': '/must-not-read'}):
             self.assertTrue(load_config().embedded)
 
     def test_standalone_requires_explicit_selection_and_has_no_default_profile(self):
@@ -287,8 +287,8 @@ class EmbeddedConfigurationTests(unittest.TestCase):
                 validate_config(cfg, roles={'distillation'})
 
     def test_embedding_space_mismatch_preserves_vectors_and_source_cursor(self):
-        from agentic_memory.ingest import ingest
-        from agentic_memory.store import MemoryStore
+        from tess_memory.ingest import ingest
+        from tess_memory.store import MemoryStore
         store = MemoryStore(self.root / 'memory.db')
         self.addCleanup(store.close)
         store.assert_embedder('existing-model:2d')
@@ -345,8 +345,8 @@ path = "/explicit/archive/sessions"
         self.assertEqual(str(cfg.data_stores[1].path), absolute_source)
         self.assertEqual(cfg.personal.source_paths, (str(directory / 'sessions'), absolute_source))
         self.assertEqual(cfg.personal.native_creation_ledger, str(directory / 'state/ledger.db'))
-        overrides = {'AGENTIC_MEMORY_SETTINGS': str(settings), 'AGENTIC_MEMORY_DATA': 'overridden-state',
-                     'AGENTIC_MEMORY_SOURCE': 'overridden-sessions', 'AGENTIC_MEMORY_AC_SETTINGS': 'override-providers.yaml'}
+        overrides = {'TESS_MEMORY_SETTINGS': str(settings), 'TESS_MEMORY_DATA': 'overridden-state',
+                     'TESS_MEMORY_SOURCE': 'overridden-sessions', 'TESS_MEMORY_AC_SETTINGS': 'override-providers.yaml'}
         with patch.dict(os.environ, overrides, clear=True), chdir(neutral):
             overridden = load_config()
         self.assertEqual(overridden.data_dir, directory / 'overridden-state')
@@ -365,7 +365,7 @@ path = "/explicit/archive/sessions"
     def test_remote_embedding_failure_never_falls_back_to_local(self):
         self.envelope['config']['embedding']['provider'] = 'distill'
         cfg = self.load()
-        with patch.dict(os.environ, {}, clear=True), patch('agentic_memory.embed.LocalEmbedder') as local:
+        with patch.dict(os.environ, {}, clear=True), patch('tess_memory.embed.LocalEmbedder') as local:
             with self.assertRaises(ValueError):
                 make_embedder(cfg)
             local.assert_not_called()
@@ -396,8 +396,8 @@ path = "/explicit/archive/sessions"
 
     def test_native_ledger_is_explicit_readonly_and_not_source_sibling(self):
         from dataclasses import replace
-        from agentic_memory.autobiography_config import PersonalConfig
-        from agentic_memory.native_creation import native_creation_proof
+        from tess_memory.autobiography_config import PersonalConfig
+        from tess_memory.native_creation import native_creation_proof
         ledger = self.root / 'independent-ledger.db'
         with sqlite3.connect(ledger) as db:
             db.execute('CREATE TABLE sessions(id TEXT, engine_session_id TEXT, created_at REAL, deleted_at TEXT)')
@@ -431,16 +431,16 @@ path = "/explicit/archive/sessions"
         script = '''
 import os
 from pathlib import Path
-import agentic_memory.config as config
-import agentic_memory.server as server
-import agentic_memory.cli
+import tess_memory.config as config
+import tess_memory.server as server
+import tess_memory.cli
 assert config.CONFIG._value is None
 assert server._store is None and server._embedder is None
 assert not list(Path(os.environ['HOME']).iterdir())
 '''
         empty = self.root / 'empty'
         empty.mkdir()
-        env = dict(os.environ, HOME=str(empty), AGENTIC_MEMORY_CONFIG='/must-not-open.json')
+        env = dict(os.environ, HOME=str(empty), TESS_MEMORY_CONFIG='/must-not-open.json')
         result = subprocess.run([sys.executable, '-c', script], env=env, capture_output=True, text=True)
         self.assertEqual(result.returncode, 0, result.stderr)
 

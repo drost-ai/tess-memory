@@ -4,7 +4,7 @@ import unittest
 
 import numpy as np
 
-from agentic_memory.embed import OpenAICompatEmbedder
+from tess_memory.embed import OpenAICompatEmbedder
 
 
 class EmbeddingTransportTests(unittest.TestCase):

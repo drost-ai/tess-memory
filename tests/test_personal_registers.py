@@ -4,9 +4,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError
-from agentic_memory.personal_registers import PersonalRegisters
-from agentic_memory.personal_operations import PersonalOperations, SCHEMA
+from tess_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError
+from tess_memory.personal_registers import PersonalRegisters
+from tess_memory.personal_operations import PersonalOperations, SCHEMA
 
 
 class PersonalRegisterTests(unittest.TestCase):

@@ -7,12 +7,12 @@ import tempfile
 import unittest
 
 from mcp.server.mcpserver import MCPServer
-from agentic_memory.autobiography import AutobiographyStore, PersonalPrincipal
-from agentic_memory.autobiography_config import PersonalConfig
-from agentic_memory.autobiography_context import personal_context
-from agentic_memory.autobiography_server import register_personal_tools
-from agentic_memory.config import Config
-from agentic_memory.store import MemoryStore
+from tess_memory.autobiography import AutobiographyStore, PersonalPrincipal
+from tess_memory.autobiography_config import PersonalConfig
+from tess_memory.autobiography_context import personal_context
+from tess_memory.autobiography_server import register_personal_tools
+from tess_memory.config import Config
+from tess_memory.store import MemoryStore
 
 
 def legacy_snapshot(db):

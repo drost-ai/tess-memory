@@ -6,11 +6,11 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agentic_memory import plan
-from agentic_memory.config import Config, DataStore, load_config
-from agentic_memory.ingest import ingest
-from agentic_memory.principals import Principal
-from agentic_memory.store import MemoryStore
+from tess_memory import plan
+from tess_memory.config import Config, DataStore, load_config
+from tess_memory.ingest import ingest
+from tess_memory.principals import Principal
+from tess_memory.store import MemoryStore
 from test_codex import RecordingEmbedder, write_rollout
 from test_incremental_ingest import Backend
 

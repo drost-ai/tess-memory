@@ -9,9 +9,9 @@ from unittest import mock
 
 import numpy as np
 
-from agentic_memory import retrieval
-from agentic_memory.config import Config
-from agentic_memory.store import MemoryRow, MemoryStore
+from tess_memory import retrieval
+from tess_memory.config import Config
+from tess_memory.store import MemoryRow, MemoryStore
 
 
 class QueryEmbedder:

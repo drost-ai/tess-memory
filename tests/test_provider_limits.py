@@ -10,8 +10,8 @@ import time
 import unittest
 from unittest import mock
 
-from agentic_memory.provider_limits import ProviderGate, LimitedBackend, ModelBudget
-from agentic_memory.distill import CallBudgetExceeded
+from tess_memory.provider_limits import ProviderGate, LimitedBackend, ModelBudget
+from tess_memory.distill import CallBudgetExceeded
 
 
 class ProviderLimitTests(unittest.TestCase):
@@ -25,7 +25,7 @@ class ProviderLimitTests(unittest.TestCase):
         ProviderGate(self.path, model_limit=2, provider_limits={'a': 1, 'b': 2})
         code = '''import os,sys,time
 from pathlib import Path
-from agentic_memory.provider_limits import ProviderGate
+from tess_memory.provider_limits import ProviderGate
 gate=ProviderGate(Path(sys.argv[1]),model_limit=2,provider_limits={'a':1,'b':2},poll_seconds=0.005)
 for i in range(3):
     with gate.acquire(sys.argv[2],'model',owner=str(os.getpid()),instance=sys.argv[3]):
@@ -56,7 +56,7 @@ for i in range(3):
         gate = ProviderGate(self.path, model_limit=1)
         code = '''import os,sys
 from pathlib import Path
-from agentic_memory.provider_limits import ProviderGate
+from tess_memory.provider_limits import ProviderGate
 with ProviderGate(Path(sys.argv[1]),model_limit=1).acquire('p','model',owner='crashed',instance='old'):
     os._exit(0)
 '''
@@ -138,7 +138,7 @@ with ProviderGate(Path(sys.argv[1]),model_limit=1).acquire('p','model',owner='cr
         self.assertEqual(gate.status()['completed'][0]['calls'], 1)
 
     def test_monotonic_deadline_stops_admission(self):
-        with mock.patch('agentic_memory.provider_limits.time.monotonic', return_value=11):
+        with mock.patch('tess_memory.provider_limits.time.monotonic', return_value=11):
             budget = ModelBudget(128, deadline=10)
             with self.assertRaises(CallBudgetExceeded):
                 budget.take()
@@ -147,8 +147,8 @@ with ProviderGate(Path(sys.argv[1]),model_limit=1).acquire('p','model',owner='cr
 
     def test_source_becoming_active_while_waiting_never_reaches_model(self):
         from functools import partial
-        from agentic_memory.distill import DistillationPool
-        from agentic_memory.source_activity import require_quiet, SourceNotQuiet
+        from tess_memory.distill import DistillationPool
+        from tess_memory.source_activity import require_quiet, SourceNotQuiet
         from test_incremental_ingest import Backend
         path = self.root/'source.jsonl'
         path.write_text('{}\n')
@@ -174,9 +174,9 @@ with ProviderGate(Path(sys.argv[1]),model_limit=1).acquire('p','model',owner='cr
             self.assertEqual(gate.status()['waiting'], [])
 
     def test_embedding_deferral_is_not_retried_or_wrapped_as_a_network_error(self):
-        from agentic_memory.embed import OpenAICompatEmbedder
-        from agentic_memory.model_usage import guard_source_requests
-        from agentic_memory.source_activity import require_quiet, SourceNotQuiet
+        from tess_memory.embed import OpenAICompatEmbedder
+        from tess_memory.model_usage import guard_source_requests
+        from tess_memory.source_activity import require_quiet, SourceNotQuiet
         path = self.root/'hot.jsonl'
         path.write_text('{}\n')
         embedder = OpenAICompatEmbedder.__new__(OpenAICompatEmbedder)

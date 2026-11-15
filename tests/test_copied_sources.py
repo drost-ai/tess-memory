@@ -10,8 +10,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agentic_memory.attribution import source_adapter
-from agentic_memory.config import DataStore, load_config
+from tess_memory.attribution import source_adapter
+from tess_memory.config import DataStore, load_config
 
 
 def write_meta(directory: Path, session_id: str, cwd: str = "/work/tess") -> Path:
@@ -66,7 +66,7 @@ class CopiedSourcesTest(unittest.TestCase):
             '[[data_stores]]\nname = "plain"\ntype = "agent-core"\npath = "~/plain"\n',
             encoding="utf-8",
         )
-        with mock.patch.dict(os.environ, {"HOME": str(self.root), "AGENTIC_MEMORY_SETTINGS": str(settings)}):
+        with mock.patch.dict(os.environ, {"HOME": str(self.root), "TESS_MEMORY_SETTINGS": str(settings)}):
             cfg = load_config()
         tess, plain = cfg.data_stores
         self.assertEqual(tess.skip_copies_of, [self.root / "otherhost" / "sessions"])

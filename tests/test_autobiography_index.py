@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError
+from tess_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError
 
 
 class IndexRepairTests(unittest.TestCase):

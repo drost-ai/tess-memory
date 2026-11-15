@@ -7,13 +7,13 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalError
-from agentic_memory.autobiography_config import PersonalConfig
-from agentic_memory.autobiography_extract import PersonalExtraction, clean_unit
-from agentic_memory.config import Config, DataStore
-from agentic_memory.extraction_workflow import ExtractionWorkflow
-from agentic_memory.personal_operations import PersonalOperations
-from agentic_memory.personal_sources import SourceCursors, selected_sources
+from tess_memory.autobiography import AutobiographyStore, PersonalError
+from tess_memory.autobiography_config import PersonalConfig
+from tess_memory.autobiography_extract import PersonalExtraction, clean_unit
+from tess_memory.config import Config, DataStore
+from tess_memory.extraction_workflow import ExtractionWorkflow
+from tess_memory.personal_operations import PersonalOperations
+from tess_memory.personal_sources import SourceCursors, selected_sources
 
 
 class PersonalSourceTests(unittest.TestCase):
@@ -77,7 +77,7 @@ class PersonalSourceTests(unittest.TestCase):
         self.store=AutobiographyStore(self.cfg.db_path,self.cfg.personal.principal(role='extractor'))
         self.extract=PersonalExtraction(self.cfg,self.store)
         self.append(body,[('user','second'),('assistant','new answer')])
-        with patch('agentic_memory.autobiography_extract.clean_unit',wraps=clean_unit) as clean:
+        with patch('tess_memory.autobiography_extract.clean_unit',wraps=clean_unit) as clean:
             parts=self.prepared()
             self.assertEqual(clean.call_count,1)
         self.assertEqual(len(parts),1)
@@ -213,7 +213,7 @@ class PersonalSourceTests(unittest.TestCase):
         self.assertEqual(self.store.db.execute('SELECT COUNT(*) FROM autobio_source_cursors').fetchone()[0],0)
 
     def test_reconciliation_manifest_is_bounded_supporting_evidence_only(self):
-        from agentic_memory.dream_cycle import DreamCycle
+        from tess_memory.dream_cycle import DreamCycle
         self.session(messages=[('user','I prefer concise updates.'),('assistant','Understood.')])
         part=self.prepared()[0]
         proposal={'segment':'People','title':'Preference','body':'Prefers concise updates.',

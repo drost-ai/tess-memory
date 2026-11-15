@@ -8,12 +8,12 @@ from pathlib import Path
 
 import numpy as np
 
-from agentic_memory.attribution import source_adapter
-from agentic_memory.config import Config, DataStore
-from agentic_memory.ingest import ingest
-from agentic_memory.plan import add_item, resolve_project_policy
-from agentic_memory.store import MemoryStore
-from agentic_memory.transcript import render_for_llm
+from tess_memory.attribution import source_adapter
+from tess_memory.config import Config, DataStore
+from tess_memory.ingest import ingest
+from tess_memory.plan import add_item, resolve_project_policy
+from tess_memory.store import MemoryStore
+from tess_memory.transcript import render_for_llm
 
 
 class LocalEmbedder:

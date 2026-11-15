@@ -8,10 +8,10 @@ import unittest
 from pathlib import Path
 from types import SimpleNamespace
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalError, PersonalPrincipal
-from agentic_memory.autobiography_config import PersonalConfig, session_audience
-from agentic_memory.autobiography_context import personal_context
-from agentic_memory.personal_operations import PersonalOperations
+from tess_memory.autobiography import AutobiographyStore, PersonalError, PersonalPrincipal
+from tess_memory.autobiography_config import PersonalConfig, session_audience
+from tess_memory.autobiography_context import personal_context
+from tess_memory.personal_operations import PersonalOperations
 
 CONFIG = dict(enabled=True, owner="sam", agent="tess", audience="sam", role="author", session_id="s-1", multi_audience=True)
 

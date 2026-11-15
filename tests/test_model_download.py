@@ -5,8 +5,8 @@ from collections import namedtuple
 
 import pytest
 
-from agentic_memory import model_download
-from agentic_memory.model_download import DownloadError
+from tess_memory import model_download
+from tess_memory.model_download import DownloadError
 
 WEIGHTS = b"synthetic weights"
 

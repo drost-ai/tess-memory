@@ -38,7 +38,7 @@ def evaluate_public(cfg, cases_path: Path, *, workers=4, limit=None):
     previous = retrieval.CONFIG
     retrieval.CONFIG = effective
     try:
-        with tempfile.TemporaryDirectory(prefix='agentic-memory-public-eval-') as tmp:
+        with tempfile.TemporaryDirectory(prefix='tess-memory-public-eval-') as tmp:
             root = Path(tmp)
             gate = ProviderGate(root / 'limits.db', model_limit=workers)
             model = LimitedBackend(backend, gate, budget, provider=provider_key(effective, effective.search_profile or effective.agent_core_profile),

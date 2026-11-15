@@ -5,8 +5,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from agentic_memory import scheduler
-from agentic_memory.scheduler_config import ScheduledStore, ServiceConfig
+from tess_memory import scheduler
+from tess_memory.scheduler_config import ScheduledStore, ServiceConfig
 
 
 @pytest.fixture
@@ -25,16 +25,16 @@ def embedded(tmp_path, monkeypatch):
     settings = tmp_path / 'store.toml'
     settings.write_text('[[data_stores]]\nname="selected"\npath="selected-source"\n'
                         '[storage]\ndata_dir="selected-destination"\n')
-    monkeypatch.setenv('AGENTIC_MEMORY_CONFIG', str(manifest))
+    monkeypatch.setenv('TESS_MEMORY_CONFIG', str(manifest))
     return manifest, registry, settings
 
 
 def test_embedded_store_overlay_preserves_canonical_providers_and_is_metadata_only(embedded, tmp_path, monkeypatch):
     manifest, registry, settings = embedded
     before = manifest.read_bytes()
-    monkeypatch.setenv('AGENTIC_MEMORY_DATA', '/poison/destination')
-    monkeypatch.setenv('AGENTIC_MEMORY_AC_PROFILE', 'poison')
-    monkeypatch.setenv('AGENTIC_MEMORY_EMBED_PROVIDER', 'poison')
+    monkeypatch.setenv('TESS_MEMORY_DATA', '/poison/destination')
+    monkeypatch.setenv('TESS_MEMORY_AC_PROFILE', 'poison')
+    monkeypatch.setenv('TESS_MEMORY_EMBED_PROVIDER', 'poison')
     monkeypatch.setattr(scheduler, 'MemoryStore', Mock(side_effect=AssertionError('no store during parse')))
     cfg = scheduler._scheduled_config(settings)
     assert cfg.embedded and cfg.runtime_home == tmp_path
@@ -63,16 +63,16 @@ def test_worker_environment_preserves_only_explicit_memory_manifest(embedded, mo
     manifest, _, _ = embedded
     monkeypatch.setenv('PYTHONPATH', '/poison/source')
     monkeypatch.setenv('AGENT_CORE_PATH', '/poison/engine')
-    monkeypatch.setenv('AGENTIC_MEMORY_DATA', '/poison/store')
+    monkeypatch.setenv('TESS_MEMORY_DATA', '/poison/store')
     env = scheduler._worker_environment()
-    assert env['AGENTIC_MEMORY_CONFIG'] == str(manifest)
-    assert {key for key in env if key.startswith('AGENTIC_MEMORY_')} == {'AGENTIC_MEMORY_CONFIG'}
+    assert env['TESS_MEMORY_CONFIG'] == str(manifest)
+    assert {key for key in env if key.startswith('TESS_MEMORY_')} == {'TESS_MEMORY_CONFIG'}
     assert 'PYTHONPATH' not in env and 'AGENT_CORE_PATH' not in env
     assert os.environ['PYTHONPATH'] == '/poison/source'
 
 
 def test_worker_environment_rejects_relative_manifest(monkeypatch):
-    monkeypatch.setenv('AGENTIC_MEMORY_CONFIG', 'relative.json')
+    monkeypatch.setenv('TESS_MEMORY_CONFIG', 'relative.json')
     with pytest.raises(ValueError, match='absolute generated manifest'):
         scheduler._worker_environment()
 
@@ -88,16 +88,16 @@ def test_embedded_spawn_uses_installed_module_and_neutral_runtime_home(embedded,
     monkeypatch.setenv('PYTHONPATH', '/poison/source')
     assert scheduler.spawn_worker(config, {'id': 'synthetic-run', 'instance': 'coding'}) is child
     args, kwargs = spawn.call_args
-    assert args[0] == [scheduler.sys.executable, '-u', '-m', 'agentic_memory.cli',
+    assert args[0] == [scheduler.sys.executable, '-u', '-m', 'tess_memory.cli',
                        'scheduler-worker', '--config', str(config.path), '--run-id', 'synthetic-run']
     assert kwargs['cwd'] == tmp_path
-    assert kwargs['env']['AGENTIC_MEMORY_CONFIG'] == str(manifest)
+    assert kwargs['env']['TESS_MEMORY_CONFIG'] == str(manifest)
     assert 'PYTHONPATH' not in kwargs['env']
     assert kwargs['start_new_session'] is True
 
 
 def test_standalone_store_loader_still_uses_explicit_toml(tmp_path, monkeypatch):
-    monkeypatch.delenv('AGENTIC_MEMORY_CONFIG', raising=False)
+    monkeypatch.delenv('TESS_MEMORY_CONFIG', raising=False)
     cfg = object()
     load = Mock(return_value=cfg)
     monkeypatch.setattr(scheduler, 'load_config', load)

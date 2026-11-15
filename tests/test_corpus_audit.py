@@ -10,12 +10,12 @@ import unittest
 
 import numpy as np
 
-from agentic_memory.audit import activity_state, inventory
-from agentic_memory.config import Config, DataStore
-from agentic_memory.evaluation import evaluate
-from agentic_memory.store import MemoryRow, MemoryStore
+from tess_memory.audit import activity_state, inventory
+from tess_memory.config import Config, DataStore
+from tess_memory.evaluation import evaluate
+from tess_memory.store import MemoryRow, MemoryStore
 from test_codex import append, message, wrapped, write_rollout
-from agentic_memory.codex import CodexCatalog, CodexParseError
+from tess_memory.codex import CodexCatalog, CodexParseError
 
 
 class CorpusAuditTests(unittest.TestCase):

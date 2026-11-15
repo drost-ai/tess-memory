@@ -8,10 +8,10 @@ import tempfile
 import unittest
 from unittest import mock
 
-from agentic_memory.checkpoints import DistillationCheckpoints
-from agentic_memory.config import Config, DataStore, load_config
-from agentic_memory.ingest import ingest
-from agentic_memory.store import MemoryStore
+from tess_memory.checkpoints import DistillationCheckpoints
+from tess_memory.config import Config, DataStore, load_config
+from tess_memory.ingest import ingest
+from tess_memory.store import MemoryStore
 from test_codex import RecordingEmbedder, append, message, wrapped, write_rollout
 
 
@@ -141,10 +141,10 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual(second, self.store.get_session('codex:two'))
 
     def test_cache_warming_preserves_memory_and_promotes_existing_requests_only(self):
-        from agentic_memory.distill import SESSION_SYSTEM
-        from agentic_memory.readers import CompletedSourceReader
-        from agentic_memory.stable_distill import stable_map_prompts
-        from agentic_memory.warm_checkpoints import warm_incremental_checkpoints
+        from tess_memory.distill import SESSION_SYSTEM
+        from tess_memory.readers import CompletedSourceReader
+        from tess_memory.stable_distill import stable_map_prompts
+        from tess_memory.warm_checkpoints import warm_incremental_checkpoints
         other = write_rollout(self.home, 'two')
         reader = CompletedSourceReader(self.cfg)
         snapshot = reader.read(self.cfg.data_stores[0], self.path, 'p')
@@ -170,8 +170,8 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual(cache.get(old_key), cache.get(new_key))
 
     def test_cache_warming_refuses_to_overlap_an_ingestion_owner(self):
-        from agentic_memory.locks import ingestion_lock, IngestionBusy
-        from agentic_memory.warm_checkpoints import warm_incremental_checkpoints
+        from tess_memory.locks import ingestion_lock, IngestionBusy
+        from tess_memory.warm_checkpoints import warm_incremental_checkpoints
         with ingestion_lock(self.cfg.data_dir):
             with self.assertRaises(IngestionBusy):
                 warm_incremental_checkpoints(self.cfg, self.backend)
@@ -327,7 +327,7 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertNotIn('Remember the durable workspace decision', maps[0])
 
     def test_work_recorded_before_the_policy_stopped_naming_models_is_carried_forward(self):
-        from agentic_memory.incremental import CARRIED_MODELS, pipeline_policy
+        from tess_memory.incremental import CARRIED_MODELS, pipeline_policy
         self.run_ingest()
         before = self.paid_rows()
         counts = len(self.backend.calls), len(self.embedder.calls)
@@ -402,7 +402,7 @@ class IncrementalIngestTests(unittest.TestCase):
 
     def test_bounded_scan_rotates_past_unfinished_large_source_across_restart(self):
         import time
-        from agentic_memory.source_schedule import SCAN_CURSOR
+        from tess_memory.source_schedule import SCAN_CURSOR
         other = write_rollout(self.home, 'two', items=[
             message('user', 'A different durable question. ' * 20),
             message('assistant', 'A different durable answer. ' * 20)])
@@ -427,17 +427,17 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertIsNotNone(self.store.get_session('codex:one'))
 
     def test_targeted_session_run_does_not_change_background_cursor(self):
-        from agentic_memory.source_schedule import SCAN_CURSOR
+        from tess_memory.source_schedule import SCAN_CURSOR
         with self.store.write_transaction():
             self.store.set_meta(SCAN_CURSOR, '/retained/background/position')
         self.run_ingest(limit=1, session_ids={'one'})
         self.assertEqual(self.store.get_meta(SCAN_CURSOR), '/retained/background/position')
 
     def test_reader_failure_advances_background_cursor(self):
-        from agentic_memory.source_schedule import SCAN_CURSOR
-        from agentic_memory.source_journal import SourceReadError
+        from tess_memory.source_schedule import SCAN_CURSOR
+        from tess_memory.source_journal import SourceReadError
         other = write_rollout(self.home, 'two')
-        with mock.patch('agentic_memory.incremental.CompletedSourceReader.read', side_effect=SourceReadError('unreadable source')):
+        with mock.patch('tess_memory.incremental.CompletedSourceReader.read', side_effect=SourceReadError('unreadable source')):
             self.assertEqual(self.run_ingest(limit=1).errors, 1)
         self.assertEqual(self.store.get_meta(SCAN_CURSOR), str(self.path))
         self.run_ingest(limit=1)
@@ -502,17 +502,17 @@ class IncrementalIngestTests(unittest.TestCase):
     def test_automatic_poll_records_hot_source_without_calls_until_quiet(self):
         self.cfg.quiet_seconds = 900
         modified = self.path.stat().st_mtime
-        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 1):
+        with mock.patch('tess_memory.incremental.time.time', return_value=modified + 1):
             first = self.run_ingest(limit=1)
         self.assertEqual((first.quiet_deferred, first.model_calls, first.embedded_passages,
                           first.source_reads, first.sources_remaining), (1, 0, 0, 0, 0))
         progress = self.store.source_progress(str(self.path))
         self.assertEqual(progress['status'], 'quiet_pending')
         self.assertAlmostEqual(json.loads(progress['state'])['quiet_until'], modified + 900, places=3)
-        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 601):
+        with mock.patch('tess_memory.incremental.time.time', return_value=modified + 601):
             second = self.run_ingest(limit=1)
         self.assertEqual((second.quiet_deferred, second.model_calls), (1, 0))
-        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 901):
+        with mock.patch('tess_memory.incremental.time.time', return_value=modified + 901):
             last = self.run_ingest(limit=1)
         self.assertEqual((last.distilled, last.model_calls, last.quiet_deferred), (1, 2, 0))
         self.assertEqual(self.store.source_progress(str(self.path))['status'], 'indexed')
@@ -524,13 +524,13 @@ class IncrementalIngestTests(unittest.TestCase):
         self.add_unit()
         modified = self.path.stat().st_mtime
         self.cfg.quiet_seconds = 900
-        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 1):
+        with mock.patch('tess_memory.incremental.time.time', return_value=modified + 1):
             deferred = self.run_ingest(limit=1)
         self.assertEqual((deferred.quiet_deferred, deferred.model_calls), (1, 0))
         self.assertEqual(before, self.paid_rows())
         self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
         self.assertEqual(self.store.source_progress(str(self.path))['status'], 'quiet_pending')
-        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 901):
+        with mock.patch('tess_memory.incremental.time.time', return_value=modified + 901):
             completed = self.run_ingest(limit=1)
         self.assertEqual((completed.distilled, completed.model_calls), (1, 2))
 
@@ -542,12 +542,12 @@ class IncrementalIngestTests(unittest.TestCase):
     def test_new_activity_restarts_quiet_deadline(self):
         self.cfg.quiet_seconds = 900
         first_modified = self.path.stat().st_mtime
-        with mock.patch('agentic_memory.incremental.time.time', return_value=first_modified + 1):
+        with mock.patch('tess_memory.incremental.time.time', return_value=first_modified + 1):
             self.run_ingest(limit=1)
         self.add_unit()
         second_modified = self.path.stat().st_mtime
         self.assertGreaterEqual(second_modified, first_modified)
-        with mock.patch('agentic_memory.incremental.time.time', return_value=second_modified + 1):
+        with mock.patch('tess_memory.incremental.time.time', return_value=second_modified + 1):
             result = self.run_ingest(limit=1)
         self.assertEqual((result.quiet_deferred, result.model_calls), (1, 0))
         state = json.loads(self.store.source_progress(str(self.path))['state'])
@@ -555,7 +555,7 @@ class IncrementalIngestTests(unittest.TestCase):
 
     def test_activity_after_discovery_is_rechecked_before_dispatch(self):
         from dataclasses import replace
-        from agentic_memory.readers import CompletedSourceReader
+        from tess_memory.readers import CompletedSourceReader
         import time
         second = write_rollout(self.home, 'two')
         for p in (self.path, second):
@@ -580,7 +580,7 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertFalse(any('NEW-ACTIVITY-WITHIN-PASS' in prompt for prompt in self.backend.calls))
 
     def test_source_advancing_during_parse_does_not_invoke_a_provider(self):
-        from agentic_memory.readers import CompletedSourceReader
+        from tess_memory.readers import CompletedSourceReader
         import time
         os.utime(self.path, (time.time()-3600, time.time()-3600))
         self.cfg.quiet_seconds = 900
@@ -608,7 +608,7 @@ class IncrementalIngestTests(unittest.TestCase):
         self.assertEqual(len(self.backend.calls), 1)
         self.assertEqual(fallback.calls, [])
         self.assertEqual(self.embedder.calls, [])
-        with mock.patch('agentic_memory.source_activity.time.time', return_value=self.path.stat().st_mtime+901):
+        with mock.patch('tess_memory.source_activity.time.time', return_value=self.path.stat().st_mtime+901):
             resumed = self.run_ingest(limit=1)
         self.assertEqual((resumed.distilled, resumed.model_calls), (1, 2))
         self.assertGreaterEqual(resumed.request_cache_hits, 1)
@@ -648,7 +648,7 @@ class IncrementalIngestTests(unittest.TestCase):
         cache = DistillationCheckpoints(self.cfg.data_dir/'distillation-cache.db')
         with cache._connect() as db:
             self.assertEqual(db.execute('SELECT COUNT(*) FROM passages').fetchone()[0], 1)
-        with mock.patch('agentic_memory.source_activity.time.time', return_value=self.path.stat().st_mtime+901):
+        with mock.patch('tess_memory.source_activity.time.time', return_value=self.path.stat().st_mtime+901):
             resumed = self.run_ingest(limit=1)
         self.assertEqual((resumed.distilled, resumed.model_calls), (1, 0))
         counts = Counter(text for batch in self.embedder.calls for text in batch)
@@ -669,7 +669,7 @@ class IncrementalIngestTests(unittest.TestCase):
         self.cfg.quiet_seconds = 900
         metadata_mtime = meta.stat().st_mtime
         modified = body.stat().st_mtime
-        with mock.patch('agentic_memory.incremental.time.time', return_value=modified + 1):
+        with mock.patch('tess_memory.incremental.time.time', return_value=modified + 1):
             result = self.run_ingest(limit=1)
         self.assertEqual((result.quiet_deferred, result.model_calls, result.source_reads), (1, 0, 0))
         self.assertEqual(meta.stat().st_mtime, metadata_mtime)

@@ -1,4 +1,4 @@
-"""CLI: agentic-memory {ingest, reconcile-attribution, search, status, serve}."""
+"""CLI: tess-memory {ingest, reconcile-attribution, search, status, serve}."""
 
 from __future__ import annotations
 
@@ -396,7 +396,7 @@ def cmd_users(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="agentic-memory")
+    parser = argparse.ArgumentParser(prog="tess-memory")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     p = sub.add_parser("ingest", help="Ingest new/changed session transcripts")
@@ -544,7 +544,7 @@ def main(argv: list[str] | None = None) -> int:
     command.set_defaults(fn=cmd_scheduler)
     for action in ('install', 'start', 'stop', 'restart'):
         command = commands.add_parser(action)
-        command.add_argument('--label', default='com.agentic-memory.scheduler')
+        command.add_argument('--label', default='com.tess-memory.scheduler')
         if action == 'install':
             command.add_argument('--no-start', action='store_true')
         command.set_defaults(fn=cmd_scheduler)

@@ -6,14 +6,14 @@ import threading
 import unittest
 from unittest import mock
 
-from agentic_memory.distill import DistillationPool
-from agentic_memory.model_usage import UsageObserver, current_observer
-from agentic_memory.provider_limits import LimitedBackend, ModelBudget, ProviderGate
+from tess_memory.distill import DistillationPool
+from tess_memory.model_usage import UsageObserver, current_observer
+from tess_memory.provider_limits import LimitedBackend, ModelBudget, ProviderGate
 
 
 class ModelUsageTests(unittest.TestCase):
     def test_source_receipt_audit_detects_known_call_and_bounds_store_and_time(self):
-        from agentic_memory.model_usage import source_namespace
+        from tess_memory.model_usage import source_namespace
         with tempfile.TemporaryDirectory() as tmp:
             gate = ProviderGate(Path(tmp)/'gate.db')
             with gate.connect() as db:

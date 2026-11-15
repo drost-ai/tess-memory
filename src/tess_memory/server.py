@@ -88,7 +88,7 @@ configured default. State the FULL information need in one call rather than
 firing keyword fragments; if something is missing, refine the request.
 """
 
-mcp = MCPServer("agentic-memory", instructions=INSTRUCTIONS)
+mcp = MCPServer("tess-memory", instructions=INSTRUCTIONS)
 
 _store: MemoryStore | None = None
 _embedder: Embedder | None = None
@@ -109,7 +109,7 @@ def _get_search_llm(force: bool = False):
             import sys
 
             print(
-                f"[agentic-memory] search agent unavailable ({e}); "
+                f"[tess-memory] search agent unavailable ({e}); "
                 "falling back to static retrieval",
                 file=sys.stderr,
             )
@@ -175,7 +175,7 @@ def search_memory(
         "ask into a standalone query naming the project, technologies, file "
         "names, and any error text verbatim (error strings retrieve extremely "
         "well). Bad: 'the bug from before'. Good: 'fix for FTS5 trigger "
-        "corruption during incremental ingest in agentic-memory sqlite store'."
+        "corruption during incremental ingest in tess-memory sqlite store'."
     ))],
     project: Annotated[str | None, Field(description=(
         "Logical project key to scope the search (get keys from list_projects), "
@@ -264,7 +264,7 @@ def search_memory(
         except Exception as e:  # noqa: BLE001 — degrade to static search
             import sys
 
-            print(f"[agentic-memory] agentic search failed ({e}); "
+            print(f"[tess-memory] agentic search failed ({e}); "
                   "falling back to static retrieval", file=sys.stderr)
     hits = retrieval.search(
         store,

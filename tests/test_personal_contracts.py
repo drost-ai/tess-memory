@@ -3,9 +3,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from agentic_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
-from agentic_memory.autobiography_import import preview_seeds,import_seeds
-from agentic_memory.autobiography_inbox import PersonalInbox
+from tess_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
+from tess_memory.autobiography_import import preview_seeds,import_seeds
+from tess_memory.autobiography_inbox import PersonalInbox
 
 
 class PersonalContractTests(unittest.TestCase):

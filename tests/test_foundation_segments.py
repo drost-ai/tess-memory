@@ -7,12 +7,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from agentic_memory.autobiography import (
+from tess_memory.autobiography import (
     AutobiographyStore, FOUNDATION_SEGMENTS, PersonalError, PersonalPrincipal, RETIRED_SEGMENTS, SEGMENTS, WORKER_SEGMENTS,
 )
-from agentic_memory.autobiography_context import personal_context
-from agentic_memory.autobiography_inbox import PersonalInbox
-from agentic_memory.autobiography_lifecycle import write_transition
+from tess_memory.autobiography_context import personal_context
+from tess_memory.autobiography_inbox import PersonalInbox
+from tess_memory.autobiography_lifecycle import write_transition
 
 
 class FoundationSegmentTests(unittest.TestCase):
@@ -132,7 +132,7 @@ class FoundationSegmentTests(unittest.TestCase):
         self.assertEqual(personal_context(self.store, budget=64000)['status'], 'uninitialized')
 
     def test_seeds_are_the_four_foundation_documents_only(self):
-        from agentic_memory.autobiography_import import import_seeds, preview_seeds
+        from tess_memory.autobiography_import import import_seeds, preview_seeds
         folder = self.path.parent
         files = {}
         for segment in FOUNDATION_SEGMENTS:

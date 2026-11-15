@@ -6,15 +6,15 @@ import time
 import unittest
 from unittest import mock
 
-from agentic_memory import server
-from agentic_memory.freshness import describe, hit_freshness, rollup_freshness, session_freshness, store_status
-from agentic_memory.scheduler_config import ServiceConfig, ScheduledStore
-from agentic_memory.scheduler_queue import WorkQueue
+from tess_memory import server
+from tess_memory.freshness import describe, hit_freshness, rollup_freshness, session_freshness, store_status
+from tess_memory.scheduler_config import ServiceConfig, ScheduledStore
+from tess_memory.scheduler_queue import WorkQueue
 from test_incremental_ingest import Backend
 from test_codex import RecordingEmbedder, append, message, wrapped, write_rollout
-from agentic_memory.config import Config, DataStore
-from agentic_memory.ingest import ingest
-from agentic_memory.store import MemoryStore
+from tess_memory.config import Config, DataStore
+from tess_memory.ingest import ingest
+from tess_memory.store import MemoryStore
 
 
 class FreshnessTests(unittest.TestCase):

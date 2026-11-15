@@ -5,8 +5,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from agentic_memory.principals import Principal, VisibilityPolicy, memory_access_sql, session_access_sql
-from agentic_memory.store import USERS_SCHEMA_VERSION, MemoryRow, MemoryStore
+from tess_memory.principals import Principal, VisibilityPolicy, memory_access_sql, session_access_sql
+from tess_memory.store import USERS_SCHEMA_VERSION, MemoryRow, MemoryStore
 
 
 class AccessTests(unittest.TestCase):

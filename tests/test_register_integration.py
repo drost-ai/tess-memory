@@ -5,9 +5,9 @@ import unittest
 from unittest.mock import patch
 from test_extraction_workflow import WorkflowTests
 from test_autobiography_extract import ExtractionTests
-from agentic_memory.autobiography import PersonalError
-from agentic_memory.personal_registers import PersonalRegisters
-from agentic_memory.autobiography_server import register_personal_tools
+from tess_memory.autobiography import PersonalError
+from tess_memory.personal_registers import PersonalRegisters
+from tess_memory.autobiography_server import register_personal_tools
 
 
 class RegisterIntegrationTests(unittest.TestCase):
@@ -60,7 +60,7 @@ class RegisterIntegrationTests(unittest.TestCase):
         self.enable()
         self.store.principal=replace(self.store.principal,role='operator')
         now=[2000000000.0];self.store.clock=lambda:now[0]
-        with patch('agentic_memory.prospective_activation.ProspectiveActivation.status',return_value={'active':True}):
+        with patch('tess_memory.prospective_activation.ProspectiveActivation.status',return_value={'active':True}):
             for kind,interval in [('care',3600),('research',21600)]:
                 start=now[0]
                 op=self.ops.claim(kind)
@@ -98,7 +98,7 @@ class ProspectiveWorkflowTests(unittest.TestCase):
         self.now=1800000000.0;self.store.clock=lambda:self.now
 
     def test_each_bound_role_can_claim_and_finish_without_index_write(self):
-        from agentic_memory.prospective_activation import ProspectiveActivation
+        from tess_memory.prospective_activation import ProspectiveActivation
         class Server:
             def __init__(self):self.tools={}
             def add_tool(self,fn,name):self.tools[name]=fn
@@ -107,7 +107,7 @@ class ProspectiveWorkflowTests(unittest.TestCase):
         for role in ('follow_up_reconciler','topic_reconciler','care','research'):
             server=Server()
             register_personal_tools(server,self.cfg,principal=replace(self.store.principal,role=role,session_id=role))
-            with patch('agentic_memory.autobiography.AutobiographyStore.repair_index',side_effect=AssertionError('new role index mutation')):
+            with patch('tess_memory.autobiography.AutobiographyStore.repair_index',side_effect=AssertionError('new role index mutation')):
                 response=server.tools['autobiography_operation_claim'](kind=role,manual=True,request_deadline=2000000000)
             self.assertTrue(response['ok'],response)
             self.assertEqual(response['result']['status'],'running')
@@ -116,9 +116,9 @@ class ProspectiveWorkflowTests(unittest.TestCase):
             self.assertTrue(result['ok'],result)
 
     def test_real_activation_pending_tail_then_mixed_publish(self):
-        from agentic_memory.prospective_activation import ProspectiveActivation
-        from agentic_memory.personal_operations import PersonalOperations
-        from agentic_memory.extraction_workflow import ExtractionWorkflow
+        from tess_memory.prospective_activation import ProspectiveActivation
+        from tess_memory.personal_operations import PersonalOperations
+        from tess_memory.extraction_workflow import ExtractionWorkflow
         path,body=self.session(messages=[('user','old unprocessed tail')])
         activation=ProspectiveActivation(self.cfg,self.store)
         activation.activate('activate')

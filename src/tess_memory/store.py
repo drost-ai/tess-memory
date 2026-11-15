@@ -926,7 +926,7 @@ class MemoryStore:
         elif current != descriptor:
             raise RuntimeError(
                 f"store was embedded with '{current}' but the active embedder is "
-                f"'{descriptor}'. Set AGENTIC_MEMORY_EMBED_PROVIDER to match, or "
+                f"'{descriptor}'. Set TESS_MEMORY_EMBED_PROVIDER to match, or "
                 f"delete the db and re-ingest to switch vector spaces."
             )
 

@@ -36,7 +36,8 @@ def native_creation_proof(config, ds, current, activated_at, observed_at, stamp)
             return None
         path = Path(current['path'])
         creation = current['creation']
-        if (path.parent != root
+        # Compare resolved locations: the configured root may sit behind a symlink.
+        if (path.parent.resolve() != root
             or path.stem != creation['id'] or creation['derived']
             or current['source_origin']['kind'] != 'conversation'
             or not current['pristine_stream']):

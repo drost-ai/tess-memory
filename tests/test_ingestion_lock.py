@@ -5,15 +5,15 @@ import sys
 import tempfile
 import unittest
 
-from agentic_memory.locks import ingestion_lock
-from agentic_memory.store import MemoryStore
+from tess_memory.locks import ingestion_lock
+from tess_memory.store import MemoryStore
 
 
 class IngestionLockTests(unittest.TestCase):
     def test_another_process_is_excluded_only_from_the_same_store(self):
         code = """from pathlib import Path
 import sys
-from agentic_memory.locks import ingestion_lock, IngestionBusy
+from tess_memory.locks import ingestion_lock, IngestionBusy
 try:
     with ingestion_lock(Path(sys.argv[1])):
         pass
@@ -39,7 +39,7 @@ except IngestionBusy:
             store.commit()
             code = '''import os,sys
 from pathlib import Path
-from agentic_memory.store import MemoryStore
+from tess_memory.store import MemoryStore
 s=MemoryStore(Path(sys.argv[1]))
 with s.write_transaction():
     s.upsert_session(id='one',project='wrong',summary='partial replacement')

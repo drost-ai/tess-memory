@@ -9,12 +9,12 @@ import tempfile
 import unittest
 from zoneinfo import ZoneInfo
 
-from agentic_memory.autobiography import AutobiographyStore,PersonalPrincipal
-from agentic_memory.autobiography_config import OPTIONAL_LIMITS,PersonalConfig
-from agentic_memory.autobiography_extract import PersonalExtraction,_part_limit
-from agentic_memory.config import Config,DataStore
-from agentic_memory.dream_cycle import DreamCycle
-from agentic_memory.personal_operations import PersonalOperations
+from tess_memory.autobiography import AutobiographyStore,PersonalPrincipal
+from tess_memory.autobiography_config import OPTIONAL_LIMITS,PersonalConfig
+from tess_memory.autobiography_extract import PersonalExtraction,_part_limit
+from tess_memory.config import Config,DataStore
+from tess_memory.dream_cycle import DreamCycle
+from tess_memory.personal_operations import PersonalOperations
 from test_codex import write_rollout,message
 
 
@@ -43,7 +43,7 @@ class UnlimitedWorkTests(unittest.TestCase):
         self.root=Path(tmp.name).resolve();home=self.root/'source'
         text='I prefer concise updates. '*30
         write_rollout(home,items=[message('user',text),message('assistant','Understood.')])
-        self.now=[datetime(2026,9,20,20,tzinfo=ZoneInfo('UTC')).timestamp()]
+        self.now=[datetime(2026,9,20,20,tzinfo=ZoneInfo('America/Vancouver')).timestamp()]
         personal=PersonalConfig(enabled=True,owner='owner',agent='agent',extraction_enabled=True,dream_enabled=True,
             historical=True,source_names=('source',),shadow=False)
         self.cfg=Config(data_dir=self.root/'memory',data_stores=[DataStore('source',home,type='codex')],personal=personal)

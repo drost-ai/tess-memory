@@ -1,8 +1,8 @@
 import unittest
 from test_autobiography_extract import ExtractionTests
-from agentic_memory.extraction_workflow import ExtractionWorkflow
-from agentic_memory.personal_operations import PersonalOperations
-from agentic_memory.autobiography import PersonalError
+from tess_memory.extraction_workflow import ExtractionWorkflow
+from tess_memory.personal_operations import PersonalOperations
+from tess_memory.autobiography import PersonalError
 
 
 class WorkflowTests(unittest.TestCase):
@@ -73,15 +73,15 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.flow.finalize(*self.args,'finish')['candidate_ids'],[first['candidate_id']])
 
     def test_synthetic_user_turn_is_not_extraction_evidence(self):
-        from agentic_memory.transcript import Turn
-        from agentic_memory.autobiography_extract import clean_unit
+        from tess_memory.transcript import Turn
+        from tess_memory.autobiography_extract import clean_unit
         text,roles=clean_unit([Turn('user','invented scheduled request',human_evidence=False),Turn('assistant','A reflection')])
         self.assertNotIn('invented scheduled request',text)
         self.assertFalse(any(r['role']=='user' for r in roles))
 
     def test_out_of_order_empty_finalization_does_not_skip_gap(self):
         import uuid
-        from agentic_memory.autobiography import canonical
+        from tess_memory.autobiography import canonical
         rid=self.range['range_id'];second=uuid.uuid4().hex
         with self.store.transaction():
             row=self.store.db.execute('SELECT * FROM autobio_extraction_parts WHERE id=?',(rid,)).fetchone()
@@ -108,7 +108,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_foreign_audience_cannot_read_or_finalize_range(self):
         from dataclasses import replace
-        from agentic_memory.autobiography import AutobiographyStore
+        from tess_memory.autobiography import AutobiographyStore
         foreign=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,audience='foreign'))
         self.addCleanup(foreign.close)
         # The operational audience gate rejects the foreign producer before

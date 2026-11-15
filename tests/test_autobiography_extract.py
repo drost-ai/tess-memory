@@ -4,12 +4,12 @@ import json
 import tempfile
 import unittest
 
-from agentic_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
-from agentic_memory.autobiography_config import PersonalConfig
-from agentic_memory.autobiography_extract import PersonalExtraction,clean_unit
-from agentic_memory.autobiography_inbox import PersonalInbox
-from agentic_memory.config import Config,DataStore
-from agentic_memory.transcript import Turn
+from tess_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
+from tess_memory.autobiography_config import PersonalConfig
+from tess_memory.autobiography_extract import PersonalExtraction,clean_unit
+from tess_memory.autobiography_inbox import PersonalInbox
+from tess_memory.config import Config,DataStore
+from tess_memory.transcript import Turn
 from test_codex import write_rollout,append,wrapped,message
 
 

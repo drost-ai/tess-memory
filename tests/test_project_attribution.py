@@ -11,12 +11,12 @@ from unittest import mock
 
 import numpy as np
 
-from agentic_memory import cli, plan
-from agentic_memory.attribution import reconcile_project_attribution, source_adapter
-from agentic_memory.config import Config, DataStore, ProjectAttribution, load_config
-from agentic_memory.distill import SessionDigest
-from agentic_memory.ingest import ingest
-from agentic_memory.store import MemoryRow, MemoryStore
+from tess_memory import cli, plan
+from tess_memory.attribution import reconcile_project_attribution, source_adapter
+from tess_memory.config import Config, DataStore, ProjectAttribution, load_config
+from tess_memory.distill import SessionDigest
+from tess_memory.ingest import ingest
+from tess_memory.store import MemoryRow, MemoryStore
 
 
 class FakeEmbedder:
@@ -434,11 +434,11 @@ class ReconciliationRefreshTests(unittest.TestCase):
             write_claude_transcript(other, "/work/old-project")
             insert_session(self.store, session_id="remaining", project="old-project", path=other)
             self.store.commit()
-        with mock.patch("agentic_memory.ingest.distill_session", return_value=SessionDigest(
+        with mock.patch("tess_memory.ingest.distill_session", return_value=SessionDigest(
             "Moved work", "Saved summary", "Complete", []
-        )) as distill, mock.patch("agentic_memory.ingest.distill_profile",
+        )) as distill, mock.patch("tess_memory.ingest.distill_profile",
                                   side_effect=lambda _b, p, _cwd, lines: p + "\n" + "\n".join(lines)) as profiles, \
-             mock.patch("agentic_memory.ingest.distill_week",
+             mock.patch("tess_memory.ingest.distill_week",
                         side_effect=lambda _b, _week, lines: "\n".join(lines)) as digests, \
              mock.patch.object(self.embedder, "embed_passages", wraps=self.embedder.embed_passages) as embed:
             ingest(self.cfg, self.store, self.embedder, self.backend, refresh_aggregates=True)
@@ -463,7 +463,7 @@ class ReconciliationRefreshTests(unittest.TestCase):
             reopened = MemoryStore(self.cfg.db_path)
             self.addCleanup(reopened.close)
             self.assertEqual(self.queued(reopened), self.queued())
-            with mock.patch("agentic_memory.ingest.source_adapter", side_effect=AssertionError("no discovery")):
+            with mock.patch("tess_memory.ingest.source_adapter", side_effect=AssertionError("no discovery")):
                 result = ingest(self.cfg, reopened, self.embedder, self.backend,
                                 aggregates_only=True, refresh_aggregates=True)
             self.assertEqual((result.scanned, result.distilled, result.aggregates_pending), (0, 0, 0))
@@ -568,7 +568,7 @@ class ReconciliationRefreshTests(unittest.TestCase):
             other.reattribute_session_project("moved", "assistant")
             return "Stale digest describing old-project"
 
-        with mock.patch("agentic_memory.ingest.distill_week", side_effect=reassign_during_generation):
+        with mock.patch("tess_memory.ingest.distill_week", side_effect=reassign_during_generation):
             result = ingest(self.cfg, self.store, self.embedder, self.backend,
                             aggregates_only=True, refresh_aggregates=True)
         self.assertEqual(result.aggregates_pending, 3)

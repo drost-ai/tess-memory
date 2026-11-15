@@ -3,8 +3,8 @@ import numpy as np
 import pytest
 import yaml
 
-from agentic_memory.config import parse_manifest
-from agentic_memory.embed import LocalEmbedder, make_embedder
+from tess_memory.config import parse_manifest
+from tess_memory.embed import LocalEmbedder, make_embedder
 
 
 class Model:

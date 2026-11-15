@@ -8,14 +8,14 @@ import unittest
 from unittest import mock
 from zoneinfo import ZoneInfo
 
-from agentic_memory.codex import CodexCatalog, CodexParseError
-from agentic_memory.config import Config, DataStore
-from agentic_memory.ingest import ingest
-from agentic_memory.readers import CompletedSourceReader
-from agentic_memory.scheduler_config import ScheduledStore, ServiceConfig, load_service
-from agentic_memory.scheduler import worker
-from agentic_memory.scheduler_queue import WorkQueue
-from agentic_memory.store import MemoryStore
+from tess_memory.codex import CodexCatalog, CodexParseError
+from tess_memory.config import Config, DataStore
+from tess_memory.ingest import ingest
+from tess_memory.readers import CompletedSourceReader
+from tess_memory.scheduler_config import ScheduledStore, ServiceConfig, load_service
+from tess_memory.scheduler import worker
+from tess_memory.scheduler_queue import WorkQueue
+from tess_memory.store import MemoryStore
 from test_codex import RecordingEmbedder, append, message, wrapped, write_rollout
 from test_incremental_ingest import Backend
 
@@ -39,8 +39,8 @@ class CalendarRecoveryTests(unittest.TestCase):
             cfg=load_service(config_path);queue=WorkQueue(cfg)
             run=queue.claim(instance='codex',kind='recovery',explicit=True)
             backend=Backend()
-            with mock.patch('agentic_memory.scheduler.AgentCoreBackend',return_value=backend), \
-                 mock.patch('agentic_memory.scheduler.make_embedder',return_value=RecordingEmbedder()):
+            with mock.patch('tess_memory.scheduler.AgentCoreBackend',return_value=backend), \
+                 mock.patch('tess_memory.scheduler.make_embedder',return_value=RecordingEmbedder()):
                 self.assertEqual(worker(config_path,run['id']),0)
             result=queue.get_run(run['id']);stats=json.loads(result['stats'])
             self.assertEqual((stats['model_calls'],stats['recovered_partial']),(2,1))
@@ -60,7 +60,7 @@ class CalendarRecoveryTests(unittest.TestCase):
             root = Path(tmp)
             cfg = ServiceConfig(root/'config', root/'data', (replace(store, enabled=True),))
             now = datetime(2026, 9, 9, 12, tzinfo=PT).timestamp()
-            with mock.patch('agentic_memory.scheduler_queue.time.time', return_value=now):
+            with mock.patch('tess_memory.scheduler_queue.time.time', return_value=now):
                 queue = WorkQueue(cfg)
                 queue.set_enabled('one', True)
             due = next(r['due'] for r in queue.status()['jobs'] if r['kind']=='recovery')

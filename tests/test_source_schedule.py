@@ -1,7 +1,7 @@
 from pathlib import Path
 import unittest
 
-from agentic_memory.source_schedule import source_scan_order
+from tess_memory.source_schedule import source_scan_order
 
 
 def source(name, modified=0):

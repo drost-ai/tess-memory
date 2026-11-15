@@ -4,12 +4,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from agentic_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
-from agentic_memory.autobiography_config import PersonalConfig
-from agentic_memory.autobiography_extract import PersonalExtraction
-from agentic_memory.autobiography_inbox import PersonalInbox
-from agentic_memory.config import Config,DataStore
-from agentic_memory.dream_cycle import DreamCycle
+from tess_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
+from tess_memory.autobiography_config import PersonalConfig
+from tess_memory.autobiography_extract import PersonalExtraction
+from tess_memory.autobiography_inbox import PersonalInbox
+from tess_memory.config import Config,DataStore
+from tess_memory.dream_cycle import DreamCycle
 from test_codex import write_rollout,message
 
 
@@ -146,7 +146,7 @@ class DreamTests(unittest.TestCase):
         failed=PersonalInbox(self.store).list(state='failed')['candidates']
         self.assertEqual(failed[0]['id'],self.cid)
         self.assertEqual(failed[0]['attempts'],3)
-        from agentic_memory.personal_recovery import retry_failed
+        from tess_memory.personal_recovery import retry_failed
         operator=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='operator'))
         self.addCleanup(operator.close)
         retry_failed(self.cfg,operator,kind='candidate',target=self.cid,reason='Fixed proposal schema.')
@@ -192,7 +192,7 @@ class DreamTests(unittest.TestCase):
 
     def test_dream_can_autonomously_author_every_segment_including_core_commitments(self):
         # Every segment the reconciler works on; Soul, User, Identity and Core are authored directly.
-        from agentic_memory.autobiography import WORKER_SEGMENTS as SEGMENTS
+        from tess_memory.autobiography import WORKER_SEGMENTS as SEGMENTS
         cycle=self.dream.prepare()
         edits=[{'expected_revision':0,'segment':segment,'title':segment,'body':'My deliberate interpretation of this experience.',
                 'reason':'Autonomous reflection','attribution':'agent_reflection'} for segment in SEGMENTS]

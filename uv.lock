@@ -3,29 +3,6 @@ revision = 2
 requires-python = ">=3.12, <3.14"
 
 [[package]]
-name = "agentic-memory"
-version = "0.1.0"
-source = { editable = "." }
-dependencies = [
-    { name = "backports-zstd" },
-    { name = "httpx" },
-    { name = "mcp" },
-    { name = "numpy" },
-    { name = "sentence-transformers" },
-    { name = "tess-core" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "backports-zstd", specifier = ">=1.0" },
-    { name = "httpx", specifier = ">=0.27" },
-    { name = "mcp", specifier = ">=1.2" },
-    { name = "numpy", specifier = ">=1.26" },
-    { name = "sentence-transformers", specifier = ">=3.0" },
-    { name = "tess-core", git = "ssh://git@github.com/drost-ai/tess-core.git?rev=ca5f419de4073d2aa272fd46614c6f79170ef6d7" },
-]
-
-[[package]]
 name = "annotated-doc"
 version = "0.0.5"
 source = { registry = "https://pypi.org/simple" }
@@ -1224,6 +1201,29 @@ wheels = [
 name = "tess-core"
 version = "0.1.0"
 source = { git = "ssh://git@github.com/drost-ai/tess-core.git?rev=ca5f419de4073d2aa272fd46614c6f79170ef6d7#ca5f419de4073d2aa272fd46614c6f79170ef6d7" }
+
+[[package]]
+name = "tess-memory"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "backports-zstd" },
+    { name = "httpx" },
+    { name = "mcp" },
+    { name = "numpy" },
+    { name = "sentence-transformers" },
+    { name = "tess-core" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "backports-zstd", specifier = ">=1.0" },
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "mcp", specifier = ">=1.2" },
+    { name = "numpy", specifier = ">=1.26" },
+    { name = "sentence-transformers", specifier = ">=3.0" },
+    { name = "tess-core", git = "ssh://git@github.com/drost-ai/tess-core.git?rev=ca5f419de4073d2aa272fd46614c6f79170ef6d7" },
+]
 
 [[package]]
 name = "threadpoolctl"

@@ -5,8 +5,8 @@ import tempfile
 import threading
 import unittest
 
-from agentic_memory.checkpoints import DistillationCheckpoints
-from agentic_memory.distill import CallBudgetExceeded, DistillationPool
+from tess_memory.checkpoints import DistillationCheckpoints
+from tess_memory.distill import CallBudgetExceeded, DistillationPool
 from test_parallel_distill import Backend, response
 
 

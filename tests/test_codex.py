@@ -11,17 +11,17 @@ from unittest import mock
 
 import numpy as np
 
-from agentic_memory import cli
-from agentic_memory.attribution import source_adapter
-from agentic_memory.codex import (
+from tess_memory import cli
+from tess_memory.attribution import source_adapter
+from tess_memory.codex import (
     CodexCatalog, CodexParseError, UNATTRIBUTED_PROJECT,
     ingestion_lock, validate_dedicated_database,
 )
-from agentic_memory.config import CodexSettings, Config, DataStore, load_config
-from agentic_memory.ingest import ingest
-from agentic_memory.store import MemoryStore
-from agentic_memory.transcript import SessionTranscript, Turn, chunk_session, render_for_llm
-from agentic_memory.transcript_reader import get_session_source_path, resolve_transcript_path
+from tess_memory.config import CodexSettings, Config, DataStore, load_config
+from tess_memory.ingest import ingest
+from tess_memory.store import MemoryStore
+from tess_memory.transcript import SessionTranscript, Turn, chunk_session, render_for_llm
+from tess_memory.transcript_reader import get_session_source_path, resolve_transcript_path
 
 
 def message(role, text, **kwargs):
@@ -405,9 +405,9 @@ class CodexParserTests(unittest.TestCase):
         write_rollout(self.home)
         stdout = io.StringIO()
         with mock.patch.object(cli, "CONFIG", Config(data_dir=self.home)), \
-             mock.patch("agentic_memory.store.MemoryStore", side_effect=AssertionError("no store")), \
-             mock.patch("agentic_memory.embed.make_embedder", side_effect=AssertionError("no embed")), \
-             mock.patch("agentic_memory.llm.AgentCoreBackend", side_effect=AssertionError("no model")), \
+             mock.patch("tess_memory.store.MemoryStore", side_effect=AssertionError("no store")), \
+             mock.patch("tess_memory.embed.make_embedder", side_effect=AssertionError("no embed")), \
+             mock.patch("tess_memory.llm.AgentCoreBackend", side_effect=AssertionError("no model")), \
              contextlib.redirect_stdout(stdout):
             result = cli.main(["inspect-codex", str(self.home)])
         self.assertEqual(result, 0)
@@ -452,7 +452,7 @@ class CodexIngestionTests(unittest.TestCase):
         self.assertIsNone(self.store.get_session("codex:not-selected"))
 
     def test_mcp_startup_uses_the_explicit_codex_config(self):
-        from agentic_memory import server, retrieval
+        from tess_memory import server, retrieval
 
         write_rollout(self.home)
         settings = self.root / "dedicated.toml"
@@ -465,7 +465,7 @@ class CodexIngestionTests(unittest.TestCase):
             self.assertIs(server.CONFIG, retrieval.CONFIG)
 
     def test_mcp_missing_settings_does_not_start_a_default_store(self):
-        from agentic_memory import server
+        from tess_memory import server
 
         with mock.patch.object(server, "run") as run:
             self.assertEqual(cli.main(["codex-serve", "--settings", str(self.root / "missing.toml")]), 2)
@@ -536,7 +536,7 @@ class CodexIngestionTests(unittest.TestCase):
 
     def test_dedicated_command_rejects_missing_or_defaulting_config_before_writes(self):
         p = self.root / "settings.toml"
-        with mock.patch("agentic_memory.store.MemoryStore", side_effect=AssertionError("must not open a database")):
+        with mock.patch("tess_memory.store.MemoryStore", side_effect=AssertionError("must not open a database")):
             self.assertEqual(cli.main(["codex-ingest", "--settings", str(p), "--no-llm"]), 2)
             p.write_text('[storage]\ndata_dir = "somewhere"\n')
             self.assertEqual(cli.main(["codex-ingest", "--settings", str(p), "--no-llm"]), 2)

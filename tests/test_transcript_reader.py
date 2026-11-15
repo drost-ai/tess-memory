@@ -7,9 +7,9 @@ import unittest
 from unittest import mock
 from pathlib import Path
 
-from agentic_memory import server
-from agentic_memory.config import Config
-from agentic_memory.transcript_reader import (
+from tess_memory import server
+from tess_memory.config import Config
+from tess_memory.transcript_reader import (
     MIN_PAGE_BYTES,
     get_session_source_path,
     read_transcript_page,

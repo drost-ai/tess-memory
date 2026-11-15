@@ -7,9 +7,9 @@ import unittest
 import sqlite3
 import zlib
 
-from agentic_memory.config import Config, DataStore
-from agentic_memory.readers import CompletedSourceReader
-from agentic_memory.source_journal import SourceReadError
+from tess_memory.config import Config, DataStore
+from tess_memory.readers import CompletedSourceReader
+from tess_memory.source_journal import SourceReadError
 from test_codex import append, message, wrapped, write_rollout
 
 

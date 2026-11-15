@@ -317,7 +317,7 @@ def main():
     from mcp.server.mcpserver import MCPServer
     from .config import load_config
     parser=argparse.ArgumentParser(description='Role-bound personal memory MCP and operator interface')
-    parser.add_argument('--settings',type=Path,help='explicit standalone settings; otherwise requires AGENTIC_MEMORY_CONFIG runtime manifest')
+    parser.add_argument('--settings',type=Path,help='explicit standalone settings; otherwise requires TESS_MEMORY_CONFIG runtime manifest')
     parser.add_argument('--role',choices=['reader','author','extractor','dream','reconciler','follow_up_reconciler','topic_reconciler','care','research','operator'])
     parser.add_argument('--session',default=None)
     parser.add_argument('--audience',default=None,help='the person this session serves (needs personal.multi_audience)')
@@ -337,8 +337,8 @@ def main():
     args=parser.parse_args()
     # Embedded launch uses the explicit runtime manifest through load_config's
     # canonical adapter. Never fall back to global/project standalone settings.
-    if args.settings is None and not os.environ.get('AGENTIC_MEMORY_CONFIG'):
-        parser.error('--settings or explicit AGENTIC_MEMORY_CONFIG is required')
+    if args.settings is None and not os.environ.get('TESS_MEMORY_CONFIG'):
+        parser.error('--settings or explicit TESS_MEMORY_CONFIG is required')
     cfg=load_config(args.settings.expanduser() if args.settings is not None else None)
     principal=cfg.personal.principal(role=args.role,session_id=args.session,audience=args.audience)
     if args.action=='serve':

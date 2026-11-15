@@ -5,13 +5,13 @@ import tempfile
 import unittest
 from unittest import mock
 
-from agentic_memory.config import Config, DataStore
-from agentic_memory.detection import detect_sources, detection_status
-from agentic_memory.locks import ingestion_lock
-from agentic_memory.scheduler import worker, serve
-from agentic_memory.scheduler_config import load_service
-from agentic_memory.scheduler_queue import WorkQueue
-from agentic_memory.store import MemoryStore
+from tess_memory.config import Config, DataStore
+from tess_memory.detection import detect_sources, detection_status
+from tess_memory.locks import ingestion_lock
+from tess_memory.scheduler import worker, serve
+from tess_memory.scheduler_config import load_service
+from tess_memory.scheduler_queue import WorkQueue
+from tess_memory.store import MemoryStore
 from test_codex import write_rollout, append, wrapped, message
 
 
@@ -37,8 +37,8 @@ class DetectionTests(unittest.TestCase):
             store = MemoryStore(cfg.db_path)
             try:
                 with ingestion_lock(cfg.data_dir), store.write_transaction(), \
-                     mock.patch('agentic_memory.scheduler.AgentCoreBackend', side_effect=AssertionError('detector must not construct models')), \
-                     mock.patch('agentic_memory.scheduler.make_embedder', side_effect=AssertionError('detector must not construct embeddings')):
+                     mock.patch('tess_memory.scheduler.AgentCoreBackend', side_effect=AssertionError('detector must not construct models')), \
+                     mock.patch('tess_memory.scheduler.make_embedder', side_effect=AssertionError('detector must not construct embeddings')):
                     store.set_meta('writer-is-active', 'preserve me')
                     first = queue.claim(instance='codex', kind='detect', explicit=True)
                     self.assertEqual(worker(service_path, first['id']), 0)
@@ -98,8 +98,8 @@ class DetectionTests(unittest.TestCase):
                 launched.append(run['kind'])
                 stop.set()
                 return SimpleNamespace(pid=os.getpid(), poll=lambda: None)
-            with mock.patch('agentic_memory.scheduler.owned_worker', return_value=True), \
-                 mock.patch('agentic_memory.scheduler.spawn_worker', side_effect=spawn):
+            with mock.patch('tess_memory.scheduler.owned_worker', return_value=True), \
+                 mock.patch('tess_memory.scheduler.spawn_worker', side_effect=spawn):
                 serve(path, stop_event=stop)
             self.assertEqual(launched, ['detect'])
             self.assertEqual(queue.get_run(paid['id'])['outcome'], 'running')

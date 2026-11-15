@@ -12,9 +12,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agentic_memory import plan, retrieval, server
-from agentic_memory.config import Config
-from agentic_memory.store import MemoryStore
+from tess_memory import plan, retrieval, server
+from tess_memory.config import Config
+from tess_memory.store import MemoryStore
 from test_users_compat import Embedder, build_fixture
 
 

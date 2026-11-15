@@ -6,9 +6,9 @@ import unittest
 from unittest import mock
 from types import SimpleNamespace
 
-from agentic_memory.observation import operation_peaks, private_json, observe
-from agentic_memory.provider_limits import ProviderGate
-from agentic_memory.scheduler_config import ServiceConfig
+from tess_memory.observation import operation_peaks, private_json, observe
+from tess_memory.provider_limits import ProviderGate
+from tess_memory.scheduler_config import ServiceConfig
 
 
 class ObservationTests(unittest.TestCase):
@@ -43,11 +43,11 @@ class ObservationTests(unittest.TestCase):
             now[0] += seconds
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp)/'status.json'
-            with mock.patch('agentic_memory.observation.load_service', return_value=SimpleNamespace()), \
-                 mock.patch('agentic_memory.observation.service_status', side_effect=statuses), \
-                 mock.patch('agentic_memory.observation.operation_peaks', return_value={'within_limits': True}), \
-                 mock.patch('agentic_memory.observation.time.time', side_effect=lambda: now[0]), \
-                 mock.patch('agentic_memory.observation.time.sleep', side_effect=sleep):
+            with mock.patch('tess_memory.observation.load_service', return_value=SimpleNamespace()), \
+                 mock.patch('tess_memory.observation.service_status', side_effect=statuses), \
+                 mock.patch('tess_memory.observation.operation_peaks', return_value={'within_limits': True}), \
+                 mock.patch('tess_memory.observation.time.time', side_effect=lambda: now[0]), \
+                 mock.patch('tess_memory.observation.time.sleep', side_effect=sleep):
                 result = observe(Path('config'), path, seconds=1, interval=1)
             history = [json.loads(line) for line in path.with_suffix('.jsonl').read_text().splitlines()]
             return result, history

@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def _scheduled_config(settings: Path):
     """Keep canonical embedded providers; instance TOML selects source/storage only."""
-    manifest = os.environ.get('AGENTIC_MEMORY_CONFIG')
+    manifest = os.environ.get('TESS_MEMORY_CONFIG')
     if manifest:
         return load_manifest(Path(manifest), store_settings=settings)
     return load_config(settings)
@@ -229,12 +229,12 @@ def _worker_environment():
     # memory overrides or source-checkout import paths. Credential refs remain
     # ordinary environment variables and are never copied into reports.
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith('AGENTIC_MEMORY_') and k not in {'AGENT_CORE_PATH', 'PYTHONPATH'}}
-    manifest = os.environ.get('AGENTIC_MEMORY_CONFIG')
+           if not k.startswith('TESS_MEMORY_') and k not in {'AGENT_CORE_PATH', 'PYTHONPATH'}}
+    manifest = os.environ.get('TESS_MEMORY_CONFIG')
     if manifest:
         if not Path(manifest).is_absolute():
-            raise ValueError('AGENTIC_MEMORY_CONFIG must be an absolute generated manifest path')
-        env['AGENTIC_MEMORY_CONFIG'] = manifest
+            raise ValueError('TESS_MEMORY_CONFIG must be an absolute generated manifest path')
+        env['TESS_MEMORY_CONFIG'] = manifest
     env['PYTHONUNBUFFERED'] = '1'
     return env
 
@@ -242,7 +242,7 @@ def _worker_environment():
 def spawn_worker(config, run):
     # Validate metadata before opening the log or launching a worker. Installed
     # modules must work from the runtime home, not the memory source checkout.
-    embedded = bool(os.environ.get('AGENTIC_MEMORY_CONFIG'))
+    embedded = bool(os.environ.get('TESS_MEMORY_CONFIG'))
     cfg = _scheduled_config(config.store(run['instance']).settings) if embedded else None
     cwd = cfg.runtime_home if embedded else config.path.parent
     directory = config.data_dir / 'runs'
@@ -250,7 +250,7 @@ def spawn_worker(config, run):
     log = directory / (run['id'] + '.log')
     with log.open('xb') as output:
         os.fchmod(output.fileno(), 0o600)
-        process = subprocess.Popen([sys.executable, '-u', '-m', 'agentic_memory.cli', 'scheduler-worker',
+        process = subprocess.Popen([sys.executable, '-u', '-m', 'tess_memory.cli', 'scheduler-worker',
                                     '--config', str(config.path), '--run-id', run['id']],
                                    cwd=cwd, env=_worker_environment(), stdin=subprocess.DEVNULL,
                                    stdout=output, stderr=subprocess.STDOUT, start_new_session=True)
@@ -289,7 +289,7 @@ def owned_worker(pid, identifier) -> bool | None:
         return None
     try:
         return (len(args) >= 9 and Path(args[0]).name.startswith('python')
-                and args[1:5] == ['-u', '-m', 'agentic_memory.cli', 'scheduler-worker']
+                and args[1:5] == ['-u', '-m', 'tess_memory.cli', 'scheduler-worker']
                 and args[args.index('--run-id') + 1] == identifier)
     except (ValueError, IndexError):
         return False

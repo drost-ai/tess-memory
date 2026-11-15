@@ -13,10 +13,10 @@ from contextlib import closing
 from pathlib import Path
 from unittest import mock
 
-from agentic_memory.config import CodexSettings, Config, DataStore, load_config
-from agentic_memory.distill import DistillationPool, distill_session, distill_session_segmented
-from agentic_memory.ingest import ingest
-from agentic_memory.store import MemoryStore
+from tess_memory.config import CodexSettings, Config, DataStore, load_config
+from tess_memory.distill import DistillationPool, distill_session, distill_session_segmented
+from tess_memory.ingest import ingest
+from tess_memory.store import MemoryStore
 from test_codex import RecordingEmbedder, append, message, wrapped, write_rollout
 
 
@@ -199,7 +199,7 @@ class ParallelDistillTests(unittest.TestCase):
             pool.session("one").submit("system", "first", "session").result()
             pool.session("two").submit("system", "second", "session").result()
             self.assertEqual((len(primary.calls), len(fallback.calls)), (1, 2))
-            with mock.patch("agentic_memory.distill.time.monotonic", return_value=time.monotonic() + 61):
+            with mock.patch("tess_memory.distill.time.monotonic", return_value=time.monotonic() + 61):
                 pool.session("three").submit("system", "third", "session").result()
         self.assertEqual((len(primary.calls), len(fallback.calls)), (2, 3))
 

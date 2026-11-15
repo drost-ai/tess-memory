@@ -135,7 +135,7 @@ def load_dedicated_config(path: Path):
     if not declared or not raw.get("data_stores") or any(ds.type != "codex" for ds in cfg.data_stores):
         raise ValueError("Codex memory requires explicit Codex sources and storage.data_dir")
     if cfg.data_dir.resolve() != Path(declared).expanduser().resolve():
-        raise ValueError("AGENTIC_MEMORY_DATA conflicts with the dedicated settings file")
+        raise ValueError("TESS_MEMORY_DATA conflicts with the dedicated settings file")
     validate_dedicated_database(cfg.db_path)
     return cfg
 

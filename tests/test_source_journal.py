@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from agentic_memory.source_journal import SourceChanged, SourceJournal, SourceReadError
+from tess_memory.source_journal import SourceChanged, SourceJournal, SourceReadError
 
 
 class SourceJournalTests(unittest.TestCase):
@@ -118,7 +118,7 @@ class SourceJournalTests(unittest.TestCase):
         self.assertFalse(first.verify())
 
     def test_prefix_verification_does_not_require_a_growing_file_to_go_quiet(self):
-        from agentic_memory.source_journal import prefix_digest
+        from tess_memory.source_journal import prefix_digest
         self.write([1])
         _, revision = self.read()
         self.append(2)
@@ -126,7 +126,7 @@ class SourceJournalTests(unittest.TestCase):
             digest = prefix_digest(path, length)
             self.append(3)
             return digest
-        with mock.patch('agentic_memory.source_journal.prefix_digest', side_effect=growing):
+        with mock.patch('tess_memory.source_journal.prefix_digest', side_effect=growing):
             self.assertTrue(revision.verify())
 
 

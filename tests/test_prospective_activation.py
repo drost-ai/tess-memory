@@ -5,12 +5,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalError, canonical, digest
-from agentic_memory.autobiography_config import PersonalConfig
-from agentic_memory.autobiography_extract import clean_unit
-from agentic_memory.config import Config
-from agentic_memory.personal_sources import selected_sources
-from agentic_memory.prospective_activation import ProspectiveActivation
+from tess_memory.autobiography import AutobiographyStore, PersonalError, canonical, digest
+from tess_memory.autobiography_config import PersonalConfig
+from tess_memory.autobiography_extract import clean_unit
+from tess_memory.config import Config
+from tess_memory.personal_sources import selected_sources
+from tess_memory.prospective_activation import ProspectiveActivation
 
 
 class ProspectiveTests(unittest.TestCase):
@@ -298,7 +298,7 @@ class ProspectiveTests(unittest.TestCase):
             self.valid(roles[0], 'kept quote')
 
     def test_unsupported_backend_and_nonoperator_cannot_activate(self):
-        from agentic_memory.config import DataStore
+        from tess_memory.config import DataStore
         cfg = replace(self.cfg, data_stores=[DataStore('unsupported', self.sessions, type='claude-code')],
             personal=replace(self.cfg.personal, source_mode='configured', source_names=('unsupported',)))
         with self.assertRaises(PersonalError):
@@ -312,7 +312,7 @@ class ProspectiveTests(unittest.TestCase):
         from unittest.mock import patch
         path, body = self.source()
         self.append(path, body, 'old')
-        from agentic_memory.readers import CompletedSourceReader
+        from tess_memory.readers import CompletedSourceReader
         original = CompletedSourceReader.read
         def racing(reader, *args, **kwargs):
             snapshot = original(reader, *args, **kwargs)

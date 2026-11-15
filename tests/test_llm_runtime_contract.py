@@ -2,8 +2,8 @@
 import json
 from dataclasses import replace
 from tess_core import SessionOptions
-from agentic_memory.config import Config
-from agentic_memory.llm import AgentCoreBackend
+from tess_memory.config import Config
+from tess_memory.llm import AgentCoreBackend
 
 
 def test_real_runtime_completion(tmp_path):

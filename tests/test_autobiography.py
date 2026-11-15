@@ -6,8 +6,8 @@ import tempfile
 import unittest
 from unittest import mock
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError, SEGMENTS
-from agentic_memory.store import MemoryStore
+from tess_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError, SEGMENTS
+from tess_memory.store import MemoryStore
 
 
 class AutobiographyTests(unittest.TestCase):
@@ -130,7 +130,7 @@ class AutobiographyTests(unittest.TestCase):
         self.assertEqual(self.store.get(self.store.list_records()['records'][0]['id'])['revision'],1)
 
     def test_seed_import_requires_preview_and_is_inherited_retired_and_idempotent(self):
-        from agentic_memory.autobiography_import import preview_seeds,import_seeds
+        from tess_memory.autobiography_import import preview_seeds,import_seeds
         file=self.path.parent/'self.md';file.write_text('An inherited identity claim.')
         files={'Identity':str(file)};preview=preview_seeds(files)
         operator=AutobiographyStore(self.path,replace(self.principal,role='operator'));self.addCleanup(operator.close)

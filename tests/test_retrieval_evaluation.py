@@ -18,10 +18,10 @@ from unittest import mock
 
 import numpy as np
 
-from agentic_memory import cli, plan, retrieval, server
-from agentic_memory.config import Config
-from agentic_memory.search_agent import agentic_search
-from agentic_memory.store import MemoryRow, MemoryStore
+from tess_memory import cli, plan, retrieval, server
+from tess_memory.config import Config
+from tess_memory.search_agent import agentic_search
+from tess_memory.store import MemoryRow, MemoryStore
 
 
 class FixedClock(datetime):
@@ -69,7 +69,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
         self.assertEqual([hit["id"] for hit in hits], [current, old])
 
     def test_completed_and_pending_plans_retrieve_live_status_without_stale_mirror(self):
-        with mock.patch("agentic_memory.plan._now", return_value="2026-09-01T00:00:00Z"):
+        with mock.patch("tess_memory.plan._now", return_value="2026-09-01T00:00:00Z"):
             done = plan.add_item(self.store, self.embedder, project="atlas", kind="task",
                                  title="Ship cache migration", body="Upgrade the cache service.")
             pending = plan.add_item(self.store, self.embedder, project="atlas", kind="task",
@@ -145,7 +145,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
         self.add("Atlas cache migration decision")
         llm = mock.Mock()
         llm.complete.return_value = json.dumps({"action": "get_session", "session_ids": ["outside"]})
-        with mock.patch("agentic_memory.search_agent._session_evidence", side_effect=AssertionError("expanded")):
+        with mock.patch("tess_memory.search_agent._session_evidence", side_effect=AssertionError("expanded")):
             for filters in ({"project": "atlas"}, {"project": "atlas", "level": "memory"}):
                 hits, trace = agentic_search(self.cfg, self.store, self.embedder, llm, "cache", **filters)
                 self.assertEqual(len(hits), 1)
@@ -156,7 +156,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
         llm = mock.Mock()
         llm.complete.side_effect = [json.dumps({'action': 'get_session', 'session_ids': ['invented']}),
                                     json.dumps({'action': 'finish', 'keep': [wanted]})]
-        with mock.patch('agentic_memory.search_agent._session_evidence', side_effect=AssertionError('must not expand invented id')):
+        with mock.patch('tess_memory.search_agent._session_evidence', side_effect=AssertionError('must not expand invented id')):
             hits, trace = agentic_search(self.cfg, self.store, self.embedder, llm, 'cache', project='atlas')
         self.assertEqual([h['id'] for h in hits], [wanted])
         self.assertEqual(trace.invalid_actions, 1)
@@ -179,7 +179,7 @@ class RetrievalEvaluationTests(unittest.TestCase):
             self.assertIn("cache migration", server.search_memory("cache", project="atlas", mode="static"))
         with mock.patch.object(server, "CONFIG", Config(search_agent=False)), \
              mock.patch.object(server, "_search_llm", None), \
-             mock.patch("agentic_memory.llm.AgentCoreBackend.for_role", return_value="backend") as build:
+             mock.patch("tess_memory.llm.AgentCoreBackend.for_role", return_value="backend") as build:
             self.assertIsNone(server._get_search_llm())
             build.assert_not_called()
             self.assertEqual(server._get_search_llm(force=True), "backend")
@@ -188,10 +188,10 @@ class RetrievalEvaluationTests(unittest.TestCase):
     def test_cli_empty_scope_avoids_provider_initialization(self):
         self.add("Unrelated corpus", project="elsewhere")
         with mock.patch.object(cli, "CONFIG", self.cfg), \
-             mock.patch("agentic_memory.store.MemoryStore", return_value=self.store), \
+             mock.patch("tess_memory.store.MemoryStore", return_value=self.store), \
              mock.patch.object(self.store, "close"), \
-             mock.patch("agentic_memory.embed.make_embedder", side_effect=AssertionError("embedder initialized")), \
-             mock.patch("agentic_memory.llm.AgentCoreBackend.for_role", side_effect=AssertionError("LLM initialized")), \
+             mock.patch("tess_memory.embed.make_embedder", side_effect=AssertionError("embedder initialized")), \
+             mock.patch("tess_memory.llm.AgentCoreBackend.for_role", side_effect=AssertionError("LLM initialized")), \
              contextlib.redirect_stdout(io.StringIO()) as output:
             args = argparse.Namespace(project="missing", level=None, limit=None, query="anything", static=False)
             self.assertEqual(cli.cmd_search(args), 0)

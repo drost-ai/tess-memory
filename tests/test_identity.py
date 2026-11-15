@@ -7,8 +7,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agentic_memory import cli, server
-from agentic_memory.config import Config, load_config
+from tess_memory import cli, server
+from tess_memory.config import Config, load_config
 
 
 class IdentityConfigTests(unittest.TestCase):
@@ -25,15 +25,15 @@ class IdentityConfigTests(unittest.TestCase):
     def test_identity_and_data_store_owners_are_read_and_env_wins(self):
         path = self.settings('[identity]\nuser = "ana"\n[[data_stores]]\nname = "c"\npath = "/tmp/x"\nuser = "ana"\nteam = "core"\n')
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("AGENTIC_MEMORY_USER", None)
+            os.environ.pop("TESS_MEMORY_USER", None)
             cfg = load_config(path)
         self.assertEqual((cfg.identity_user, cfg.data_stores[0].user, cfg.data_stores[0].team), ("ana", "ana", "core"))
-        with mock.patch.dict(os.environ, {"AGENTIC_MEMORY_USER": "ben"}):
+        with mock.patch.dict(os.environ, {"TESS_MEMORY_USER": "ben"}):
             self.assertEqual(load_config(path).identity_user, "ben")
 
     def test_no_identity_means_the_unrestricted_default_owner(self):
         with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("AGENTIC_MEMORY_USER", None)
+            os.environ.pop("TESS_MEMORY_USER", None)
             cfg = load_config(self.settings(""))
         self.assertIsNone(cfg.identity_user)
         with self.assertRaises(ValueError):

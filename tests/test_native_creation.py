@@ -4,9 +4,9 @@ import json
 import sqlite3
 
 import test_prospective_activation as base
-from agentic_memory.autobiography import PersonalError, canonical
-from agentic_memory.autobiography_config import PersonalConfig
-from agentic_memory.prospective_activation import ProspectiveActivation
+from tess_memory.autobiography import PersonalError, canonical
+from tess_memory.autobiography_config import PersonalConfig
+from tess_memory.prospective_activation import ProspectiveActivation
 
 
 class NativeCreationTests(base.ProspectiveTests):

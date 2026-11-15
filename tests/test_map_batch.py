@@ -7,12 +7,12 @@ import tempfile
 import threading
 import unittest
 
-from agentic_memory.config import Config
-from agentic_memory.distill import DistillationPool, SESSION_SYSTEM
-from agentic_memory.map_batch import BATCH_INSTRUCTIONS
-from agentic_memory.readers import ParsedSource
-from agentic_memory.stable_distill import stable_digest, stable_map_items
-from agentic_memory.transcript import SessionTranscript, Turn
+from tess_memory.config import Config
+from tess_memory.distill import DistillationPool, SESSION_SYSTEM
+from tess_memory.map_batch import BATCH_INSTRUCTIONS
+from tess_memory.readers import ParsedSource
+from tess_memory.stable_distill import stable_digest, stable_map_items
+from tess_memory.transcript import SessionTranscript, Turn
 
 
 class Backend:

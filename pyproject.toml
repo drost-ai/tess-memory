@@ -3,11 +3,11 @@ requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "agentic-memory"
+name = "tess-memory"
 version = "0.1.0"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-description = "Agentic memory system: ingests Claude Code session transcripts into a multi-timescale, importance-weighted memory store, served over MCP."
+description = "Tess Memory: long-term memory for AI agents. Ingests session transcripts into a multi-timescale, importance-weighted store with a personal core and a durable plan board, served over MCP."
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "tess-core>=0.1.0",
@@ -19,10 +19,10 @@ dependencies = [
 ]
 
 [project.scripts]
-agentic-memory = "agentic_memory.cli:main"
+tess-memory = "tess_memory.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/agentic_memory"]
+packages = ["src/tess_memory"]
 
 # The engine is pinned to an exact commit. To work on both at once, install a
 # local checkout over the pin after syncing: uv pip install -e ../../agents/tess-core

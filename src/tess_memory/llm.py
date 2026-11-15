@@ -76,7 +76,7 @@ class AgentCoreBackend:
         scratch_root = ((cfg.runtime_home / "run" / "memory") if cfg.runtime_home is not None
                         else cfg.data_dir / "run")
         scratch_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self._workdir = tempfile.mkdtemp(prefix="agentic-memory-ac-", dir=scratch_root)
+        self._workdir = tempfile.mkdtemp(prefix="tess-memory-ac-", dir=scratch_root)
         self._runtime_home = Path(self._workdir) / "runtime"
         atexit.register(shutil.rmtree, self._workdir, ignore_errors=True)
         settings_document = {"providerProfiles": {self._profile: selected_profile}}

@@ -9,8 +9,8 @@ from unittest import mock
 
 import numpy as np
 
-from agentic_memory import plan
-from agentic_memory.store import MemoryRow, MemoryStore
+from tess_memory import plan
+from tess_memory.store import MemoryRow, MemoryStore
 
 
 class Embedder:

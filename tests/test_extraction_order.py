@@ -4,7 +4,7 @@ import sqlite3
 import unittest
 from types import SimpleNamespace
 
-from agentic_memory.autobiography_extract import order_session_parts
+from tess_memory.autobiography_extract import order_session_parts
 import test_autobiography_extract as fixtures
 from test_codex import write_rollout, message
 

@@ -1,9 +1,9 @@
 import unittest
 
 import test_native_creation as fixtures
-from agentic_memory.autobiography import PersonalError, canonical, digest
-from agentic_memory.autobiography_inbox import PersonalInbox
-from agentic_memory.prospective_recovery import plan_native_recovery
+from tess_memory.autobiography import PersonalError, canonical, digest
+from tess_memory.autobiography_inbox import PersonalInbox
+from tess_memory.prospective_recovery import plan_native_recovery
 
 
 class RecoveryPlanTests(unittest.TestCase):
@@ -18,7 +18,7 @@ class RecoveryPlanTests(unittest.TestCase):
         fixtures.base.ProspectiveTests.setUp(self)
         import sqlite3
         from dataclasses import replace
-        from agentic_memory.prospective_activation import ProspectiveActivation
+        from tess_memory.prospective_activation import ProspectiveActivation
         self.ledger = self.root / 'gateway.db'
         with sqlite3.connect(self.ledger) as db:
             db.execute('CREATE TABLE sessions(id TEXT, engine_session_id TEXT, created_at REAL, deleted_at TEXT)')

@@ -11,8 +11,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from agentic_memory.config import Config, load_config
-from agentic_memory.llm import AgentCoreBackend
+from tess_memory.config import Config, load_config
+from tess_memory.llm import AgentCoreBackend
 from tess_core.config import ProviderRegistry
 from tess_core import SessionOptions as EngineSessionOptions
 from tess_core.config.parsing import _parse_setting_sources, _load_merged_settings
@@ -112,8 +112,8 @@ class ModelSelectionTests(unittest.TestCase):
         runtime.SessionOptions = SessionOptions
         patches = [mock.patch.dict(sys.modules, {"tess_core": runtime}),
                    mock.patch.object(sys, "path", list(sys.path)),
-                   mock.patch("agentic_memory.llm.tempfile.mkdtemp", return_value=str(self.root)),
-                   mock.patch("agentic_memory.llm.atexit.register")]
+                   mock.patch("tess_memory.llm.tempfile.mkdtemp", return_value=str(self.root)),
+                   mock.patch("tess_memory.llm.atexit.register")]
         for patch in patches:
             patch.start()
             self.addCleanup(patch.stop)
@@ -158,7 +158,7 @@ class ModelSelectionTests(unittest.TestCase):
             ambient.assert_not_awaited()
 
     def test_cleanup_failure_preserves_paid_response_without_masking_provider_failure(self):
-        from agentic_memory.model_usage import UsageObserver, observe_usage
+        from tess_memory.model_usage import UsageObserver, observe_usage
         backend=AgentCoreBackend(self.cfg,probe=False)
         start=backend._start_runtime
         async def failing_stop(grace=0.0):
@@ -257,7 +257,7 @@ class ModelSelectionTests(unittest.TestCase):
         self.assertNotEqual(AgentCoreBackend(self.cfg, probe=False).cache_identity, original)
 
     def test_usage_observer_extracts_wire_counters_without_forwarding_raw_events(self):
-        from agentic_memory.model_usage import UsageObserver, observe_usage
+        from tess_memory.model_usage import UsageObserver, observe_usage
         backend = AgentCoreBackend(self.cfg, probe=False)
         records = []
         observer = UsageObserver(records.append)

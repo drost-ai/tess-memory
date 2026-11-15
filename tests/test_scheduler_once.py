@@ -14,10 +14,10 @@ import time
 import unittest
 from unittest.mock import patch
 
-from agentic_memory import scheduler_once as batch
-from agentic_memory.scheduler import supervisor_lock
-from agentic_memory.scheduler_config import ScheduledStore, ServiceConfig
-from agentic_memory.scheduler_queue import WorkQueue
+from tess_memory import scheduler_once as batch
+from tess_memory.scheduler import supervisor_lock
+from tess_memory.scheduler_config import ScheduledStore, ServiceConfig
+from tess_memory.scheduler_queue import WorkQueue
 
 
 class FiniteBatchTests(unittest.TestCase):
@@ -275,7 +275,7 @@ class FiniteBatchTests(unittest.TestCase):
         self.assertFalse(self.config.data_dir.exists())
 
     def test_real_cli_invalid_config_safe_json(self):
-        result = subprocess.run([sys.executable, '-u', '-m', 'agentic_memory.cli', 'scheduler',
+        result = subprocess.run([sys.executable, '-u', '-m', 'tess_memory.cli', 'scheduler',
                                  '--config', str(self.root / 'absent.toml'), 'ingest-once'],
                                 capture_output=True, text=True, timeout=15)
         self.assertEqual(result.returncode, 1)
@@ -297,10 +297,10 @@ class FiniteBatchTests(unittest.TestCase):
             # Exercise installed modules without synthetic import-path shims.
             env = {key: value for key, value in os.environ.items()
                    if key not in {'PYTHONPATH', 'AGENT_CORE_PATH'}
-                   and not key.startswith('AGENTIC_MEMORY_')}
+                   and not key.startswith('TESS_MEMORY_')}
             config_path = root / 'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="empty"\nenabled=true\npoll_seconds=14400\nsettings="{settings}"\n')
-            result = subprocess.run([sys.executable, '-m', 'agentic_memory.cli', 'scheduler', '--config', str(config_path),
+            result = subprocess.run([sys.executable, '-m', 'tess_memory.cli', 'scheduler', '--config', str(config_path),
                                      'ingest-once'], capture_output=True, text=True, timeout=15, env=env)
             diagnostic = result.stderr + result.stdout + ''.join(
                 path.read_text() for path in (root / 'service' / 'runs').glob('*.log'))
@@ -311,7 +311,7 @@ class FiniteBatchTests(unittest.TestCase):
             self.assertEqual(result.stderr, '')
             self.assertEqual(len(result.stdout.splitlines()), 1)
             # Repeating immediately must not obey the old four-hour poll.
-            again = subprocess.run([sys.executable, '-u', '-m', 'agentic_memory.cli', 'scheduler',
+            again = subprocess.run([sys.executable, '-u', '-m', 'tess_memory.cli', 'scheduler',
                                     '--config', str(config_path), 'ingest-once'],
                                    capture_output=True, text=True, timeout=15, env=env)
             self.assertEqual(again.returncode, 0, again.stderr)

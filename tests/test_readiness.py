@@ -6,8 +6,8 @@ from pathlib import Path
 import pytest
 import yaml
 
-from agentic_memory import readiness
-from agentic_memory.config import parse_manifest
+from tess_memory import readiness
+from tess_memory.config import parse_manifest
 
 
 class Embedder:

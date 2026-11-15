@@ -8,11 +8,11 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest import mock
 
-from agentic_memory import cli
-from agentic_memory.config import Config, DataStore, load_config
-from agentic_memory.distill import DistilledMemory, SessionDigest
-from agentic_memory.ingest import ingest
-from agentic_memory.store import MemoryStore
+from tess_memory import cli
+from tess_memory.config import Config, DataStore, load_config
+from tess_memory.distill import DistilledMemory, SessionDigest
+from tess_memory.ingest import ingest
+from tess_memory.store import MemoryStore
 from test_codex import RecordingEmbedder, append, message, wrapped, write_rollout
 
 
@@ -32,7 +32,7 @@ class IngestResilienceTests(unittest.TestCase):
         self.digest = SessionDigest("Durable decision", "Keep the valuable summary", "Complete", [
             DistilledMemory(kind="decision", content="Keep the atomic decision", importance=0.9),
         ])
-        p = mock.patch("agentic_memory.ingest.distill_session", return_value=self.digest)
+        p = mock.patch("tess_memory.ingest.distill_session", return_value=self.digest)
         self.distill = p.start()
         self.addCleanup(p.stop)
 
@@ -128,12 +128,12 @@ class IngestResilienceTests(unittest.TestCase):
     def test_quiet_period_defers_without_marking_processed_then_ingests(self):
         self.cfg.quiet_seconds = 60
         os.utime(self.path, (1_000, 1_000))
-        with mock.patch("agentic_memory.ingest.time.time", return_value=1_030):
+        with mock.patch("tess_memory.ingest.time.time", return_value=1_030):
             stats = self.run_ingest()
         self.assertEqual(stats.deferred_active, 1)
         self.assertIsNone(self.store.file_state(str(self.path)))
         self.distill.assert_not_called()
-        with mock.patch("agentic_memory.ingest.time.time", return_value=1_061):
+        with mock.patch("tess_memory.ingest.time.time", return_value=1_061):
             self.assertEqual(self.run_ingest().distilled, 1)
 
     def test_source_changed_during_provider_work_remains_pending(self):
@@ -154,18 +154,18 @@ class IngestResilienceTests(unittest.TestCase):
         self.assertEqual(stats.aggregates_pending, 2)
         other = MemoryStore(self.cfg.db_path)
         self.addCleanup(other.close)
-        with mock.patch("agentic_memory.ingest.source_adapter", side_effect=AssertionError("must not scan")), \
-             mock.patch("agentic_memory.codex.CodexCatalog", side_effect=AssertionError("must not discover")), \
-             mock.patch("agentic_memory.ingest.distill_profile", return_value="Profile"), \
-             mock.patch("agentic_memory.ingest.distill_week", return_value="Week"):
+        with mock.patch("tess_memory.ingest.source_adapter", side_effect=AssertionError("must not scan")), \
+             mock.patch("tess_memory.codex.CodexCatalog", side_effect=AssertionError("must not discover")), \
+             mock.patch("tess_memory.ingest.distill_profile", return_value="Profile"), \
+             mock.patch("tess_memory.ingest.distill_week", return_value="Week"):
             stats = ingest(self.cfg, other, self.embedder, self.backend,
                            aggregates_only=True, refresh_aggregates=True)
         self.assertEqual((stats.scanned, stats.profiles, stats.digests, stats.aggregates_pending), (0, 1, 1, 0))
 
     def test_aggregate_failure_at_each_stage_preserves_old_result_and_pending_retry(self):
         self.run_ingest()
-        with mock.patch("agentic_memory.ingest.distill_profile", return_value="Old profile"), \
-             mock.patch("agentic_memory.ingest.distill_week", return_value="Old week"):
+        with mock.patch("tess_memory.ingest.distill_profile", return_value="Old profile"), \
+             mock.patch("tess_memory.ingest.distill_week", return_value="Old week"):
             self.run_ingest(refresh_aggregates=True)
         for stage in ("model", "empty", "embedding", "write"):
             with self.subTest(stage=stage):
@@ -173,8 +173,8 @@ class IngestResilienceTests(unittest.TestCase):
                     self.store.mark_aggregate_dirty("project", "-work-project")
                 saved = self.snapshot()
                 patch_target = {
-                    "model": "agentic_memory.ingest.distill_profile",
-                    "empty": "agentic_memory.ingest.distill_profile",
+                    "model": "tess_memory.ingest.distill_profile",
+                    "empty": "tess_memory.ingest.distill_profile",
                     "embedding": None,
                     "write": None,
                 }[stage]
@@ -185,19 +185,19 @@ class IngestResilienceTests(unittest.TestCase):
                     target = self.embedder if stage == "embedding" else self.store
                     method = "embed_passages" if stage == "embedding" else "add_memories"
                     failure = mock.patch.object(target, method, side_effect=RuntimeError("offline"))
-                with mock.patch("agentic_memory.ingest.distill_profile", return_value="Replacement"), failure:
+                with mock.patch("tess_memory.ingest.distill_profile", return_value="Replacement"), failure:
                     stats = self.run_ingest(refresh_aggregates=True)
                 self.assertEqual((stats.errors, stats.aggregates_pending), (1, 1))
                 self.assertEqual(saved, self.snapshot())
-                with mock.patch("agentic_memory.ingest.distill_profile", return_value="Old profile"):
+                with mock.patch("tess_memory.ingest.distill_profile", return_value="Old profile"):
                     stats = self.run_ingest(refresh_aggregates=True)
                 self.assertEqual((stats.profiles, stats.aggregates_pending), (1, 0))
 
     def test_cadence_defers_dirty_jobs_and_force_bypasses_it(self):
         self.cfg.aggregate_refresh_seconds = 86_400
-        with mock.patch("agentic_memory.ingest.distill_profile", return_value="Profile"), \
-             mock.patch("agentic_memory.ingest.distill_week", return_value="Week"), \
-             mock.patch("agentic_memory.ingest.time.time", return_value=2_000_000_000):
+        with mock.patch("tess_memory.ingest.distill_profile", return_value="Profile"), \
+             mock.patch("tess_memory.ingest.distill_week", return_value="Week"), \
+             mock.patch("tess_memory.ingest.time.time", return_value=2_000_000_000):
             self.assertEqual(self.run_ingest(refresh_aggregates=None).aggregates_pending, 0)
             self.change_source()
             stats = self.run_ingest(refresh_aggregates=None)
@@ -215,17 +215,17 @@ class IngestResilienceTests(unittest.TestCase):
                 other.mark_aggregate_dirty("project", "-work-project")
             return "Stale generation"
 
-        with mock.patch("agentic_memory.ingest.distill_profile", side_effect=mark_new_work), \
-             mock.patch("agentic_memory.ingest.distill_week", return_value="Week"):
+        with mock.patch("tess_memory.ingest.distill_profile", side_effect=mark_new_work), \
+             mock.patch("tess_memory.ingest.distill_week", return_value="Week"):
             stats = self.run_ingest(refresh_aggregates=True)
         self.assertEqual(stats.aggregates_pending, 1)
         self.assertIsNone(self.store.get_profile("-work-project"))
-        with mock.patch("agentic_memory.ingest.distill_profile", return_value="Current profile"):
+        with mock.patch("tess_memory.ingest.distill_profile", return_value="Current profile"):
             self.assertEqual(self.run_ingest(refresh_aggregates=True).aggregates_pending, 0)
         self.assertEqual(self.store.get_profile("-work-project")["content"], "Current profile")
 
     def test_duration_is_measured_and_usage_is_explicitly_unknown(self):
-        with mock.patch("agentic_memory.ingest.time.monotonic", side_effect=[100, 102.125]):
+        with mock.patch("tess_memory.ingest.time.monotonic", side_effect=[100, 102.125]):
             stats = self.run_ingest()
         self.assertEqual(stats.duration_seconds, 2.125)
         self.assertIsNone(stats.input_tokens)

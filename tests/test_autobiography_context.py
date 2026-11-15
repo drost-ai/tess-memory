@@ -6,9 +6,9 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from agentic_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError
-from agentic_memory.autobiography_context import personal_context, MAX_ORIENTATION_BYTES
-from agentic_memory.autobiography_lifecycle import transition
+from tess_memory.autobiography import AutobiographyStore, PersonalPrincipal, PersonalError
+from tess_memory.autobiography_context import personal_context, MAX_ORIENTATION_BYTES
+from tess_memory.autobiography_lifecycle import transition
 
 
 class OrientationTests(unittest.TestCase):
@@ -98,7 +98,7 @@ class OrientationTests(unittest.TestCase):
         # Orientation needs no retrieval, ranked search, model, or evidence access.
         with patch.object(self.store, '_get', side_effect=AssertionError('body read')), \
              patch.object(self.store, 'search', side_effect=AssertionError('search called')), \
-             patch('agentic_memory.llm.AgentCoreBackend.complete', side_effect=AssertionError('model called')) as model:
+             patch('tess_memory.llm.AgentCoreBackend.complete', side_effect=AssertionError('model called')) as model:
 
             result = personal_context(self.store)
             model.assert_not_called()

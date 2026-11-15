@@ -1,8 +1,8 @@
 """Explicit standalone TOML and host-owned embedded manifest configuration.
 
-Imports are inert. Embedded mode reads only AGENTIC_MEMORY_CONFIG's absolute
+Imports are inert. Embedded mode reads only TESS_MEMORY_CONFIG's absolute
 JSON file and its explicit registry; standalone callers select a TOML path or
-AGENTIC_MEMORY_SETTINGS. Legacy environment overrides apply only standalone.
+TESS_MEMORY_SETTINGS. Legacy environment overrides apply only standalone.
 """
 
 from __future__ import annotations
@@ -24,8 +24,8 @@ from pathlib import Path
 DEFAULT_EXCLUDES = [
     "-private-var-folders*",
     "-private-tmp-claude*",
-    "*agentic-memory-llm*",
-    "*agentic-memory-ac*",
+    "*tess-memory-llm*",
+    "*tess-memory-ac*",
 ]
 
 
@@ -133,7 +133,7 @@ class Config:
     visibility: "VisibilityPolicy" = field(default_factory=lambda: _default_policy())
 
     # -- storage -------------------------------------------------------------
-    data_dir: Path = field(default_factory=lambda: Path("~/.agentic-memory").expanduser())
+    data_dir: Path = field(default_factory=lambda: Path("~/.tess-memory").expanduser())
 
     # -- llm (agent-core-python is the only backend; provider, model, and
     #    credentials are governed by its own configuration) ------------------
@@ -256,16 +256,16 @@ def _path(raw: str) -> Path:
 
 
 def settings_path() -> Path:
-    raw = os.environ.get("AGENTIC_MEMORY_SETTINGS")
+    raw = os.environ.get("TESS_MEMORY_SETTINGS")
     if not raw:
-        raise ValueError("Explicit AGENTIC_MEMORY_CONFIG manifest or AGENTIC_MEMORY_SETTINGS is required")
+        raise ValueError("Explicit TESS_MEMORY_CONFIG manifest or TESS_MEMORY_SETTINGS is required")
     return _path(raw)
 
 
 def load_config(path: Path | None = None) -> Config:
     """Load an explicitly selected standalone TOML or embedded manifest."""
-    if path is None and os.environ.get("AGENTIC_MEMORY_CONFIG"):
-        return load_manifest(Path(os.environ["AGENTIC_MEMORY_CONFIG"]))
+    if path is None and os.environ.get("TESS_MEMORY_CONFIG"):
+        return load_manifest(Path(os.environ["TESS_MEMORY_CONFIG"]))
     path = (Path(path) if path is not None else settings_path()).expanduser().absolute()
     with path.open("rb") as fh:
         raw = tomllib.load(fh)
@@ -338,7 +338,7 @@ def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
             fallback=str(visibility.get("fallback", defaults.fallback)),
         )
     identity = raw.get("identity", {})
-    user = (None if embedded else os.environ.get("AGENTIC_MEMORY_USER")) or identity.get("user")
+    user = (None if embedded else os.environ.get("TESS_MEMORY_USER")) or identity.get("user")
     if user:
         from .principals import principal_id
         cfg.identity_user = principal_id(str(user).strip())
@@ -476,33 +476,33 @@ def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
         return cfg
 
     # ---- environment overrides (highest precedence) ----
-    if os.environ.get("AGENTIC_MEMORY_SOURCE"):
+    if os.environ.get("TESS_MEMORY_SOURCE"):
         cfg.data_stores = [
-            DataStore(name="env-override", path=_path(os.environ["AGENTIC_MEMORY_SOURCE"]))
+            DataStore(name="env-override", path=_path(os.environ["TESS_MEMORY_SOURCE"]))
         ]
-    if os.environ.get("AGENTIC_MEMORY_DATA"):
-        cfg.data_dir = _path(os.environ["AGENTIC_MEMORY_DATA"])
+    if os.environ.get("TESS_MEMORY_DATA"):
+        cfg.data_dir = _path(os.environ["TESS_MEMORY_DATA"])
     if os.environ.get("AGENT_CORE_PATH"):
         warnings.warn("AGENT_CORE_PATH is deprecated and ignored; install agent-core as a dependency", FutureWarning, stacklevel=2)
         cfg.agent_core_path = _path(os.environ["AGENT_CORE_PATH"])
-    if os.environ.get("AGENTIC_MEMORY_AC_SETTINGS"):
-        cfg.agent_core_settings = _path(os.environ["AGENTIC_MEMORY_AC_SETTINGS"])
-    if os.environ.get("AGENTIC_MEMORY_AC_PROFILE"):
-        cfg.agent_core_profile = os.environ["AGENTIC_MEMORY_AC_PROFILE"]
-    if os.environ.get("AGENTIC_MEMORY_AC_FALLBACK_PROFILE"):
-        cfg.agent_core_fallback_profile = os.environ["AGENTIC_MEMORY_AC_FALLBACK_PROFILE"]
-    if os.environ.get("AGENTIC_MEMORY_SEARCH_AGENT"):
-        cfg.search_agent = os.environ["AGENTIC_MEMORY_SEARCH_AGENT"].lower() not in (
+    if os.environ.get("TESS_MEMORY_AC_SETTINGS"):
+        cfg.agent_core_settings = _path(os.environ["TESS_MEMORY_AC_SETTINGS"])
+    if os.environ.get("TESS_MEMORY_AC_PROFILE"):
+        cfg.agent_core_profile = os.environ["TESS_MEMORY_AC_PROFILE"]
+    if os.environ.get("TESS_MEMORY_AC_FALLBACK_PROFILE"):
+        cfg.agent_core_fallback_profile = os.environ["TESS_MEMORY_AC_FALLBACK_PROFILE"]
+    if os.environ.get("TESS_MEMORY_SEARCH_AGENT"):
+        cfg.search_agent = os.environ["TESS_MEMORY_SEARCH_AGENT"].lower() not in (
             "0", "false", "no", "off",
         )
-    if os.environ.get("AGENTIC_MEMORY_SEARCH_PROFILE"):
-        cfg.search_profile = os.environ["AGENTIC_MEMORY_SEARCH_PROFILE"]
-    if os.environ.get("AGENTIC_MEMORY_EMBED_PROVIDER"):
-        cfg.embed_provider = os.environ["AGENTIC_MEMORY_EMBED_PROVIDER"]
-    if os.environ.get("AGENTIC_MEMORY_EMBED_DIMS"):
-        cfg.embed_dims = int(os.environ["AGENTIC_MEMORY_EMBED_DIMS"])
-    if os.environ.get("AGENTIC_MEMORY_EMBED_MODEL"):
-        cfg.embed_model = os.environ["AGENTIC_MEMORY_EMBED_MODEL"]
+    if os.environ.get("TESS_MEMORY_SEARCH_PROFILE"):
+        cfg.search_profile = os.environ["TESS_MEMORY_SEARCH_PROFILE"]
+    if os.environ.get("TESS_MEMORY_EMBED_PROVIDER"):
+        cfg.embed_provider = os.environ["TESS_MEMORY_EMBED_PROVIDER"]
+    if os.environ.get("TESS_MEMORY_EMBED_DIMS"):
+        cfg.embed_dims = int(os.environ["TESS_MEMORY_EMBED_DIMS"])
+    if os.environ.get("TESS_MEMORY_EMBED_MODEL"):
+        cfg.embed_model = os.environ["TESS_MEMORY_EMBED_MODEL"]
 
     return cfg
 
@@ -515,7 +515,7 @@ def _absolute(value, name: str) -> Path:
 
 def load_manifest(path: Path | str, *, store_settings: Path | str | None = None) -> Config:
     """Validate an embedded manifest without clients, stores, credentials or downloads."""
-    path = _absolute(str(path), "AGENTIC_MEMORY_CONFIG")
+    path = _absolute(str(path), "TESS_MEMORY_CONFIG")
     def unique_object(pairs):
         result = {}
         for key, value in pairs:

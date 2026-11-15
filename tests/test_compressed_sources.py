@@ -6,13 +6,13 @@ import unittest
 
 from backports import zstd
 
-from agentic_memory.codex import CodexCatalog
-from agentic_memory.config import Config, DataStore
-from agentic_memory.ingest import ingest
-from agentic_memory.readers import CompletedSourceReader
-from agentic_memory.source_journal import SourceChanged, SourceReadError
-from agentic_memory.store import MemoryStore
-from agentic_memory.transcript_reader import resolve_transcript_path, read_transcript_page
+from tess_memory.codex import CodexCatalog
+from tess_memory.config import Config, DataStore
+from tess_memory.ingest import ingest
+from tess_memory.readers import CompletedSourceReader
+from tess_memory.source_journal import SourceChanged, SourceReadError
+from tess_memory.store import MemoryStore
+from tess_memory.transcript_reader import resolve_transcript_path, read_transcript_page
 from test_codex import write_rollout, message, append, wrapped, RecordingEmbedder
 from test_incremental_ingest import Backend
 

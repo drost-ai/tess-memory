@@ -15,7 +15,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-SOURCE = Path(__file__).resolve().parents[1] / 'src/agentic_memory'
+SOURCE = Path(__file__).resolve().parents[1] / 'src/tess_memory'
 
 
 def parser_prefix():
@@ -41,7 +41,7 @@ class PersonalCliConfigStaticTests(unittest.TestCase):
         return namespace
 
     def test_missing_or_empty_selection_is_parser_error_without_loading(self):
-        for env in ({}, {'AGENTIC_MEMORY_CONFIG': ''}):
+        for env in ({}, {'TESS_MEMORY_CONFIG': ''}):
             with self.subTest(env=env):
                 calls = []
                 with self.assertRaises(SystemExit) as result:
@@ -52,7 +52,7 @@ class PersonalCliConfigStaticTests(unittest.TestCase):
     def test_explicit_settings_expand_and_override_manifest_selection(self):
         calls = []
         namespace = self.launch(['--settings', '~/explicit.toml', '--role', 'author', '--session', 's', 'serve'],
-                                {'HOME': '/synthetic', 'AGENTIC_MEMORY_CONFIG': '/ignored.json'},
+                                {'HOME': '/synthetic', 'TESS_MEMORY_CONFIG': '/ignored.json'},
                                 lambda path: calls.append(path) or 'standalone')
         self.assertEqual(calls, [Path('/synthetic/explicit.toml')])
         self.assertEqual(namespace['args'].role, 'author')
@@ -60,7 +60,7 @@ class PersonalCliConfigStaticTests(unittest.TestCase):
 
     def test_manifest_uses_canonical_none_adapter_and_propagates_errors(self):
         calls = []
-        namespace = self.launch(['--role', 'operator', 'serve'], {'AGENTIC_MEMORY_CONFIG': '/explicit.json'},
+        namespace = self.launch(['--role', 'operator', 'serve'], {'TESS_MEMORY_CONFIG': '/explicit.json'},
                                 lambda path: calls.append(path) or 'embedded')
         self.assertEqual(calls, [None])
         self.assertEqual(namespace['cfg'], 'embedded')
@@ -68,7 +68,7 @@ class PersonalCliConfigStaticTests(unittest.TestCase):
             self.assertIsNone(path)
             raise ValueError('malformed explicit manifest')
         with self.assertRaisesRegex(ValueError, 'malformed explicit manifest'):
-            self.launch(['serve'], {'AGENTIC_MEMORY_CONFIG': '/malformed.json'}, malformed)
+            self.launch(['serve'], {'TESS_MEMORY_CONFIG': '/malformed.json'}, malformed)
 
     def test_actual_config_dispatch_does_not_fallback_after_bad_manifest(self):
         tree = ast.parse((SOURCE / 'config.py').read_text())
@@ -85,14 +85,14 @@ class PersonalCliConfigStaticTests(unittest.TestCase):
                 return json.loads(path.read_text())
             namespace = {'os': os, 'Path': Path, 'load_manifest': load_manifest}
             exec(compile(ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])), 'actual-config-dispatch', 'exec'), namespace)
-            with patch.dict(os.environ, {'AGENTIC_MEMORY_CONFIG': str(manifest)}, clear=True):
+            with patch.dict(os.environ, {'TESS_MEMORY_CONFIG': str(manifest)}, clear=True):
                 with self.assertRaises(json.JSONDecodeError):
                     namespace['dispatch']()
                 self.assertEqual(namespace['dispatch'](Path('/explicit.toml')), 'standalone')
 
     def test_invalid_role_still_rejected(self):
         with self.assertRaises(SystemExit):
-            self.launch(['--role', 'administrator', 'serve'], {'AGENTIC_MEMORY_CONFIG': '/explicit.json'},
+            self.launch(['--role', 'administrator', 'serve'], {'TESS_MEMORY_CONFIG': '/explicit.json'},
                         lambda path: self.fail('invalid role reached config loader'))
 
 

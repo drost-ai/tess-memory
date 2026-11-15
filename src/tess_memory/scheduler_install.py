@@ -14,19 +14,19 @@ import time
 from .scheduler import ROOT
 from .scheduler_config import load_service
 
-DEFAULT_LABEL = 'com.agentic-memory.scheduler'
+DEFAULT_LABEL = 'com.tess-memory.scheduler'
 
 
 def agent_path(label):
-    if not re.fullmatch(r'com\.agentic-memory\.[A-Za-z0-9_.-]+', label):
-        raise ValueError('launchd label must start with com.agentic-memory.')
+    if not re.fullmatch(r'com\.tess-memory\.[A-Za-z0-9_.-]+', label):
+        raise ValueError('launchd label must start with com.tess-memory.')
     return Path.home() / 'Library/LaunchAgents' / (label + '.plist')
 
 
 def owned_plist(path):
     value = plistlib.loads(path.read_bytes())
     args = value.get('ProgramArguments', [])
-    if ('agentic_memory.cli' not in args or 'scheduler' not in args or 'serve' not in args
+    if ('tess_memory.cli' not in args or 'scheduler' not in args or 'serve' not in args
             or value.get('WorkingDirectory') != str(ROOT)):
         raise ValueError('refusing to alter a launch agent not owned by this checkout')
     return value
@@ -34,7 +34,7 @@ def owned_plist(path):
 
 def build_plist(config, label):
     return {'Label': label,
-            'ProgramArguments': [sys.executable, '-u', '-m', 'agentic_memory.cli', 'scheduler',
+            'ProgramArguments': [sys.executable, '-u', '-m', 'tess_memory.cli', 'scheduler',
                                  '--config', str(config.path), 'serve'],
             'WorkingDirectory': str(ROOT),
             'EnvironmentVariables': {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'PYTHONUNBUFFERED': '1'},

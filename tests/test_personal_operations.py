@@ -5,11 +5,11 @@ import tempfile
 import unittest
 from zoneinfo import ZoneInfo
 
-from agentic_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
-from agentic_memory.autobiography_config import PersonalConfig
-from agentic_memory.autobiography_extract import PersonalExtraction
-from agentic_memory.config import Config,DataStore
-from agentic_memory.personal_operations import PersonalOperations
+from tess_memory.autobiography import AutobiographyStore,PersonalPrincipal,PersonalError
+from tess_memory.autobiography_config import PersonalConfig
+from tess_memory.autobiography_extract import PersonalExtraction
+from tess_memory.config import Config,DataStore
+from tess_memory.personal_operations import PersonalOperations
 from test_codex import write_rollout,message
 
 
@@ -18,7 +18,7 @@ class PersonalOperationTests(unittest.TestCase):
         tmp=tempfile.TemporaryDirectory();self.addCleanup(tmp.cleanup)
         self.root=Path(tmp.name).resolve();home=self.root/'source'
         write_rollout(home,items=[message('user','A new meaningful event.'),message('assistant','Understood.')])
-        self.now=[datetime(2026,9,20,20,tzinfo=ZoneInfo('UTC')).timestamp()]
+        self.now=[datetime(2026,9,20,20,tzinfo=ZoneInfo('America/Vancouver')).timestamp()]
         personal=PersonalConfig(enabled=True,owner='owner',agent='agent',extraction_enabled=True,dream_enabled=True,
             historical=True,source_names=('source',),daily_model_calls=2,model_calls=2,daily_token_budget=100000)
         self.cfg=Config(data_dir=self.root/'memory',data_stores=[DataStore('source',home,type='codex')],personal=personal)
@@ -98,8 +98,8 @@ class PersonalOperationTests(unittest.TestCase):
         self.assertEqual(self.ops.gate.status()['active'],[])
 
     def test_dead_letter_can_be_explicitly_requeued_without_model_calls(self):
-        from agentic_memory.autobiography_inbox import PersonalInbox
-        from agentic_memory.personal_recovery import retry_failed
+        from tess_memory.autobiography_inbox import PersonalInbox
+        from tess_memory.personal_recovery import retry_failed
         for _ in range(3):PersonalInbox(self.store).fail(self.part['id'],'invalid')
         self.assertEqual(self.ops.status()['extraction_states'],{'failed':1})
         operator=AutobiographyStore(self.cfg.db_path,replace(self.store.principal,role='operator'))
@@ -144,7 +144,7 @@ class PersonalOperationTests(unittest.TestCase):
         self.assertEqual(self.store.db.execute('SELECT state FROM autobio_extraction_parts WHERE id=?',(self.part['id'],)).fetchone()[0],'pending')
 
     def test_single_call_reflection_cache_does_not_replace_later_agentic_work(self):
-        from agentic_memory.dream_cycle import DreamCycle
+        from tess_memory.dream_cycle import DreamCycle
         cfg=replace(self.cfg,personal=replace(self.cfg.personal,model_calls=8,daily_model_calls=16,daily_token_budget=500000))
         PersonalExtraction(cfg,self.store).publish(self.part['id'],[{'segment':'Experiences','title':'Event',
             'body':'An event was reported.','attribution':'user_statement','quote':'A new meaningful event.'}])
