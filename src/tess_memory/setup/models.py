@@ -80,6 +80,8 @@ class ChatGPT:
         from tess_core.providers.chatgpt_account import SignIn
         await self.cancel()
         saved = self.vault.meta["chatgpt"]
+        if isinstance(saved.get("credential_ref"), dict) and saved.get("plan_use") and await self._use(saved["credential_ref"], saved.get("email") or ""):
+            return {"url": None, "expires_in": 0}  # still signed in: no browser needed
         if not str(saved.get("host_id") or "").startswith("urn:uuid:"):
             saved["host_id"] = new_host_id()
             self.vault.save()
@@ -130,18 +132,23 @@ class ChatGPT:
             if not grant.plan_use:
                 self.outcome = {"state": "failed", "code": "plan_use_not_granted", "email": grant.email}
                 return
-            auth = {"credentialRef": ref}
-            report = await list_models(profile_record("chatgpt", auth))
-            if report["state"] != "available" or not report["models"]:
-                self.outcome = {"state": "failed", "code": report["code"] if report["state"] == "failed" else "no_models", "email": grant.email}
-                return
-            self.vault.draft["model"] = {"kind": "chatgpt", "profile": KINDS["chatgpt"]["profile"], "label": KINDS["chatgpt"]["label"],
-                                         "base_url": None, "auth": auth, "models": report["models"], "listed": True,
-                                         "email": grant.email, "distill_model": None, "search_model": None, "verified": False}
-            self.vault.save()
-            self.outcome = {"state": "signed_in", "email": grant.email}
+            await self._use(ref, grant.email)
         except Exception as error:  # noqa: BLE001
             self.outcome = {"state": "failed", "code": getattr(error, "code", None) or "sign_in_failed"}
+
+    async def _use(self, ref: dict[str, Any], email: str) -> bool:
+        """Make a signed-in account the connection, if it lists models."""
+        auth = {"credentialRef": ref}
+        report = await list_models(profile_record("chatgpt", auth))
+        if report["state"] != "available" or not report["models"]:
+            self.outcome = {"state": "failed", "code": report["code"] if report["state"] == "failed" else "no_models", "email": email}
+            return False
+        self.vault.draft["model"] = {"kind": "chatgpt", "profile": KINDS["chatgpt"]["profile"], "label": KINDS["chatgpt"]["label"],
+                                     "base_url": None, "auth": auth, "models": report["models"], "listed": True,
+                                     "email": email, "distill_model": None, "search_model": None, "verified": False}
+        self.vault.save()
+        self.outcome = {"state": "signed_in", "email": email}
+        return True
 
 
 def _one_request(home: Path, registry: Path, profile: str, model: str) -> tuple[bool, str]:

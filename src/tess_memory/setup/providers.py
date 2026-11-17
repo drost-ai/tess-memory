@@ -119,7 +119,57 @@ class ProviderFile:
 async def list_models(record: dict[str, Any]) -> dict[str, Any]:
     """Reach the provider with the profile's own credential and list its
     models. Costs nothing; returns ``{state, code, models}``."""
+    if record.get("auth", {}).get("kind") == "chatgpt":
+        return await _chatgpt_models(record["auth"]["credentialRef"])
     from tess_core.config import ProviderRegistry
     from tess_core.providers.connection import check_provider_connection
     registry = ProviderRegistry.from_document({"schema_version": 1, "providerProfiles": {"candidate": record}})
     return await check_provider_connection(registry, "candidate")
+
+
+CHATGPT_MODELS = "https://api.openai.com/v1/models"
+CHATGPT_CATALOG_LIMIT = 8 * 1024 * 1024
+
+
+async def _chatgpt_models(reference: dict[str, Any]) -> dict[str, Any]:
+    """The models a ChatGPT account may pick. Its catalogue carries each
+    model's full instructions and runs to about a megabyte, more than the
+    engine's general connection check reads, so it is read here."""
+    import httpx
+    from tess_core.runtime.secrets import RuntimeSecretError, resolve_runtime_secret_string
+
+    def result(state: str, code: str, models: list[str] | None = None) -> dict[str, Any]:
+        return {"state": state, "code": code, "models": models or []}
+
+    try:
+        token = await resolve_runtime_secret_string(reference, "provider_oauth_token")
+    except RuntimeSecretError:
+        return result("failed", "credential_unavailable")
+    except Exception as error:  # noqa: BLE001 (a sign-in that could not be refreshed)
+        return result("failed", "reauthorization_required" if getattr(error, "terminal", False) else "credential_unavailable")
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            async with client.stream("GET", CHATGPT_MODELS, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"}) as response:
+                status, body = response.status_code, b""
+                async for chunk in response.aiter_bytes():
+                    body += chunk
+                    if len(body) > CHATGPT_CATALOG_LIMIT:
+                        return result("failed", "invalid_provider_response")
+    except (httpx.HTTPError, OSError):
+        return result("failed", "connection_unavailable")
+    if status in (401, 403):
+        return result("failed", "authentication_denied")
+    if status == 429:
+        return result("failed", "rate_limited")
+    try:
+        listed = json.loads(body)
+        if status != 200:
+            raise ValueError
+        if isinstance(listed.get("models"), list):
+            models = [item["slug"] for item in listed["models"]
+                      if isinstance(item, dict) and isinstance(item.get("slug"), str) and item.get("visibility") == "list"]
+        else:
+            models = [item["id"] for item in listed["data"] if isinstance(item, dict) and isinstance(item.get("id"), str)]
+    except (ValueError, TypeError, KeyError, AttributeError):
+        return result("failed", "invalid_provider_response")
+    return result("available", "models_listed", models[:200])

@@ -233,6 +233,7 @@
             const opened = window.open('', '_blank');
             act('chatgpt', '/api/model/chatgpt/start', {}, (result) => {
               ui.signInUrl = result.url;
+              if (!result.url) { ui.changeModel = false; if (opened) opened.close(); return; }  // already signed in
               if (opened) opened.location = result.url;
             }).then(() => { if (ui.error && opened) opened.close(); });
           })));

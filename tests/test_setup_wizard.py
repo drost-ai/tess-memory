@@ -250,3 +250,16 @@ def test_the_chatgpt_sign_in_link_carries_a_host_id_openai_accepts(machine):
     assert host_id == setup.vault.meta["chatgpt"]["host_id"]
     assert (query["client_id"], query["agent_name_hint"]) == (["dynamic_agent_client"], ["Tess Memory"])
     assert query["redirect_uri"][0].startswith("http://127.0.0.1:")
+
+
+def test_an_account_that_is_still_signed_in_is_used_without_the_browser(machine):
+    import asyncio
+
+    setup, _ = session(machine, keychain=FakeKeychain())
+    ref = {"kind": "runtime_secret", "version": 1, "id": "0b0e4c1e-6d1c-4b55-9d0e-3f0f8f5b9a11", "purpose": "provider_oauth_token",
+           "backend": "macos_keychain", "installation_id": setup.vault.meta["installation_id"], "account_id": setup.vault.meta["account_id"]}
+    setup.vault.meta["chatgpt"].update({"host_id": models.new_host_id(), "credential_ref": ref, "plan_use": True, "email": "sam@example.com"})
+    assert asyncio.run(setup.chatgpt.start()) == {"url": None, "expires_in": 0}
+    connection = setup.vault.draft["model"]
+    assert (connection["kind"], connection["email"], connection["models"]) == ("chatgpt", "sam@example.com", ["large", "small"])
+    assert setup.chatgpt.outcome == {"state": "signed_in", "email": "sam@example.com"}
