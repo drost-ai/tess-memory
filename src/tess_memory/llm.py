@@ -133,6 +133,7 @@ class EngineBackend:
             # The host's last word on the resolved config: this store's Codex
             # account and the explicit reasoning effort, as before.
             config = await self._apply_codex_auth_override(config)
+            config = self._apply_managed_key(config)
             config = self._apply_reasoning_override(config)
             if observer:
                 observer.configured(config)
@@ -208,6 +209,22 @@ class EngineBackend:
                 f"tess-core turn failed: {result.get('error') or text[:200] or result.get('stopReason')}"
             )
         return text
+
+    @staticmethod
+    def _apply_managed_key(config: dict) -> dict:
+        """Give an OpenAI-kind profile its keychain-held API key.
+
+        The registry returns a managed key in the field Anthropic profiles
+        use, and the engine reads an OpenAI profile's credential from another,
+        so such a profile reaches the turn with no credential at all. The
+        reference is passed on as it is; the engine still resolves it only
+        when the request is sent."""
+        auth = (config.get("providerProfile") or {}).get("auth") or {}
+        reference = auth.get("credentialRef")
+        if (config.get("provider") == "openai" and not config.get("openaiToken")
+                and auth.get("kind") == "openai_api_key" and isinstance(reference, dict)):
+            return {**config, "openaiToken": reference}
+        return config
 
     async def _apply_codex_auth_override(self, config: dict) -> dict:
         """Pin this store's Codex account without changing process-wide env.

@@ -330,3 +330,18 @@ class ModelSelectionTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+def test_an_openai_kind_profile_gets_its_keychain_held_key():
+    from tess_memory.llm import EngineBackend
+
+    reference = {"kind": "runtime_secret", "version": 1, "id": "k", "purpose": "provider_api_key"}
+    profile = {"auth": {"kind": "openai_api_key", "credentialRef": reference}}
+    config = {"provider": "openai", "providerProfile": profile}
+    assert EngineBackend._apply_managed_key(config)["openaiToken"] == reference
+    # A credential the engine already resolved, another kind of auth, or another provider is left alone.
+    assert EngineBackend._apply_managed_key({**config, "openaiToken": "from-env"})["openaiToken"] == "from-env"
+    for untouched in ({"provider": "anthropic", "providerProfile": profile},
+                      {"provider": "openai", "providerProfile": {"auth": {"kind": "chatgpt", "credentialRef": reference}}},
+                      {"provider": "openai", "providerProfile": {"auth": {"kind": "custom_bearer", "envVar": "KEY"}}}):
+        assert "openaiToken" not in EngineBackend._apply_managed_key(untouched)
