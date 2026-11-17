@@ -135,7 +135,16 @@ else, which protects you from pointing them at the wrong database.
 ## Teaching the agent to use it
 
 MCP servers describe their tools, but agents follow their instruction files more reliably.
-A few lines are enough:
+
+`tess-memory setup` does this when it connects an agent: it adds a "Memory and planning"
+section to the agent's instruction file for every project, `CLAUDE.md` in a Claude Code
+home and `AGENTS.md` in a Codex home. The section is added once at the end of the file. A
+file that already has it is left exactly as it is, and a file that is changed is first
+copied beside itself. The full text is in
+[`src/tess_memory/setup/guidance.md`](../src/tess_memory/setup/guidance.md), and setup
+shows it under "The instructions agents are given" for pasting into any other agent.
+
+If you connect an agent by hand, a few lines are enough:
 
 ```markdown
 ## Memory

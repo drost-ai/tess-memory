@@ -263,3 +263,50 @@ def test_an_account_that_is_still_signed_in_is_used_without_the_browser(machine)
     connection = setup.vault.draft["model"]
     assert (connection["kind"], connection["email"], connection["models"]) == ("chatgpt", "sam@example.com", ["large", "small"])
     assert setup.chatgpt.outcome == {"state": "signed_in", "email": "sam@example.com"}
+
+
+def test_connecting_also_gives_the_agent_its_instructions(machine, monkeypatch):
+    from tess_memory.setup import guidance
+
+    _, user = machine
+    settings = user / "store/settings.toml"
+    sources = [{**item, "enabled": True} for item in detect.detect_sources(user)]
+    monkeypatch.setattr(agents.shutil, "which", lambda name: "/usr/bin/" + name)
+    run = lambda command, **_: subprocess.CompletedProcess(command, 0, "", "")  # noqa: E731
+    found = {item["type"]: item for item in agents.targets(sources, settings)}
+    assert found["claude-code"]["guidance"] is False and found["codex"]["guidance_file"] == "AGENTS.md"
+
+    (user / ".claude/CLAUDE.md").write_text("# Mine\n\nKeep answers short.")
+    (user / ".claude/CLAUDE.md").chmod(0o600)
+    claude = agents.register(found["claude-code"]["id"], sources, settings, run=run)
+    written = (user / ".claude/CLAUDE.md").read_text()
+    assert claude["guidance_outcome"] == "added" and claude["guidance"] is True
+    assert written == "# Mine\n\nKeep answers short.\n\n" + guidance.text("claude-code")
+    assert (user / ".claude/CLAUDE.md").stat().st_mode & 0o777 == 0o600
+    copies = list((user / ".claude").glob("CLAUDE.md.before-tess-memory-*"))
+    assert [copy.read_text() for copy in copies] == ["# Mine\n\nKeep answers short."]
+
+    codex = agents.register(found["codex"]["id"], sources, settings, run=run)
+    assert codex["guidance_outcome"] == "created"
+    assert (user / ".codex/AGENTS.md").read_text() == guidance.text("codex")
+    assert "for shared Codex memory and durable" in guidance.text("codex")
+    assert guidance.text("claude-code").startswith("## Memory and planning (tess-memory MCP)\n\nUse the `tess-memory` MCP server for shared Claude memory")
+
+    # A second connect, or a file that already carries the section, changes nothing.
+    assert guidance.install("claude-code", user / ".claude") == "present"
+    assert (user / ".claude/CLAUDE.md").read_text() == written and len(list((user / ".claude").glob("CLAUDE.md.before-*"))) == 1
+
+
+def test_an_agent_already_connected_only_gets_the_missing_instructions(machine, monkeypatch):
+    _, user = machine
+    settings = user / "store/settings.toml"
+    sources = [{**item, "enabled": True} for item in detect.detect_sources(user)]
+    (user / ".claude.json").write_text(json.dumps({"mcpServers": {"tess-memory": {"env": {"TESS_MEMORY_SETTINGS": str(settings)}}}}))
+    monkeypatch.setattr(agents.shutil, "which", lambda name: None)  # no command needed for this
+    target = next(item for item in agents.targets(sources, settings) if item["type"] == "claude-code")
+    assert (target["current"], target["guidance"]) == (True, False)
+
+    def run(*_args, **_kwargs):
+        raise AssertionError("the agent's command must not run")
+
+    assert agents.register(target["id"], sources, settings, run=run)["guidance_outcome"] == "created"

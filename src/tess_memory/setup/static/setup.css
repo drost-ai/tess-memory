@@ -125,6 +125,7 @@ progress::-moz-progress-bar { background: var(--brand); }
 pre.block { margin: 0; padding: 16px 18px; border-radius: 12px; background: #111318; color: #e6e8ef; overflow-x: auto; font-size: 13px; line-height: 1.6; }
 @media (prefers-color-scheme: dark) { pre.block { background: #181b24; border: 1px solid var(--line); } }
 .log { max-height: 220px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.log.guidance { max-height: 420px; }
 .result { padding: 14px 18px; border-top: 1px solid var(--line); }
 .result:first-child { border-top: 0; }
 .result-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 12px; color: var(--muted); margin-bottom: 6px; }

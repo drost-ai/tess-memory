@@ -3,7 +3,9 @@
 Whether an agent already has the server is read from its own configuration
 file. Adding it goes through the agent's own command (``claude mcp``,
 ``codex mcp``), so its configuration is only ever changed by the agent
-itself, and only when the person asks.
+itself, and only when the person asks. Connecting also adds the usage
+instructions to the agent's instruction file (see ``guidance``): the tools
+alone do not make an agent use them.
 """
 from __future__ import annotations
 
@@ -16,6 +18,7 @@ import tomllib
 from pathlib import Path
 from typing import Any
 
+from . import guidance
 from .providers import SetupError
 
 SERVER = "tess-memory"
@@ -59,15 +62,20 @@ def targets(sources: list[dict[str, Any]], settings: Path) -> list[dict[str, Any
                       "display_path": source.get("display_home") or home,
                       "cli": shutil.which("claude" if kind == "claude-code" else "codex") is not None,
                       "registered": entry is not None,
-                      "current": bool(entry) and env.get("TESS_MEMORY_SETTINGS") == str(settings)})
+                      "current": bool(entry) and env.get("TESS_MEMORY_SETTINGS") == str(settings),
+                      "guidance": guidance.present(kind, Path(home)),
+                      "guidance_file": guidance.FILES[kind]})
     return found
 
 
 def register(target_id: str, sources: list[dict[str, Any]], settings: Path, *, run: Any = subprocess.run) -> dict[str, Any]:
-    """Add the server to one agent, replacing an earlier registration of it."""
+    """Add the server to one agent, replacing an earlier registration of it,
+    and add the usage instructions to the agent's instruction file."""
     target = next((item for item in targets(sources, settings) if item["id"] == target_id), None)
     if target is None:
         raise SetupError("unknown_agent")
+    if target["current"]:  # already registered for this store: only the instructions can be missing
+        return _instruct(target, target_id, sources, settings)
     if not target["cli"]:
         raise SetupError("agent_command_not_found")
     entry = server_entry(settings)
@@ -91,4 +99,12 @@ def register(target_id: str, sources: list[dict[str, Any]], settings: Path, *, r
         raise SetupError("agent_command_failed") from None
     if result.returncode != 0:
         raise SetupError("agent_command_failed", (result.stderr or result.stdout or "").strip()[:300])
-    return next(item for item in targets(sources, settings) if item["id"] == target_id)
+    return _instruct(target, target_id, sources, settings)
+
+
+def _instruct(target: dict[str, Any], target_id: str, sources: list[dict[str, Any]], settings: Path) -> dict[str, Any]:
+    try:
+        outcome = guidance.install(target["type"], Path(target["home"]))
+    except OSError:
+        raise SetupError("guidance_not_written", target["guidance_file"]) from None
+    return {**next(item for item in targets(sources, settings) if item["id"] == target_id), "guidance_outcome": outcome}

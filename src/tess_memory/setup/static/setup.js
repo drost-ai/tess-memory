@@ -46,6 +46,7 @@
     settings_not_written: 'Save the settings first.',
     agent_command_not_found: 'The agent\'s command was not found on this machine. Use the manual configuration below.',
     agent_command_failed: 'The agent\'s command did not accept the registration.',
+    guidance_not_written: 'The agent is connected, but its instruction file could not be written.',
     ingest_running: 'Ingestion is already running.',
     search_failed: 'The search could not be run.',
     scheduler_already_installed: 'A scheduler is already installed on this machine and was left alone.',
@@ -386,30 +387,42 @@
 
   function agentsStep() {
     const snippet = JSON.stringify(S.agents.entry, null, 2);
-    const rows = S.agents.targets.map((target) => h('div', { class: 'row' },
-      h('div', { class: 'row-main' },
-        h('div', { class: 'row-title' }, target.label, ' ',
-          target.current ? h('span', { class: 'badge ok' }, 'Connected')
-            : target.registered ? h('span', { class: 'badge' }, 'Connected to another store') : null),
-        h('div', { class: 'row-sub mono' }, target.display_path),
-        target.cli ? null : h('div', { class: 'row-sub' }, 'Its command was not found on this machine; use the configuration below.')),
-      target.current || !target.cli ? null
-        : button(target.registered ? 'Point it here' : 'Connect', 'reg-' + target.id,
-            () => act('reg-' + target.id, '/api/agents/register', { id: target.id }), 'outline', { attrs: { class: 'button button-outline button-small' } })));
+    const copy = (textToCopy) => async (event) => {
+      try { await navigator.clipboard.writeText(textToCopy); event.target.textContent = 'Copied'; } catch (_) { event.target.textContent = 'Select the text to copy it'; }
+    };
+    const rows = S.agents.targets.map((target) => {
+      const ready = target.current && target.guidance;
+      const label = !target.registered ? 'Connect' : !target.current ? 'Point it here' : 'Add instructions';
+      return h('div', { class: 'row' },
+        h('div', { class: 'row-main' },
+          h('div', { class: 'row-title' }, target.label, ' ',
+            ready ? h('span', { class: 'badge ok' }, 'Connected')
+              : target.current ? h('span', { class: 'badge' }, 'Connected, no instructions yet')
+                : target.registered ? h('span', { class: 'badge' }, 'Connected to another store') : null),
+          h('div', { class: 'row-sub mono' }, target.display_path),
+          h('div', { class: 'row-sub' }, target.guidance
+            ? 'Usage instructions are in ' + target.guidance_file + '.'
+            : 'Connecting also adds usage instructions to ' + target.guidance_file + '.'),
+          target.cli || target.current ? null : h('div', { class: 'row-sub' }, 'Its command was not found on this machine; use the configuration below.')),
+        ready || !(target.cli || target.current) ? null
+          : button(label, 'reg-' + target.id, () => act('reg-' + target.id, '/api/agents/register', { id: target.id }), 'outline', { attrs: { class: 'button button-outline button-small' } }));
+    });
     return [
       h('p', { class: 'eyebrow' }, 'Step 4 of 5'),
       h('h1', null, 'Give your agents ', h('mark', null, 'the memory.')),
-      h('p', { class: 'lede' }, 'Each agent you connect gets twelve tools: search what was done before, pick up a project where it was left, and keep a plan that outlasts the session.'),
+      h('p', { class: 'lede' }, 'Each agent you connect gets twelve tools: search what was done before, pick up a project where it was left, and keep a plan that outlasts the session. Connecting also adds a short set of instructions to the agent\'s own instruction file, so it reaches for them without being asked.'),
       h('p', { class: 'section note ok' }, 'Settings saved to ', h('span', { class: 'mono' }, S.settings), '.',
         ui.written && ui.written.backup ? [' The earlier file was kept as ', h('span', { class: 'mono' }, ui.written.backup), '.'] : null),
       rows.length ? h('div', { class: 'section' }, h('h2', null, 'Agents on this machine'), h('div', { class: 'list' }, rows)) : null,
       h('div', { class: 'section' },
         h('h2', null, 'Any other MCP client'),
-        h('p', { class: 'hint' }, 'Add this server to the client\'s configuration.'),
+        h('p', { class: 'hint' }, 'Add this server to the client\'s configuration, and the instructions below to the file it reads its instructions from.'),
         h('div', { class: 'section' }, h('pre', { class: 'block' }, snippet)),
-        h('div', { class: 'section' }, h('button', { type: 'button', class: 'button button-outline button-small', onclick: async (event) => {
-          try { await navigator.clipboard.writeText(snippet); event.target.textContent = 'Copied'; } catch (_) { event.target.textContent = 'Select the text to copy it'; }
-        } }, 'Copy'))),
+        h('div', { class: 'section' }, h('button', { type: 'button', class: 'button button-outline button-small', onclick: copy(snippet) }, 'Copy configuration')),
+        h('details', { class: 'section' },
+          h('summary', { class: 'hint' }, 'The instructions agents are given'),
+          h('div', { class: 'section' }, h('pre', { class: 'block log guidance' }, S.agents.guidance)),
+          h('div', { class: 'section' }, h('button', { type: 'button', class: 'button button-outline button-small', onclick: copy(S.agents.guidance) }, 'Copy instructions')))),
       errorNote(),
       h('div', { class: 'actions' }, button('Continue', 'to-run', () => go('run'))),
     ];

@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import agents, apply, detect, embeddings, keepcurrent, models
+from . import agents, apply, detect, embeddings, guidance, keepcurrent, models
 from .jobs import FirstIngest
 from .providers import ProviderFile, SetupError
 from .vault import Vault
@@ -82,7 +82,8 @@ class Setup:
             "embedding": {"choice": embedding, "local": self.local_models.catalogue(), "job": self.local_models.job,
                           "presets": embeddings.PRESETS},
             "agents": {"targets": agents.targets([s for s in sources if s.get("enabled", True)], self.settings),
-                       "entry": {"mcpServers": {agents.SERVER: agents.server_entry(self.settings)}}},
+                       "entry": {"mcpServers": {agents.SERVER: agents.server_entry(self.settings)}},
+                       "guidance": guidance.text("claude-code")},
             "ingest": self.ingest.status, "scheduler": keepcurrent.status(self.home),
             "missing": apply.missing({**draft, "sources": sources if draft.get("sources") is not None else []}),
         }
