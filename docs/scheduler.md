@@ -6,7 +6,7 @@ and digests on their own cadence, and recovers by itself when something goes wro
 
 One scheduler can look after several stores.
 
-`tess-memory setup` turns it on for the store it sets up, unless you untick "Keep reading
+`tess-memory setup` turns it on for the store it sets up, unless you untick "Keep ingesting
 in the background": after the first batch of sessions it writes `scheduler.toml` beside the
 settings and installs the scheduler as a login service (launchd on macOS, a systemd user
 service on Linux). It checks for new sessions every 5 minutes, reads a session once it has

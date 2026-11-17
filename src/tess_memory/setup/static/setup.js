@@ -412,7 +412,7 @@
     return [
       h('p', { class: 'eyebrow' }, 'Step 4 of 5'),
       h('h1', null, 'Give your agents ', h('mark', null, 'the memory.')),
-      h('p', { class: 'lede' }, 'Connect any agent on this machine, whether or not its own sessions are being read. Each agent you connect gets twelve tools: search what was done before, pick up a project where it was left, and keep a plan that outlasts the session. Connecting also adds a short set of instructions to the agent\'s own instruction file, so it reaches for them without being asked.'),
+      h('p', { class: 'lede' }, 'Connect any agent on this machine, whether or not its own sessions are being ingested. Each agent you connect gets twelve tools: search what was done before, pick up a project where it was left, and keep a plan that outlasts the session. Connecting also adds a short set of instructions to the agent\'s own instruction file, so it reaches for them without being asked.'),
       h('p', { class: 'section note ok' }, 'Settings saved to ', h('span', { class: 'mono' }, S.settings), '.',
         ui.written && ui.written.backup ? [' The earlier file was kept as ', h('span', { class: 'mono' }, ui.written.backup), '.'] : null),
       rows.length ? h('div', { class: 'section' }, h('h2', null, 'Agents on this machine'), h('div', { class: 'list' }, rows)) : null,
@@ -444,10 +444,11 @@
     const amount = (value, label, sub) => h('label', { class: 'row' },
       h('input', { type: 'radio', name: 'limit', checked: ui.limit === value, onchange: () => { ui.limit = value; } }),
       h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, label), h('span', { class: 'row-sub' }, ' ' + sub)));
+    if (ui.limit !== null && total <= ui.limit) ui.limit = null;   // nothing smaller than everything to offer
     const amounts = h('div', { class: 'list' },
-      amount(25, '25 sessions', 'A quick first pass to see it work.'),
-      amount(200, '200 sessions', 'A solid start. Takes a while and costs model calls.'),
-      amount(null, 'Everything', 'Up to ' + number(total) + ' session files. Can run for hours on a long history.'));
+      total > 25 ? amount(25, '25 sessions', 'A quick first pass to see it work.') : null,
+      total > 200 ? amount(200, '200 sessions', 'A solid start. Takes a while and costs model calls.') : null,
+      amount(null, 'Everything', 'Up to ' + number(total) + ' session files.' + (total > 200 ? ' Can run for hours on a long history.' : '')));
     const begin = () => act('ingest', '/api/ingest/start', { limit: keeping ? 25 : ui.limit, keep_current: canKeep ? Boolean(ui.keep) : false });
 
     let body;
@@ -455,10 +456,10 @@
       body = h('div', { class: 'section panel' },
         h('progress', { id: 'ingest-bar', max: ingest.total || 1, value: ingest.total ? ingest.done : undefined }),
         h('div', { class: 'progress-line' },
-          h('span', { id: 'ingest-text' }, number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions read'),
+          h('span', { id: 'ingest-text' }, number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions ingested'),
           button('Stop', 'ingest-stop', () => act('ingest-stop', '/api/ingest/stop', {}), 'quiet')),
         h('pre', { class: 'block log', id: 'ingest-log' }, (ingest.lines || []).join('\n')),
-        h('p', { class: 'hint' }, keeping ? 'When this first batch is in, the background service takes over and reads the rest.' : 'You can leave this running. What is finished is kept if it stops.'));
+        h('p', { class: 'hint' }, keeping ? 'When this first batch is in, the background service takes over and ingests the rest.' : 'You can leave this running. What is finished is kept if it stops.'));
     } else {
       const stats = ingest.stats;
       body = [
@@ -468,20 +469,20 @@
           + (stats.quiet_deferred || stats.deferred_active ? ', ' + number((stats.quiet_deferred || 0) + (stats.deferred_active || 0)) + ' still in use and left for later' : '')
           + (stats.errors ? ', ' + number(stats.errors) + ' with errors' : '') + '.') : null,
         ingest.state === 'failed' ? h('div', { class: 'section' },
-          h('p', { class: 'note bad', role: 'alert' }, 'Reading stopped with an error. The last lines it printed:'),
+          h('p', { class: 'note bad', role: 'alert' }, 'Ingestion stopped with an error. The last lines it printed:'),
           h('div', { class: 'section' }, h('pre', { class: 'block log' }, (ingest.lines || []).join('\n')))) : null,
         ingest.state === 'stopped' ? h('p', { class: 'section note' }, 'Stopped. What was finished is kept.') : null,
         idle ? h('div', { class: 'section' },
           canKeep ? h('label', { class: 'row list' },
             h('input', { type: 'checkbox', checked: ui.keep, onchange: (event) => { ui.keep = event.target.checked; render(); } }),
             h('span', { class: 'row-main' },
-              h('span', { class: 'row-title' }, 'Keep reading in the background'),
+              h('span', { class: 'row-title' }, 'Keep ingesting in the background'),
               h('span', { class: 'row-sub' }, ' Recommended. A small service that starts when you log in.'))) : null,
-          keeping ? h('p', { class: 'section hint' }, 'Setup reads 25 sessions now, so you can see it work and search them. The background service then reads the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
-            : h('div', { class: 'section' }, h('h2', null, 'How much to read now'), amounts),
-          h('div', { class: 'actions' }, button('Start reading', 'ingest', begin)))
-          : keeping ? null : h('div', { class: 'section' }, h('h2', null, 'Read more'), amounts,
-              h('div', { class: 'actions' }, button('Read more', 'ingest', begin))),
+          keeping ? h('p', { class: 'section hint' }, 'Setup ingests 25 sessions now, so you can see it work and search them. The background service then ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
+            : h('div', { class: 'section' }, h('h2', null, 'How much to ingest now'), amounts),
+          h('div', { class: 'actions' }, button('Start ingesting', 'ingest', begin)))
+          : keeping ? null : h('div', { class: 'section' }, h('h2', null, 'Ingest more'), amounts,
+              h('div', { class: 'actions' }, button('Ingest more', 'ingest', begin))),
       ];
     }
 
@@ -493,36 +494,36 @@
       ui.results ? h('div', { class: 'section list' }, ui.results.length ? ui.results.map((hit) => h('div', { class: 'result' },
         h('div', { class: 'result-head' }, h('span', { class: 'badge' }, hit.kind || hit.level), h('span', { class: 'mono' }, hit.project || ''), h('span', null, (hit.ts || '').slice(0, 10))),
         h('div', { class: 'result-body' }, (hit.content || '').slice(0, 600))))
-        : h('p', { class: 'row hint' }, 'Nothing found yet. Try again once more sessions have been read.')) : null) : null;
+        : h('p', { class: 'row hint' }, 'Nothing found yet. Try again once more sessions have been ingested.')) : null) : null;
 
     const rules = h('ul', { class: 'rules hint' },
       h('li', null, 'Every 5 minutes it looks for new or changed sessions.'),
-      h('li', null, 'A session is read once it has been still for 15 minutes, so a conversation is not distilled mid-thought.'),
+      h('li', null, 'A session is ingested once it has been still for 15 minutes, so a conversation is not distilled mid-thought.'),
       h('li', null, 'Project profiles refresh hourly, weekly digests daily.'),
       h('li', null, 'At 10 PM (' + scheduler.timezone + ') one pass retries whatever failed that day.'));
     let keep;
     if (!scheduler.supported) {
-      keep = [h('p', { class: 'hint' }, 'To read new sessions as they finish, keep this command running under your service manager:'),
+      keep = [h('p', { class: 'hint' }, 'To ingest new sessions as they finish, keep this command running under your service manager:'),
               h('div', { class: 'section' }, h('pre', { class: 'block' }, scheduler.command))];
     } else if (foreign) {
       keep = h('p', { class: 'note' }, 'A Tess Memory scheduler is already installed on this machine and was left alone. Add this store to its configuration to keep it current.');
     } else if (scheduler.ours) {
       const line = scheduler.running
-        ? 'On.' + (scheduler.state === 'running' ? ' Reading now.' : '') + (scheduler.pending ? ' ' + number(scheduler.pending) + ' sessions still to read.' : '')
+        ? 'On.' + (scheduler.state === 'running' ? ' Ingesting now.' : '') + (scheduler.pending ? ' ' + number(scheduler.pending) + ' sessions still to ingest.' : '')
         : 'Installed and starting.';
       keep = [h('p', { class: 'note ok' }, line), rules,
               h('div', { class: 'actions' }, button('Turn it off', 'scheduler-off', () => act('scheduler-off', '/api/scheduler/remove', {}, () => { ui.keep = false; }), 'quiet'))];
     } else {
       keep = [scheduler.error ? h('p', { class: 'note bad', role: 'alert' }, say(scheduler.error)) : null,
-              h('p', { class: 'hint' }, idle ? (ui.keep ? 'It is turned on when the first batch has been read.' : 'Off. New sessions are only read when you run ingestion yourself.')
-                                              : 'Off. New sessions are only read when you run ingestion yourself.'),
+              h('p', { class: 'hint' }, idle ? (ui.keep ? 'It is turned on when the first batch has been ingested.' : 'Off. New sessions are only ingested when you run ingestion yourself.')
+                                              : 'Off. New sessions are only ingested when you run ingestion yourself.'),
               idle && !ui.keep ? null : rules,
               idle ? null : h('div', { class: 'actions' }, button('Turn it on', 'scheduler', () => act('scheduler', '/api/scheduler/install', {}, () => { ui.keep = true; }), 'outline'))];
     }
     return [
       h('p', { class: 'eyebrow' }, 'Step 5 of 5'),
-      h('h1', null, 'Read what you have ', h('mark', null, 'already done.')),
-      h('p', { class: 'lede' }, 'Tess Memory reads your past sessions and distils them, then keeps up as you work. Sessions that changed in the last fifteen minutes are left until they go quiet.'),
+      h('h1', null, 'Ingest what you have ', h('mark', null, 'already done.')),
+      h('p', { class: 'lede' }, 'Tess Memory ingests your past sessions, distilling each one into memories, then keeps up as you work. Sessions that changed in the last fifteen minutes are left until they go quiet.'),
       body, searching,
       h('div', { class: 'section' }, h('h2', null, 'Keeping it current'), keep),
       errorNote(),
@@ -536,8 +537,8 @@
       h('div', { class: 'done-mark', 'aria-hidden': 'true' }, '✓'),
       h('h1', null, 'Your agents ', h('mark', null, 'remember now.')),
       h('p', { class: 'lede' }, 'Setup is finished and this page has stopped. You can close the tab.'),
-      running ? h('p', { class: 'section note' }, 'The first read is still running in the background and will finish on its own.') : null,
-      S.scheduler.ours ? h('p', { class: 'section note ok' }, 'The background service is on. It reads the rest of your history and every new session from here.') : null,
+      running ? h('p', { class: 'section note' }, 'The first ingestion is still running in the background and will finish on its own.') : null,
+      S.scheduler.ours ? h('p', { class: 'section note ok' }, 'The background service is on. It ingests the rest of your history and every new session from here.') : null,
       h('div', { class: 'section' },
         h('h2', null, 'What to do next'),
         h('p', { class: 'hint' }, 'Start a new session in a connected agent and ask it to pick up where you left off. To change anything later, run ', h('code', null, 'tess-memory setup'), ' again, or edit ', h('span', { class: 'mono' }, S.settings), '.')),
@@ -593,7 +594,7 @@
     const ingestBar = document.getElementById('ingest-bar');
     if (ingestBar) {
       if (ingest.total) { ingestBar.max = ingest.total; ingestBar.value = ingest.done; }
-      document.getElementById('ingest-text').textContent = number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions read';
+      document.getElementById('ingest-text').textContent = number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions ingested';
       const log = document.getElementById('ingest-log');
       log.textContent = (ingest.lines || []).join('\n');
       log.scrollTop = log.scrollHeight;
