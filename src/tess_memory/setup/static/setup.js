@@ -539,7 +539,13 @@
   function render() {
     const main = document.getElementById('main');
     if (!S) return;
-    document.getElementById('top-home').textContent = S.display_home;
+    // Where this store lives: ~/.tess-memory normally. A folder outside the
+    // home directory is shown by its last two names, with the full path on hover.
+    const parts = S.display_home.split('/').filter(Boolean);
+    const short = S.display_home.startsWith('~') || parts.length <= 3 ? S.display_home : '…/' + parts.slice(-2).join('/');
+    const where = document.getElementById('top-home');
+    where.replaceChildren(h('span', { class: 'top-home-label' }, 'Store'), ' ' + short);
+    where.title = S.home;
     if (!ui.finished && !reachable(ui.step)) ui.step = STEPS.filter((step) => reachable(step.id)).pop().id;
     const steps = document.getElementById('steps');
     steps.replaceChildren(...STEPS.map((step, index) => h('li', null, h('button', { type: 'button',

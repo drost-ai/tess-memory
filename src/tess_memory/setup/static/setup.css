@@ -43,6 +43,7 @@ mark { background: var(--marker); color: #111318; padding: 0 0.14em; border-radi
 .top-tag { font-size: 12px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; }
 .top-home { margin-left: auto; font-family: var(--mono); font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.top-home-label { font-family: var(--sans); font-size: 11px; font-weight: 600; letter-spacing: 0.1em; text-transform: uppercase; margin-right: 6px; }
 .shell { max-width: 1180px; margin: 0 auto; padding: 40px 24px 96px; display: grid; grid-template-columns: 240px minmax(0, 1fr); gap: 56px; align-items: start; }
 .rail { position: sticky; top: 104px; }
 .rail ol { list-style: none; margin: 0; padding: 0; display: grid; gap: 4px; }
