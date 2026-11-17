@@ -35,6 +35,16 @@ HEADERS = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-
            "Content-Security-Policy": "default-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"}
 
 
+class _Fresh(StaticFiles):
+    """Static files the browser checks again each time, so a page never runs
+    against a script from an earlier version."""
+
+    def file_response(self, *args: Any, **kwargs: Any) -> Response:
+        response = super().file_response(*args, **kwargs)
+        response.headers["Cache-Control"] = "no-cache"
+        return response
+
+
 class Setup:
     """Everything one setup session holds."""
 
@@ -236,7 +246,7 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
         post("/api/apply", apply_settings), post("/api/agents/register", register),
         post("/api/ingest/start", ingest_start), post("/api/ingest/stop", ingest_stop), post("/api/search", search),
         post("/api/scheduler/install", scheduler_install), post("/api/quit", quit_setup),
-        Mount("/static", StaticFiles(directory=STATIC), name="static"),
+        Mount("/static", _Fresh(directory=STATIC), name="static"),
     ])
 
 

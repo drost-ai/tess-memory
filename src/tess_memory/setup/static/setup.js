@@ -273,9 +273,21 @@
 
   function chooseModels(connection) {
     const models = connection.models || [];
-    const options = h('datalist', { id: 'model-options' }, models.map((model) => h('option', { value: model })));
-    const field = (id, value) => h('input', { type: 'text', class: 'mono', id, list: 'model-options', value: value || '', autocomplete: 'off', spellcheck: 'false',
-      placeholder: models.length ? 'Choose or type a model' : 'Type the model name' });
+    // A real menu of the listed models, with a way to type one that is not listed.
+    const OTHER = '\u0000other';
+    const field = (id, value) => {
+      const text = h('input', { type: 'text', class: 'mono', id: id + '-text', value: value || '', autocomplete: 'off', spellcheck: 'false',
+        placeholder: 'Type the model name', 'aria-label': 'Model name' });
+      if (!models.length) return { node: text, read: () => text.value.trim() };
+      const listed = models.includes(value);
+      const menu = h('select', { id, class: 'mono' },
+        models.map((model) => h('option', { value: model }, model)),
+        h('option', { value: OTHER }, 'Another model…'));
+      menu.value = listed || !value ? (value || models[0]) : OTHER;
+      text.hidden = menu.value !== OTHER;
+      menu.addEventListener('change', () => { text.hidden = menu.value !== OTHER; if (!text.hidden) { text.value = ''; text.focus(); } });
+      return { node: [menu, text], read: () => (menu.value === OTHER ? text.value.trim() : menu.value) };
+    };
     const distill = field('distill-model', connection.distill_model || models[0]);
     const search = field('search-model', connection.search_model || connection.distill_model || models[0]);
     const checks = connection.checks || {};
@@ -285,17 +297,16 @@
       h('div', { class: 'section' },
         h('p', { class: 'note ok' }, 'Connected: ' + connection.label + (who ? ' (' + who + ')' : '') + '. ',
           models.length ? number(models.length) + ' models available.' : 'This service does not list its models, so type their names.')),
-      options,
       h('div', { class: 'panel' },
-        h('label', { class: 'field' }, h('span', null, 'Model for distilling sessions'), distill,
+        h('label', { class: 'field' }, h('span', null, 'Model for distilling sessions'), distill.node,
           h('small', null, 'This one decides what is worth remembering. Use the most capable model you are comfortable paying for; each session is read once.')),
-        h('label', { class: 'field' }, h('span', null, 'Model for searching'), search,
+        h('label', { class: 'field' }, h('span', null, 'Model for searching'), search.node,
           h('small', null, 'A few short calls per search. A fast, inexpensive model is a good choice.'))),
       failed.length ? h('p', { class: 'note bad', role: 'alert' }, 'A test request failed: ' + failed.map(([role, [, detail]]) => role + ': ' + detail).join(' · ')) : null,
       errorNote(),
       h('div', { class: 'actions' },
         button(connection.verified ? 'Continue' : 'Test and continue', 'choose', () => {
-          const body = { distill_model: distill.value.trim(), search_model: search.value.trim() };
+          const body = { distill_model: distill.read(), search_model: search.read() };
           if (connection.verified && body.distill_model === connection.distill_model && body.search_model === connection.search_model) return go('embedding');
           act('choose', '/api/model/choose', body, () => { if (S.model.connection.verified) ui.step = 'embedding'; });
         }),
