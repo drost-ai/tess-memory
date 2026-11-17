@@ -15,7 +15,14 @@ None of them is required to start. With local embeddings, `ingest --no-llm` and
 
 Models are reached through [Tess Core](https://github.com/drost-ai/tess-core), so any
 provider it supports works: Anthropic, OpenAI, any OpenAI-compatible endpoint, or a model
-on your own hardware. Declare them once in a provider file:
+on your own hardware.
+
+`tess-memory setup` does this for you: it connects a ChatGPT account, an API key or an
+endpoint, lists the models it offers, tests the ones you pick and writes the provider
+file. A ChatGPT account can only be connected that way, because signing in happens in the
+browser.
+
+To declare providers by hand, write them once in a provider file:
 
 ```yaml
 # ~/.tess-memory/providers.yaml

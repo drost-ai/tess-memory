@@ -69,53 +69,37 @@ instead of meeting you for the first time every morning.
 
 ## Quickstart
 
-It runs entirely on your machine. You can be searching your own history in two minutes.
+It runs on your machine, and you set it up in the browser. No settings files to write.
 
 ```sh
 git clone https://github.com/drost-ai/tess-memory.git
 cd tess-memory
 uv sync
+uv run tess-memory setup
 ```
 
-Write a settings file, for example `~/.tess-memory/settings.toml`:
+`setup` opens a page on your own machine and walks you through five steps:
 
-```toml
-[[data_stores]]
-name = "claude-code"
-type = "claude-code"
-path = "~/.claude/projects"        # where Claude Code keeps its sessions
+1. **Sources.** It finds the Claude Code and Codex sessions already on your disk. Tick the
+   ones to remember.
+2. **Model.** Sign in with your ChatGPT account, paste an Anthropic or OpenAI API key, or
+   point it at any OpenAI-compatible endpoint, including a model on your own hardware.
+   It is tested with a real request before you move on.
+3. **Embeddings.** Use a small model on this machine (downloaded once, then offline),
+   Google, or any OpenAI-compatible embeddings service.
+4. **Connect agents.** One click registers the memory server with each agent.
+5. **First run.** It reads your past sessions while you watch, then lets you search them.
 
-[storage]
-data_dir = "~/.tess-memory"
+Keys go into your system keychain, not into a file. The page is served on `127.0.0.1`
+only and needs the one-time link printed in your terminal.
 
-[embedding]
-provider = "local"                 # runs on your machine
-allow_download = true              # fetch the small embedding model once
+Then start a new session in a connected agent and ask it to pick up where you left off.
 
-[search]
-agent = false                      # plain hybrid search; no model needed
-```
-
-Ingest what your agent has already done, then search it:
-
-```sh
-export TESS_MEMORY_SETTINGS=~/.tess-memory/settings.toml
-uv run tess-memory ingest --no-llm         # index your transcripts, locally
-uv run tess-memory search "why does checkout fail for an empty cart"
-```
-
-Give your agent the memory:
-
-```sh
-claude mcp add --scope user tess-memory \
-  --env TESS_MEMORY_SETTINGS=$HOME/.tess-memory/settings.toml \
-  -- uv run --directory "$PWD" tess-memory serve
-```
-
-That is a working memory. To get distilled memories, project profiles and weekly digests,
-[add a model](https://continuityresearch.ai/tess-memory/docs/models) and run `ingest`
-without `--no-llm`. To keep it current without thinking about it,
-[turn on the scheduler](https://continuityresearch.ai/tess-memory/docs/scheduler).
+Setup writes ordinary files you can read and edit: a settings file and a provider file in
+`~/.tess-memory`. To write them by hand instead, see
+[Getting started](docs/getting-started.md) and
+[Configuration](docs/configuration.md). To keep the store current without thinking about
+it, [turn on the scheduler](https://continuityresearch.ai/tess-memory/docs/scheduler).
 
 ## What an agent can do with it
 

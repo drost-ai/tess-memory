@@ -12,11 +12,27 @@ Inside the checkout, run it as `uv run tess-memory ...`.
 
 | Command | What it does |
 |---|---|
+| `setup` | Set everything up in the browser; needs no settings file |
 | `ingest` | Read new and changed sessions into memory |
 | `search "<query>"` | Search memory |
 | `plan <project-or-path>` | Print a project's plan board |
 | `status` | What is stored, pending and failing |
 | `serve` | Run the MCP server on stdio |
+
+### `setup`
+
+```sh
+tess-memory setup                     # ~/.tess-memory, opens the browser
+tess-memory setup --home ~/work-memory
+tess-memory setup --no-browser        # print the link instead of opening it
+tess-memory setup --no-keychain       # keep keys in a private file, not the system keychain
+tess-memory setup --port 4600
+```
+
+Serves a setup page on `127.0.0.1` until you finish or press Ctrl+C. It chooses sources,
+connects and tests a model and an embedding model, writes `settings.toml` and a provider
+file into the store's folder, registers the MCP server with Claude Code and Codex, and
+runs a first ingestion. It is the one command that does not read `TESS_MEMORY_SETTINGS`.
 
 ### `ingest`
 

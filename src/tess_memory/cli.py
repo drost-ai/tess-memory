@@ -349,6 +349,13 @@ def cmd_codex_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_setup(args: argparse.Namespace) -> int:
+    from pathlib import Path
+    from .setup.app import run
+    return run(Path(args.home).expanduser(), port=args.port, open_browser=not args.no_browser,
+               keychain=not args.no_keychain)
+
+
 def cmd_users(args: argparse.Namespace) -> int:
     """Users, teams, project mappings and sharing, as the configured identity."""
     from . import admin
@@ -398,6 +405,14 @@ def cmd_users(args: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="tess-memory")
     sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p = sub.add_parser("setup", help="Set everything up in the browser: sources, models, embeddings, agents")
+    p.add_argument("--home", default="~/.tess-memory", help="where the store and its settings live (default: ~/.tess-memory)")
+    p.add_argument("--port", type=int, default=4517, help="port on 127.0.0.1 (another is chosen if it is taken)")
+    p.add_argument("--no-browser", action="store_true", help="print the link instead of opening it")
+    p.add_argument("--no-keychain", action="store_true",
+                   help="keep API keys in a private file beside the settings instead of the system keychain")
+    p.set_defaults(fn=cmd_setup)
 
     p = sub.add_parser("ingest", help="Ingest new/changed session transcripts")
     p.add_argument("--limit", type=int, default=None, help="max sessions to process")

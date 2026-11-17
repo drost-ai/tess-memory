@@ -172,6 +172,8 @@ class Config:
     # historical behaviour: the BGE query instruction for BGE names, else none.
     embed_query_prefix: str | None = None
     embed_passage_prefix: str | None = None
+    # A hosted model that takes no "dimensions" request field sets this false.
+    embed_send_dimensions: bool = True
     embed_batch_size: int = 64
 
     # -- ingest --------------------------------------------------------------
@@ -423,6 +425,10 @@ def _parse_config(raw: dict, *, embedded: bool = False) -> Config:
     cfg.embed_dims = int(emb.get("dims", cfg.embed_dims))
     cfg.embed_model = emb.get("local_model", cfg.embed_model)
     cfg.embed_batch_size = int(emb.get("batch_size", cfg.embed_batch_size))
+    if "send_dimensions" in emb:
+        if not isinstance(emb["send_dimensions"], bool):
+            raise ValueError("[embedding] send_dimensions must be a boolean")
+        cfg.embed_send_dimensions = emb["send_dimensions"]
     for key in ("query_prefix", "passage_prefix"):
         if key in emb:
             if not isinstance(emb[key], str) or len(emb[key]) > 200:

@@ -113,6 +113,8 @@ See [Models and embeddings](models.md).
 | `dims` | Vector size, for hosted models |
 | `local_model` | The local model to use |
 | `allow_download` | Allow fetching the local model. Off by default. |
+| `query_prefix`, `passage_prefix` | Text put before a query or a passage, for models that expect one |
+| `send_dimensions` | Whether a hosted model is sent the `dims` it should return. Set `false` for a service that rejects the field. |
 | `batch_size` | Texts per embedding request |
 
 ### `[ingest]`

@@ -10,7 +10,7 @@ license-files = ["LICENSE"]
 description = "Tess Memory: long-term memory for AI agents. Ingests session transcripts into a multi-timescale, importance-weighted store with a personal core and a durable plan board, served over MCP."
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "tess-core>=0.1.0",
+    "tess-core[chatgpt-account,desktop-credentials]>=0.1.0",
     "mcp>=1.2",
     "sentence-transformers>=3.0",
     "numpy>=1.26",

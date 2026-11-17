@@ -89,9 +89,29 @@ class LocalEmbedder(Embedder):
         return np.asarray(vec[0], dtype=np.float32)
 
 
+def _managed_secret(reference: dict) -> str:
+    """The secret behind a managed credential reference (a keychain entry).
+
+    Resolved on a thread of its own, so it works whether or not the caller is
+    already inside an event loop."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+    from tess_core.runtime.secrets import resolve_runtime_secret_string
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, resolve_runtime_secret_string(reference, reference.get("purpose"))).result()
+
+
 class OpenAICompatEmbedder(Embedder):
-    def __init__(self, settings_path, profile_name: str, dims: int, batch_size: int = 64):
+    _query_prefix = _QWEN_QUERY_INSTRUCT
+    _send_dimensions = True
+
+    def __init__(self, settings_path, profile_name: str, dims: int, batch_size: int = 64, *,
+                 query_prefix: str | None = None, send_dimensions: bool = True):
         self.batch_size = batch_size
+        # None keeps the instruction earlier stores were queried with.
+        self._query_prefix = _QWEN_QUERY_INSTRUCT if query_prefix is None else query_prefix
+        self._send_dimensions = send_dimensions
         from tess_core.config import ProviderRegistry
         if settings_path is None:
             raise ValueError("Explicit provider registry is required")
@@ -103,6 +123,8 @@ class OpenAICompatEmbedder(Embedder):
         self._model = prof["defaultModel"]
         auth = registry.resolve_auth(profile_name)
         self._key = auth.get("apiKey") or auth.get("authToken") or auth.get("openaiToken")
+        if isinstance(self._key, dict):
+            self._key = _managed_secret(self._key)
         self._headers = dict(auth.get("customHeaders") or {})
         if self._key:
             self._headers.setdefault("Authorization", f"Bearer {self._key}")
@@ -125,7 +147,8 @@ class OpenAICompatEmbedder(Embedder):
                     r = httpx.post(
                         self._url,
                         headers=self._headers,
-                        json={"model": self._model, "input": inputs, "dimensions": self._dims},
+                        json={"model": self._model, "input": inputs,
+                              **({"dimensions": self._dims} if self._send_dimensions else {})},
                         timeout=180,
                     )
                     r.raise_for_status()
@@ -158,7 +181,7 @@ class OpenAICompatEmbedder(Embedder):
         return np.vstack(out)
 
     def embed_query(self, query: str) -> np.ndarray:
-        return self._post([_QWEN_QUERY_INSTRUCT + query])[0]
+        return self._post([self._query_prefix + query])[0]
 
 
 def make_embedder(cfg: Config) -> Embedder:
@@ -168,4 +191,5 @@ def make_embedder(cfg: Config) -> Embedder:
                              allow_download=cfg.embedding_allow_download,
                              query_prefix=cfg.embed_query_prefix, passage_prefix=cfg.embed_passage_prefix)
     return OpenAICompatEmbedder(cfg.provider_registry or cfg.engine_settings,
-                                cfg.embed_provider, cfg.embed_dims, cfg.embed_batch_size)
+                                cfg.embed_provider, cfg.embed_dims, cfg.embed_batch_size,
+                                query_prefix=cfg.embed_query_prefix, send_dimensions=cfg.embed_send_dimensions)

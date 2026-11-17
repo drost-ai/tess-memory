@@ -1,0 +1,231 @@
+"""The guided setup: what it refuses, what it writes, and where keys go."""
+from __future__ import annotations
+
+import json
+import subprocess
+import tomllib
+from pathlib import Path
+
+import pytest
+from starlette.testclient import TestClient
+
+from tess_memory.config import load_config
+from tess_memory.setup import agents, app as setup_app, apply, detect, embeddings, models
+from tess_memory.setup.providers import SetupError
+from tess_memory.setup.vault import Vault
+
+PORT = 4517
+KEY = "sk-test-0123456789abcdef"
+
+
+class FakeKeychain:
+    def __init__(self):
+        self.items = {}
+
+    def set_password(self, service, name, value):
+        self.items[(service, name)] = value
+
+    def get_password(self, service, name):
+        return self.items.get((service, name))
+
+    def delete_password(self, service, name):
+        self.items.pop((service, name), None)
+
+
+@pytest.fixture
+def machine(tmp_path, monkeypatch):
+    """A home folder with one Claude Code and one Codex session, and
+    providers that answer without a network."""
+    user = tmp_path / "user"
+    (user / ".claude/projects/-work-shop").mkdir(parents=True)
+    (user / ".claude/projects/-work-shop/a.jsonl").write_text("{}\n")
+    (user / ".codex/sessions/2026/11/01").mkdir(parents=True)
+    (user / ".codex/sessions/2026/11/01/rollout-1.jsonl").write_text("{}\n")
+
+    async def listed(_record):
+        return {"state": "available", "code": "models_listed", "models": ["large", "small"]}
+
+    monkeypatch.setattr(models, "list_models", listed)
+    monkeypatch.setattr(models, "_one_request", lambda *_: (True, "ok"))
+    monkeypatch.setattr(Vault, "platform_backend", staticmethod(lambda: "macos_keychain"))
+    for name in ("ANTHROPIC_API_KEY", "TESS_MEMORY_EMBEDDING_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    return tmp_path, user
+
+
+def session(machine, *, keychain: FakeKeychain | None):
+    root, user = machine
+    home = root / "store"
+    vault = Vault(home, keychain=keychain is not None, backend=keychain)
+    setup = setup_app.Setup(home, user_home=user, vault=vault)
+    client = TestClient(setup_app.create_app(setup, port=PORT), base_url=f"http://127.0.0.1:{PORT}")
+    client.headers.update({"X-Setup-Token": setup.token, "Origin": f"http://127.0.0.1:{PORT}"})
+    return setup, client
+
+
+def choose_sources(client):
+    found = client.get("/api/state").json()["sources"]
+    reply = client.post("/api/sources", json={"sources": [{"type": s["type"], "path": s["path"], "enabled": True} for s in found]})
+    assert reply.status_code == 200
+    return reply.json()
+
+
+async def fake_embedding(_url, _model, _key, dimensions):
+    return 200, {"data": [{"embedding": [0.1] * 768}]}
+
+
+def test_only_this_page_on_this_machine_may_drive_setup(machine):
+    setup, client = session(machine, keychain=None)
+    assert client.get("/api/state", headers={"X-Setup-Token": "wrong"}).status_code == 401
+    assert client.get("/api/state", headers={"Host": "attacker.example"}).json() == {"error": "wrong_host"}
+    assert client.get("/", headers={"Host": "attacker.example"}).status_code == 421
+    assert client.post("/api/sources", json={}, headers={"Origin": "http://attacker.example"}).status_code == 403
+    client.headers.pop("Origin")
+    assert client.post("/api/quit", json={}).status_code == 403  # a change with no origin at all
+    page = client.get("/")
+    assert page.status_code == 200 and "default-src 'self'" in page.headers["content-security-policy"]
+    assert setup.token not in page.text
+
+
+def test_sources_are_found_by_counting_files_only(machine):
+    _, user = machine
+    found = {s["name"]: s for s in detect.detect_sources(user)}
+    assert {name: s["sessions"] for name, s in found.items()} == {"claude-code": 1, "codex": 1}
+    assert found["claude-code"]["display_path"] == "~/.claude/projects"
+    with pytest.raises(ValueError, match="folder_not_found"):
+        detect.describe_folder("codex", str(user / "missing"))
+
+
+def test_a_model_is_required_before_settings_can_be_written(machine):
+    setup, client = session(machine, keychain=None)
+    assert choose_sources(client)["missing"] == ["model", "embedding"]
+    refused = client.post("/api/apply", json={})
+    assert refused.status_code == 422 and refused.json()["error"] == "incomplete"
+    assert not setup.settings.exists()
+
+
+def test_keys_go_to_the_keychain_and_no_file_holds_them(machine):
+    keychain = FakeKeychain()
+    setup, client = session(machine, keychain=keychain)
+    choose_sources(client)
+    connected = client.post("/api/model/key", json={"kind": "anthropic", "api_key": KEY}).json()
+    assert connected["secrets"] == "keychain" and "auth" not in connected["model"]["connection"]
+    assert client.post("/api/model/choose", json={"distill_model": "large", "search_model": "small"}).json()["model"]["connection"]["verified"]
+    monkey = embeddings.connect_hosted
+
+    async def hosted(vault, providers, **kwargs):
+        return await monkey(vault, providers, transport=fake_embedding, **kwargs)
+
+    embeddings.connect_hosted = hosted
+    try:
+        choice = client.post("/api/embedding/hosted", json={"preset": "google", "api_key": "g-" + KEY}).json()["embedding"]["choice"]
+    finally:
+        embeddings.connect_hosted = monkey
+    assert choice["dims"] == 768 and choice["send_dimensions"] is True
+    written = client.post("/api/apply", json={}).json()["result"]
+    assert Path(written["providers"]).name == "providers.yaml"
+    for path in setup.home.iterdir():
+        if path.is_file():
+            assert KEY not in path.read_text(), path.name
+            assert path.stat().st_mode & 0o077 == 0, path.name
+    assert sorted(json.loads(value)["api_key"] for value in keychain.items.values()) == sorted([KEY, "g-" + KEY])
+    cfg = load_config(setup.settings)
+    assert (cfg.engine_profile, cfg.engine_model, cfg.search_model) == ("anthropic", "large", "small")
+    assert (cfg.embed_provider, cfg.embed_dims, cfg.embed_query_prefix, cfg.embed_send_dimensions) == ("embeddings", 768, "", True)
+    assert [(d.name, d.type) for d in cfg.data_stores] == [("claude-code", "claude-code"), ("codex", "codex")]
+
+
+def test_without_a_keychain_keys_live_in_one_private_file(machine):
+    setup, client = session(machine, keychain=None)
+    choose_sources(client)
+    state = client.post("/api/model/key", json={"kind": "anthropic", "api_key": KEY}).json()
+    assert state["secrets"] == "file" and state["model"]["chatgpt"] == {**state["model"]["chatgpt"], "available": False, "reason": "needs_keychain"}
+    client.post("/api/model/choose", json={"distill_model": "large", "search_model": "large"})
+    registry = json.loads((setup.home / "providers.json").read_text())
+    assert registry["env"] == {"ANTHROPIC_API_KEY": KEY}
+    assert registry["providerProfiles"]["anthropic"]["auth"] == {"kind": "anthropic_api_key", "envVar": "ANTHROPIC_API_KEY"}
+    assert (setup.home / "providers.json").stat().st_mode & 0o077 == 0
+
+
+def test_a_key_the_provider_refuses_is_not_kept(machine, monkeypatch):
+    async def refused(_record):
+        return {"state": "failed", "code": "authentication_denied", "models": []}
+
+    monkeypatch.setattr(models, "list_models", refused)
+    keychain = FakeKeychain()
+    _, client = session(machine, keychain=keychain)
+    reply = client.post("/api/model/key", json={"kind": "openai", "api_key": KEY})
+    assert reply.status_code == 422 and reply.json()["error"] == "authentication_denied"
+    assert keychain.items == {} and KEY not in reply.text
+
+
+def test_models_that_fail_a_real_request_do_not_pass(machine, monkeypatch):
+    monkeypatch.setattr(models, "_one_request", lambda *_: (False, "RuntimeError: model not available"))
+    setup, client = session(machine, keychain=None)
+    choose_sources(client)
+    client.post("/api/model/key", json={"kind": "compatible", "base_url": "http://localhost:11434/v1"})
+    state = client.post("/api/model/choose", json={"distill_model": "local-model", "search_model": "local-model"}).json()
+    assert state["model"]["connection"]["verified"] is False and "model" in state["missing"]
+    assert json.loads((setup.home / "providers.json").read_text())["providerProfiles"]["endpoint"]["auth"] == {"kind": "none"}
+
+
+def test_an_existing_settings_file_is_kept_as_a_dated_copy(machine):
+    setup, client = session(machine, keychain=None)
+    setup.home.mkdir(parents=True)
+    setup.settings.write_text("# mine\n")
+    assert client.get("/api/state").json()["existing_settings"] is True
+    choose_sources(client)
+    client.post("/api/model/key", json={"kind": "anthropic", "api_key": KEY})
+    client.post("/api/model/choose", json={"distill_model": "large", "search_model": "small"})
+    setup.vault.draft["embedding"] = {"mode": "local", "name": "bge-small-en-v1.5",
+                                      "settings": {"local_model": "./models/bge-small-en-v1.5", "dims": 384, "query_prefix": "q: ", "passage_prefix": ""}}
+    written = client.post("/api/apply", json={}).json()["result"]
+    assert Path(written["backup"]).read_text() == "# mine\n"
+    embedding = tomllib.loads(setup.settings.read_text())["embedding"]
+    assert embedding == {"provider": "local", "local_model": "./models/bge-small-en-v1.5", "dims": 384, "query_prefix": "q: ", "passage_prefix": ""}
+
+
+def test_a_hosted_embedding_model_that_rejects_a_size_is_remembered(machine):
+    async def strict(_url, _model, _key, dimensions):
+        return (400, {"error": "unknown field"}) if dimensions else (200, {"data": [{"embedding": [0.0] * 1024}]})
+
+    setup, _ = session(machine, keychain=None)
+    import asyncio
+    choice = asyncio.run(embeddings.connect_hosted(setup.vault, setup.providers, preset="compatible",
+                                                   base_url="https://api.example.com/v1/", model="embed-1", transport=strict))
+    assert (choice["dims"], choice["send_dimensions"], choice["base_url"]) == (1024, False, "https://api.example.com/v1")
+    with pytest.raises(SetupError, match="authentication_denied"):
+        async def denied(*_):
+            return 401, None
+        asyncio.run(embeddings.connect_hosted(setup.vault, setup.providers, preset="google", api_key=KEY, transport=denied))
+
+
+def test_agents_are_registered_through_their_own_command(machine, monkeypatch):
+    _, user = machine
+    settings = user / "store/settings.toml"
+    sources = [{**item, "enabled": True} for item in detect.detect_sources(user)]
+    (user / ".claude.json").write_text(json.dumps({"mcpServers": {"tess-memory": {"env": {"TESS_MEMORY_SETTINGS": "/elsewhere.toml"}}}}))
+    monkeypatch.setattr(agents.shutil, "which", lambda name: "/usr/bin/" + name)
+    found = {item["type"]: item for item in agents.targets(sources, settings)}
+    assert (found["claude-code"]["registered"], found["claude-code"]["current"]) == (True, False)
+    assert (found["codex"]["registered"], found["codex"]["display_path"]) == (False, "~/.codex")
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs["env"].get("CODEX_HOME"), kwargs["env"].get("CLAUDE_CONFIG_DIR")))
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    agents.register(found["claude-code"]["id"], sources, settings, run=run)
+    agents.register(found["codex"]["id"], sources, settings, run=run)
+    assert [call[0][:3] for call in calls] == [["claude", "mcp", "remove"], ["claude", "mcp", "add-json"], ["codex", "mcp", "add"]]
+    assert json.loads(calls[1][0][-1])["env"] == {"TESS_MEMORY_SETTINGS": str(settings)}
+    assert calls[1][2] is None and calls[2][1] == str(user / ".codex")
+    assert f"--env=TESS_MEMORY_SETTINGS={settings}" in calls[2][0]
+    with pytest.raises(SetupError, match="unknown_agent"):
+        agents.register("codex:/nowhere", sources, settings, run=run)
+
+
+def test_settings_cannot_be_rendered_from_half_a_setup():
+    assert apply.missing({}) == ["sources", "model", "embedding"]
+    with pytest.raises(SetupError, match="incomplete"):
+        apply.render(Path("/store"), Path("/store/providers.yaml"), {"sources": [{"name": "a", "type": "codex", "path": "/a"}]})

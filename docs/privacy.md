@@ -60,8 +60,13 @@ in that session's chunks. Practical measures:
 
 ## Credentials
 
-Provider keys are read from environment variables named in the provider file. They are not
-written to the store, and provider errors are reported without them.
+Provider keys are never written to the store, and provider errors are reported without
+them. A provider file names where each key lives: an environment variable, or an entry in
+your system keychain. `tess-memory setup` puts the keys you enter in the keychain (macOS
+Keychain, or the Secret Service on Linux) and the provider file holds only a reference.
+With `--no-keychain` it keeps them in the provider file's own `env` map instead, in a file
+only your user can read. A ChatGPT sign-in is stored in the keychain and can be revoked
+from ChatGPT's settings.
 
 ## Sharing with a team
 

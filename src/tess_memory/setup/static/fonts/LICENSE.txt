@@ -1,0 +1,8 @@
+The fonts in this folder are Archivo, Inter and JetBrains Mono (Latin subsets),
+each licensed under the SIL Open Font License, Version 1.1.
+
+Archivo: Copyright The Archivo Project Authors (https://github.com/Omnibus-Type/Archivo)
+Inter: Copyright The Inter Project Authors (https://github.com/rsms/inter)
+JetBrains Mono: Copyright The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+
+The full licence text is at https://openfontlicense.org/open-font-license-official-text/

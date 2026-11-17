@@ -20,7 +20,27 @@ cd tess-memory
 uv sync
 ```
 
-## 2. Write a settings file
+## 2. Set it up
+
+The quick way is the guided setup. It opens a page on your own machine, finds your agents'
+sessions, connects a model and an embedding model, registers the memory server with your
+agents and runs a first ingestion:
+
+```sh
+uv run tess-memory setup
+```
+
+The page is served on `127.0.0.1` only and opens from the one-time link printed in your
+terminal. Keys you enter go to your system keychain (macOS Keychain, or the Secret Service
+on Linux); on a machine without one, start it with `--no-keychain` and they are kept in a
+file only you can read. Setup writes a settings file and a provider file in
+`~/.tess-memory` (choose another folder with `--home`), and keeps a dated copy of a
+settings file it replaces.
+
+If you used setup, you are done: skip to [Memory](#memory). The rest of this guide does
+the same thing by hand, one file and one command at a time, and shows what setup wrote.
+
+## 2b. Or write a settings file yourself
 
 Tess Memory reads one settings file. Keep it outside the checkout, for example at
 `~/.tess-memory/settings.toml`:

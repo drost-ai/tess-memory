@@ -8,7 +8,7 @@ maintain themselves. These pages explain how to use it and how it works.
 
 | | |
 |---|---|
-| [Getting started](getting-started.md) | Install, ingest your history, connect an agent |
+| [Getting started](getting-started.md) | Install, run the guided setup, connect an agent |
 | [Concepts](concepts.md) | Stores, sources, projects, memory levels, the plan |
 | [How it works](how-it-works.md) | The pipeline from transcript to answer |
 
