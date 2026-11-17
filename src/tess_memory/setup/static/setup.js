@@ -457,7 +457,7 @@
         h('progress', { id: 'ingest-bar', max: ingest.total || 1, value: ingest.total ? ingest.done : undefined }),
         h('div', { class: 'progress-line' },
           h('span', { id: 'ingest-text' }, number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions ingested'),
-          button('Stop', 'ingest-stop', () => act('ingest-stop', '/api/ingest/stop', {}), 'quiet')),
+          button('Stop ingesting', 'ingest-stop', () => act('ingest-stop', '/api/ingest/stop', {}), 'outline', { attrs: { class: 'button button-outline button-small' } })),
         h('pre', { class: 'block log', id: 'ingest-log' }, (ingest.lines || []).join('\n')),
         h('p', { class: 'hint' }, keeping ? 'When this first batch is in, the background service takes over and ingests the rest.' : 'You can leave this running. What is finished is kept if it stops.'));
     } else {
