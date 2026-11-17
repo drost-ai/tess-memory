@@ -1346,7 +1346,7 @@ wheels = [
 [[package]]
 name = "tess-core"
 version = "0.1.0"
-source = { git = "https://github.com/drost-ai/tess-core.git?rev=e0fcc9497f42ad7b74c102fb98e194cdc94bc629#e0fcc9497f42ad7b74c102fb98e194cdc94bc629" }
+source = { git = "https://github.com/drost-ai/tess-core.git?rev=fd9d85306d7be9f615141865896bf989372f668b#fd9d85306d7be9f615141865896bf989372f668b" }
 
 [package.optional-dependencies]
 chatgpt-account = [
@@ -1383,7 +1383,7 @@ requires-dist = [
     { name = "mcp", specifier = ">=1.2" },
     { name = "numpy", specifier = ">=1.26" },
     { name = "sentence-transformers", specifier = ">=3.0" },
-    { name = "tess-core", extras = ["chatgpt-account", "desktop-credentials"], git = "https://github.com/drost-ai/tess-core.git?rev=e0fcc9497f42ad7b74c102fb98e194cdc94bc629" },
+    { name = "tess-core", extras = ["chatgpt-account", "desktop-credentials"], git = "https://github.com/drost-ai/tess-core.git?rev=fd9d85306d7be9f615141865896bf989372f668b" },
 ]
 
 [package.metadata.requires-dev]
