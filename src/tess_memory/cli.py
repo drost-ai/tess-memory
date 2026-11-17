@@ -317,7 +317,7 @@ def cmd_observe(args: argparse.Namespace) -> int:
 
 
 def _bind_user(cfg, user):
-    """A per-process identity (e.g. the host's per-session server)."""
+    """A per-process identity (e.g. a host's per-session server)."""
     if user:
         from .principals import principal_id
         cfg.identity_user = principal_id(user)

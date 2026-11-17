@@ -1,4 +1,4 @@
-"""Users, teams and visibility: who may read which row (Epic U, U1)."""
+"""Users, teams and visibility: who may read which row."""
 from __future__ import annotations
 
 import tempfile

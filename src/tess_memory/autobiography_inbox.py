@@ -38,7 +38,7 @@ class PersonalInbox:
             p=self.store.principal
             bound=self.store.db.execute("SELECT value FROM autobio_meta WHERE key='operational_audience'").fetchone()
             if p.reads:
-                # Multi-audience (Epic U): producers run once per audience.
+                # Multi-audience: producers run once per audience.
                 for statement in INBOX_SCHEMA.split(';'):
                     if statement.strip():self.store.db.execute(statement)
                 return

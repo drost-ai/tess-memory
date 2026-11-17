@@ -231,12 +231,12 @@ class ModelSelectionTests(unittest.TestCase):
     def test_toml_loads_requested_models_and_preserves_embedding_settings(self):
         cfg = load_config(Path(__file__).resolve().parents[1] / "examples/codex-settings.toml")
         self.assertEqual((cfg.engine_profile, cfg.engine_model, cfg.engine_reasoning_effort),
-                         ("codex", "gpt-5.6-terra", "xhigh"))
+                         ("strong", "example-large", "high"))
         self.assertEqual((cfg.engine_fallback_profile, cfg.engine_fallback_model, cfg.engine_fallback_reasoning_effort),
-                         ("deepseek-v4-pro", "deepseek-v4-pro", "max"))
+                         ("cheap", "example-small", "medium"))
         self.assertEqual((cfg.search_profile, cfg.search_model, cfg.search_reasoning_effort),
-                         ("codex", "gpt-5.6-sol", "xhigh"))
-        self.assertEqual((cfg.embed_provider, cfg.embed_dims), ("embeddings", 4096))
+                         ("cheap", "example-small", "medium"))
+        self.assertEqual((cfg.embed_provider, cfg.embed_dims), ("embeddings", 1024))
 
     def test_invalid_effort_is_rejected_instead_of_silently_defaulting(self):
         path = self.root / "invalid.toml"

@@ -39,8 +39,3 @@ maintain themselves. These pages explain how to use it and how it works.
 | | |
 |---|---|
 | [MCP tool reference](reference/tools.md) | Every tool, its arguments and what it returns |
-
-## Engineering notes
-
-Detailed write-ups of specific mechanisms are in the repository under
-[docs/engineering](engineering/).

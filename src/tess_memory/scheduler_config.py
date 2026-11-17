@@ -23,7 +23,7 @@ class ScheduledStore:
     workers: int | None = None
     hold_text_file: Path | None = None
     recovery_hour: int | None = None  # opt in to one bounded nightly recovery pass
-    recovery_timezone: str = 'America/Los_Angeles'
+    recovery_timezone: str = 'UTC'
     recovery_sources_per_run: int = 256
     recovery_model_calls_per_run: int = 128
     recovery_min_age_seconds: float = 900
@@ -44,7 +44,7 @@ class ServiceConfig:
     parallel_stores: int = 4
     model_limit: int = 16
     embedding_limit: int = 4
-    provider_limits: dict[str, int] = field(default_factory=lambda: {'codex': 16, 'deepseek': 8, 'anthropic': 4, 'fireworks': 4})
+    provider_limits: dict[str, int] = field(default_factory=dict)
     backlog_seconds: float = 15
     retry_seconds: float = 30
     max_retry_seconds: float = 1800

@@ -1,5 +1,5 @@
 """Administration and sharing: users, teams, project mappings, and an
-author's share/unshare of their own memories (Epic U, U5).
+author's share/unshare of their own memories.
 
 Administration needs an administrator principal (the default owner always
 is). Sharing needs the row's author or an administrator. Every visibility

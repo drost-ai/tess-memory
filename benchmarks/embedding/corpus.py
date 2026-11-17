@@ -101,7 +101,7 @@ PATHS = [
     ("Provider profiles are defined in settings/providers.yaml.", "which file defines provider profiles"),
     ("Remembered browser hashes are stored in settings/management-state.json.", "where are remembered browser hashes stored"),
     ("Each engine session's transcript is kept in sessions/<id>/full-transcript-with-tools.jsonl.", "where is a session's full transcript"),
-    ("The packaged system prompt seed is host_app/_assets/system_prompt.md.", "path of the packaged system prompt seed"),
+    ("The packaged system prompt seed is host/_assets/system_prompt.md.", "path of the packaged system prompt seed"),
 ]
 PATH_DISTRACTORS = [
     "settings/config/config.yaml.example shows every engine knob with its default.",

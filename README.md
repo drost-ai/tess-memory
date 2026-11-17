@@ -246,8 +246,6 @@ The same pages live in this repository:
 - [Privacy and data](docs/privacy.md): what is stored, where, and what leaves your machine
 - [MCP tool reference](docs/reference/tools.md)
 
-Engineering notes on specific mechanisms are in [docs/engineering](docs/engineering).
-
 ## Requirements
 
 - Python 3.12 or 3.13, and [uv](https://docs.astral.sh/uv/)

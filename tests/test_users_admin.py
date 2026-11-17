@@ -1,4 +1,4 @@
-"""Administration and sharing (Epic U, U5)."""
+"""Administration and sharing."""
 from __future__ import annotations
 
 import io

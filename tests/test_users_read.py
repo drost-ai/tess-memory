@@ -1,4 +1,4 @@
-"""Every tool reads only what its caller may (Epic U, U4).
+"""Every tool reads only what its caller may.
 
 The compatibility fixture (test_users_compat) is given owners: project alpha
 belongs to team core (ana and ben); s-alpha-1 is ana's, s-alpha-2 ben's;

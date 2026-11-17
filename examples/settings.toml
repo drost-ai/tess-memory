@@ -1,0 +1,103 @@
+# A complete Tess Memory settings file, with every section shown.
+#
+# `tess-memory setup` writes a file like this for you. Copy this one only if
+# you prefer to configure by hand: put it outside the repository, for example
+# at ~/.tess-memory/settings.toml, and select it with
+#
+#   export TESS_MEMORY_SETTINGS=~/.tess-memory/settings.toml
+#
+# Precedence: built-in defaults < this file < environment variables.
+
+# ---- sources ---------------------------------------------------------------
+# One [[data_stores]] entry per place an agent writes its sessions. `type` is
+# "claude-code", "codex", "tess-core" or "transcript". Sources are only read.
+
+[[data_stores]]
+name = "claude-code"
+type = "claude-code"
+path = "~/.claude/projects"
+
+[[data_stores]]
+name = "codex"
+type = "codex"
+path = "~/.codex"
+
+# A source normally files each session under the project its directory names.
+# To give a source one fixed project instead:
+# project = "assistant"
+#
+# To leave out projects by name (glob patterns):
+# exclude = ["-private-tmp-*"]
+#
+# To skip sessions that were copied from another source already ingested:
+# skip_copies_of = ["~/other-agent/sessions"]
+
+# ---- planning --------------------------------------------------------------
+# By default a caller names the project of each plan item. A dedicated agent
+# can keep every write on one board instead:
+#
+# [planning]
+# default_project = "assistant"
+# lock_writes_to_default = true
+
+# ---- storage ---------------------------------------------------------------
+
+[storage]
+data_dir = "~/.tess-memory"      # memory.db and caches
+
+# ---- distillation ----------------------------------------------------------
+# `settings` is a Tess Core provider file; `profile` names a profile in it.
+
+[llm]
+settings = "~/.tess-memory/providers.yaml"
+profile = "strong"
+fallback_profile = "cheap"       # tried when the primary fails or refuses
+workers = 4                      # distillation calls in parallel
+
+# ---- retrieval agent -------------------------------------------------------
+
+[search]
+agent = true                     # false = plain one-shot hybrid search
+profile = "cheap"
+max_rounds = 4                   # model calls per search
+queries_per_round = 3
+per_query_limit = 8
+evidence_limit = 12
+
+# ---- embeddings ------------------------------------------------------------
+# "local" runs a sentence-transformers model on this machine. A profile name
+# selects a hosted embedding model instead. A store holds one vector space:
+# changing the embedding model later means embedding the store again.
+
+[embedding]
+provider = "local"
+local_model = "BAAI/bge-small-en-v1.5"
+allow_download = true
+batch_size = 64
+
+# ---- ingestion -------------------------------------------------------------
+
+[ingest]
+quiet_seconds = 900              # wait until a session is unchanged this long
+incremental = true               # process only the new, completed part
+max_model_calls_per_run = 128
+max_transcript_chars = 150000    # larger sessions are split into segments
+segment_chars = 150000
+segment_overlap = 7500
+max_segments = 100
+chunk_chars = 6000
+min_session_chars = 200          # skip sessions with less dialogue than this
+min_importance = 0.25            # drop memories rated below this (0..1)
+profile_session_limit = 30       # sessions fed into a project profile
+digest_session_limit = 40        # sessions fed into a weekly digest
+
+# ---- ranking ---------------------------------------------------------------
+# score = semantic*meaning + bm25*keywords + importance + recency
+
+[retrieval]
+half_life_days = 30
+weights = { semantic = 0.55, bm25 = 0.20, importance = 0.15, recency = 0.10 }
+candidate_pool = 100
+per_session_cap = 3
+default_limit = 8
+chunk_neighbor_chars = 1000

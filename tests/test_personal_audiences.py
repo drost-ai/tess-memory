@@ -1,4 +1,4 @@
-"""Personal memory per person (Epic U, U6): in a multi-audience store each
+"""Personal memory per person: in a multi-audience store each
 person's records are theirs, the agent's Self/Principles are shared, the
 owner reads all; single-audience stores behave exactly as before."""
 from __future__ import annotations

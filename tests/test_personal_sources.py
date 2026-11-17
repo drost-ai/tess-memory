@@ -204,6 +204,17 @@ class PersonalSourceTests(unittest.TestCase):
         with self.assertRaises(ValueError):PersonalConfig.parse({'source_mode':'native'})
         with self.assertRaises(ValueError):PersonalConfig.parse({'source_mode':'guess-from-name'})
 
+    def test_native_mode_keeps_the_identifier_stored_records_were_hashed_with(self):
+        from tess_memory.autobiography import digest
+        from tess_memory.autobiography_config import NATIVE_SOURCE_MODE
+        native=PersonalConfig.parse({'source_mode':'native','source_paths':['sessions']})
+        earlier=PersonalConfig.parse({'source_mode':NATIVE_SOURCE_MODE,'source_paths':['sessions']})
+        self.assertEqual(native,earlier)
+        self.assertEqual(PersonalConfig(source_mode='native').source_mode,NATIVE_SOURCE_MODE)
+        # The policy every stored native source carries; changing it strands them.
+        self.assertEqual(digest([native.source_mode,None]),
+                         '8e5786fe1e1c2a88b85c81118976d211acdec2fd3db882e15c52b7fc7f637595')
+
     def test_source_index_gap_is_not_a_completed_source(self):
         self.session(messages=[{'type':'message','message_index':0,'role':'user','content':'first'},
             {'type':'message','message_index':2,'role':'assistant','content':'missing intervening record'}])

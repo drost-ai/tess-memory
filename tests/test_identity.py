@@ -1,4 +1,4 @@
-"""Caller identity is bound when a server or command starts (Epic U, U2)."""
+"""Caller identity is bound when a server or command starts."""
 from __future__ import annotations
 
 import os

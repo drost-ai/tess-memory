@@ -1,0 +1,39 @@
+# Personal memory for an assistant, in its own store.
+# Models and credentials come from the [llm] section or from the host that
+# embeds Tess Memory, not from this section.
+
+[[data_stores]]
+name = "assistant"
+type = "tess-core"
+path = "~/.assistant/sessions"
+project = "assistant"
+
+[storage]
+data_dir = "~/.assistant/memory"
+
+[ingest]
+quiet_seconds = 900
+
+[personal]
+enabled = true
+owner = "sam"
+agent = "assistant"
+audience = "owner"
+role = "reader"
+context_subjects = ["sam"]
+context_budget = 6000 # personal context per turn, in UTF-8 bytes (~4 per token); up to 512000 (~128K tokens)
+source_names = ["assistant"]
+historical = false
+extraction_enabled = true
+dream_enabled = true
+shadow = true # set false to publish without review once you trust the results
+dream_hour = 23
+timezone = "UTC"
+extraction_interval = 300
+max_seconds = 300 # a job's deadline (hang guard)
+lease_seconds = 600
+# No work or spending limits by default. To bound them, set any of:
+# daily_model_calls, daily_token_budget, model_calls (per job),
+# max_candidates and max_edits (per reflection), max_output_tokens.
+# To share the scheduler's provider limits when it is installed:
+# service_config = "~/.tess-memory-service/config.toml"

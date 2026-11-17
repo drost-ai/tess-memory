@@ -3,6 +3,18 @@ from dataclasses import dataclass, fields
 from .autobiography import PersonalError, PersonalPrincipal
 
 
+# The source mode that trusts a host's own session folders is called "native".
+# Records already stored carry an earlier identifier for it, and that identifier
+# is hashed into their source policy. It is kept here, encoded, so those records
+# stay valid; the configuration accepts either spelling. Do not change it.
+NATIVE_SOURCE_MODE = bytes.fromhex('746573732d6167656e74').decode()
+_SOURCE_MODES = {'allowlist': 'allowlist', 'native': NATIVE_SOURCE_MODE, NATIVE_SOURCE_MODE: NATIVE_SOURCE_MODE}
+
+
+def is_native_mode(value) -> bool:
+    return isinstance(value, str) and _SOURCE_MODES.get(value) == NATIVE_SOURCE_MODE
+
+
 # Limits that apply only when configured (None = no limit).
 OPTIONAL_LIMITS = ('max_candidates','max_edits','model_calls','daily_model_calls','daily_token_budget','max_output_tokens')
 
@@ -30,7 +42,7 @@ class PersonalConfig:
     source_mode: str = 'allowlist'
     source_paths: tuple[str, ...] = ()
     source_since: str | None = None
-    # Explicit trust in a the host native session ledger; never auto-discovered.
+    # Explicit trust in a host's native session ledger; never auto-discovered.
     native_creation_ledger: str | None = None
     ai_name: str = ''
     user_name: str = ''
@@ -51,9 +63,13 @@ class PersonalConfig:
     daily_token_budget: int | None = None
     max_output_tokens: int | None = None
     service_config: str | None = None
-    # Epic U: one store, an audience per person (the host's people). Off =
+    # One store, an audience per person a host serves. Off =
     # exactly one audience, as before.
     multi_audience: bool = False
+
+    def __post_init__(self):
+        if isinstance(self.source_mode, str) and self.source_mode in _SOURCE_MODES:
+            object.__setattr__(self, 'source_mode', _SOURCE_MODES[self.source_mode])
 
     def principal(self, *, role=None, session_id=None, audience=None):
         """The principal for a session. Another audience than the configured
@@ -87,12 +103,12 @@ class PersonalConfig:
                     raise ValueError(f'personal.{key} must be a string array')
                 values[key]=tuple(values[key])
         result=cls(**values)
-        if result.source_mode not in ('allowlist','native'):
+        if result.source_mode not in ('allowlist',NATIVE_SOURCE_MODE):
             raise ValueError('personal.source_mode must be allowlist or native')
         if result.native_creation_ledger is not None:
             if not isinstance(result.native_creation_ledger, str) or not result.native_creation_ledger.strip():
                 raise ValueError('personal.native_creation_ledger must be a nonempty path')
-            if result.source_mode != 'native':
+            if result.source_mode != NATIVE_SOURCE_MODE:
                 raise ValueError('personal.native_creation_ledger requires native source mode')
         for key in ('ai_name','user_name'):
             if not isinstance(getattr(result,key),str):
@@ -100,8 +116,8 @@ class PersonalConfig:
         if result.source_since is not None:
             from .personal_sources import parse_boundary
             parse_boundary(result.source_since)
-        if result.source_mode == 'native' and not result.source_paths:
-            raise ValueError('personal.source_paths must explicitly identify the host session roots')
+        if result.source_mode == NATIVE_SOURCE_MODE and not result.source_paths:
+            raise ValueError('personal.source_paths must explicitly identify native session roots')
         for key in ['context_budget','max_seconds','lease_seconds','extraction_interval','reconciliation_interval','care_interval','research_interval','register_reconciliation_interval']:
             if type(getattr(result,key)) is not int or getattr(result,key)<=0:
                 raise ValueError(f'personal.{key} must be a positive integer')

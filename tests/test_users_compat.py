@@ -1,14 +1,14 @@
-"""Epic U compatibility harness: users and visibility must not change what an
+"""Compatibility harness: users and visibility must not change what an
 instance with no identity configured sees, and older code must keep working
 against a store the new code has opened.
 
 - Golden: every MCP tool's output over a fixture store built through the
-  public APIs, compared with outputs recorded from the code before Epic U
+  public APIs, compared with outputs recorded from the code before users and visibility
   (tests/fixtures/users_compat_golden.json; TESS_MEMORY_UPDATE_GOLDEN=1
   rewrites it, which only ever happens on purpose).
 - Concurrency: many processes open a store created by the old code at the
   same instant; every open succeeds and the store ends up fully migrated.
-- Old code: the code at BASE (the commit Epic U started from) reads and
+- Old code: the code at BASE (the commit that work started from) reads and
   writes a store the new code has migrated.
 """
 from __future__ import annotations
@@ -31,7 +31,7 @@ from tess_memory import plan, retrieval, server
 from tess_memory.config import Config
 from tess_memory.store import MemoryRow, MemoryStore
 
-BASE = "910d5c0"  # main when Epic U began (2026-10-07)
+BASE = "910d5c0"  # main before users and visibility
 GOLDEN = Path(__file__).parent / "fixtures" / "users_compat_golden.json"
 REPO = Path(__file__).resolve().parents[1]
 FROZEN = datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc)  # "now" for the golden run

@@ -1,6 +1,6 @@
 """Personal source policy and durable, contiguous finalized-unit cursors.
 
-the host and Tess-Code share an engine format. Format/name/cwd is NOT proof
+Hosts built on one engine share a session format. Format/name/cwd is NOT proof
 of host identity: only explicitly configured personal session roots confer it.
 No coding discovery, exclusion, ingestion cursor or archive is modified here.
 """
@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from .autobiography import PersonalError, canonical, digest
+from .autobiography_config import NATIVE_SOURCE_MODE
 
 
 def parse_boundary(value):
@@ -41,9 +42,9 @@ def after_boundary(turn, boundary):
 def selected_sources(cfg):
     from .config import DataStore
     p = cfg.personal
-    if p.source_mode == 'native':
+    if p.source_mode == NATIVE_SOURCE_MODE:
         if not p.source_paths:
-            raise PersonalError('invalid', 'explicit the host source_paths required')
+            raise PersonalError('invalid', 'explicit native source_paths required')
         roots = sorted({Path(x).expanduser().resolve() for x in p.source_paths})
         return [DataStore('personal-tess-' + digest(str(root))[:16], root,
                           type='tess-core', project=p.agent, exclude=[]) for root in roots]
@@ -161,9 +162,9 @@ def write_source_snapshot(cfg, store, ranges, cursors):
 
 
 def metadata_eligible(cfg, metadata):
-    if cfg.personal.source_mode != 'native':
+    if cfg.personal.source_mode != NATIVE_SOURCE_MODE:
         return True
-    return (metadata.get('personal_source_mode') == 'native'
+    return (metadata.get('personal_source_mode') == NATIVE_SOURCE_MODE
             and metadata.get('source_root') in {str(Path(x).expanduser().resolve()) for x in cfg.personal.source_paths}
             and metadata.get('source_policy') == digest([cfg.personal.source_mode,cfg.personal.source_since]))
 
@@ -206,7 +207,7 @@ def verify_range_source(cfg, store, source_id, generation):
     revisions=md.get('source_revisions',[])
     if all(SourceRevision(**r).verify() for r in revisions):
         return
-    if cfg.personal.source_mode != 'native':
+    if cfg.personal.source_mode != NATIVE_SOURCE_MODE:
         raise PersonalError('stale_source','source prefix changed')
     try:
         ds=next(d for d in selected_sources(cfg) if d.name==md.get('source_store'))

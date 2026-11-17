@@ -1,0 +1,45 @@
+# Keeps one or more stores current in the background.
+# Copy outside the repository, for example to
+# ~/.tess-memory-service/config.toml, and point each store at its settings file.
+# `enabled` is the initial state; `scheduler enable` and `disable` persist
+# later choices.
+
+[service]
+data_dir = "~/.tess-memory-service"
+parallel_stores = 4
+model_limit = 16               # model calls in flight, across all stores
+embedding_limit = 4
+backlog_seconds = 15
+retry_seconds = 30
+max_retry_seconds = 1800
+job_timeout_seconds = 3600
+
+# Optional ceilings per provider, shared by every store. A provider is named
+# by its host, or "anthropic" or "codex".
+# [provider_limits]
+# anthropic = 4
+# "api.example.com" = 8
+
+[[stores]]
+name = "main"
+settings = "~/.tess-memory/settings.toml"
+enabled = true
+workers = 4
+poll_seconds = 300             # look for new or changed sessions
+profile_seconds = 3600         # refresh project profiles
+digest_seconds = 86400         # refresh weekly digests
+sources_per_run = 16
+model_calls_per_run = 128
+aggregate_calls_per_run = 4
+# A nightly pass that retries what failed during the day:
+recovery_hour = 22
+recovery_timezone = "UTC"
+recovery_sources_per_run = 256
+recovery_model_calls_per_run = 128
+recovery_min_age_seconds = 900
+
+# A second store, for example one that holds only Codex sessions:
+# [[stores]]
+# name = "codex"
+# settings = "~/.tess-memory-codex/settings.toml"
+# enabled = true

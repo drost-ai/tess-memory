@@ -1,0 +1,66 @@
+# A store that holds only Codex sessions.
+# Use: tess-memory codex-ingest --settings examples/codex-settings.toml
+#
+# To keep Codex sessions in the same store as other agents, add a
+# type = "codex" source to your main settings file instead.
+
+[[data_stores]]
+name = "codex"
+type = "codex"
+path = "~/.codex"
+
+# A second Codex home, if you use one:
+# [[data_stores]]
+# name = "codex-second"
+# type = "codex"
+# path = "~/.codex-second"
+
+[storage]
+data_dir = "~/.tess-memory-codex"
+
+[codex]
+tool_output_chars = 2000       # 1200 head + 800 tail, plus an elision marker
+include_subagents = false      # parent conversations keep delegated results
+batch_size = 4                 # sessions held in memory at once
+max_record_bytes = 67108864    # fail explicitly on an oversized JSON record
+
+# The profiles come from the provider file. `model` and `reasoning_effort`
+# pin a model for this store only, without changing the profile.
+[llm]
+settings = "~/.tess-memory/providers.yaml"
+profile = "strong"
+model = "example-large"
+reasoning_effort = "high"
+fallback_profile = "cheap"
+fallback_model = "example-small"
+fallback_reasoning_effort = "medium"
+workers = 4
+# A Codex sign-in to use, independent of the launching shell's CODEX_HOME:
+# codex_auth_path = "~/.codex/auth.json"
+
+[search]
+agent = true
+profile = "cheap"
+model = "example-small"
+reasoning_effort = "medium"
+
+[embedding]
+provider = "embeddings"        # a profile in the provider file, or "local"
+dims = 1024
+batch_size = 64
+
+[ingest]
+quiet_seconds = 900            # call models after 15 minutes unchanged
+incremental = true             # verified completed prefixes; stable unit reuse
+incremental_batch_chars = 32000
+incremental_batch_items = 8
+incremental_batch_unit_chars = 12000
+incremental_reduce_fanout = 8
+segment_workers = 16           # per-session ceiling; all sessions share llm.workers
+distillation_cache = true      # checkpoint validated requests in this store only
+cache_retention_days = 30
+max_transcript_chars = 150000
+segment_chars = 150000
+segment_overlap = 7500
+max_segments = 100
+segment_hard_cap = 2500000

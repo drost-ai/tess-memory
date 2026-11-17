@@ -1,4 +1,4 @@
-"""Read-only, explicitly trusted the host native-creation provenance.
+"""Read-only, explicitly trusted native-creation provenance of a host.
 
 A canonical createdAt (or filesystem birthtime) is NOT creation authority.
 The operator opts into a host ledger whose session bindings are written only by
@@ -7,6 +7,8 @@ It is not a hostile-writer defense.
 """
 from pathlib import Path
 import sqlite3
+
+from .autobiography_config import NATIVE_SOURCE_MODE
 
 
 def creation_metadata(meta):
@@ -21,7 +23,7 @@ def creation_metadata(meta):
 def native_creation_proof(config, ds, current, activated_at, observed_at, stamp):
     """Return independently corroborated creation, or None; never create a DB."""
     ledger = config.personal.native_creation_ledger
-    if not ledger or config.personal.source_mode != 'native' or observed_at <= activated_at:
+    if not ledger or config.personal.source_mode != NATIVE_SOURCE_MODE or observed_at <= activated_at:
         return None
     try:
         ledger = Path(ledger).expanduser().resolve(strict=True)

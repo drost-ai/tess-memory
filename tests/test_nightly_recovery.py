@@ -35,7 +35,7 @@ class CalendarRecoveryTests(unittest.TestCase):
                 f'[storage]\ndata_dir="{root / "memory"}"\n[llm]\nsettings="{providers}"\nprofile="p"\n')
             config_path=root/'scheduler.toml'
             config_path.write_text(f'[service]\ndata_dir="{root / "service"}"\n[[stores]]\nname="codex"\nsettings="{settings}"\n'
-                'recovery_hour=22\nrecovery_model_calls_per_run=2\n')
+                'recovery_hour=22\nrecovery_timezone="America/Los_Angeles"\nrecovery_model_calls_per_run=2\n')
             cfg=load_service(config_path);queue=WorkQueue(cfg)
             run=queue.claim(instance='codex',kind='recovery',explicit=True)
             backend=Backend()
@@ -50,7 +50,7 @@ class CalendarRecoveryTests(unittest.TestCase):
             self.assertGreater(due,result['finished'])
 
     def test_calendar_tracks_dst_and_coalesces_sleep_without_catchup_storm(self):
-        store = ScheduledStore('one', Path('/one.toml'), recovery_hour=22)
+        store = ScheduledStore('one', Path('/one.toml'), recovery_hour=22, recovery_timezone='America/Los_Angeles')
         for day, expected_hours in [('2026-03-07', 23), ('2026-10-31', 25), ('2026-09-09', 24)]:
             now = datetime.fromisoformat(day+'T22:00:00').replace(tzinfo=PT).timestamp()
             due = store.next_recovery(now)

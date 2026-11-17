@@ -1,4 +1,4 @@
-# Choosing the local embedding default (Epic #92 C1)
+# Choosing the local embedding default
 
 Measured October 22, 2026 PT on two hosts with the files in this directory.
 Raw receipts are in `results/` (one JSON per model, device and host, plus

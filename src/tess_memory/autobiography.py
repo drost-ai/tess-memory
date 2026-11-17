@@ -68,7 +68,7 @@ class PersonalPrincipal:
     audience: str = 'owner'
     role: str = 'reader'
     session_id: str = 'unbound'
-    # Epic U: '' = this audience only (single-audience stores, unchanged);
+    # '' = this audience only (single-audience stores, unchanged);
     # '*' = every audience (the owner's, in a multi-audience store);
     # otherwise the owner audience whose Self/Principles this audience shares.
     reads: str = ''

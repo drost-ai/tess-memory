@@ -195,5 +195,4 @@ background service with no shell environment, a provider file written as JSON ma
 
 An application that hosts Tess Memory, rather than a person running it, passes a JSON
 manifest instead of a TOML file. The manifest names the runtime home and the provider
-registry explicitly, and nothing is discovered from the environment. See the
-[engineering note](engineering/configuration.md).
+registry explicitly, and nothing is discovered from the environment.

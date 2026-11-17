@@ -1,5 +1,5 @@
 """Writes carry their owner and author; team profiles never include private
-material (Epic U, U3)."""
+material."""
 from __future__ import annotations
 
 import tempfile

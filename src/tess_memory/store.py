@@ -227,7 +227,7 @@ class MemoryStore:
             self._migrate()
         self.lock = threading.RLock()  # serializes multi-statement write groups
         # Who reads and writes through this store; None = the default owner,
-        # unrestricted (every instance before Epic U, and any without identity).
+        # unrestricted (every instance created before users existed, and any without identity).
         self.principal = principal
         self.policy = policy or VisibilityPolicy()
         self._emb_cache: tuple[np.ndarray, np.ndarray] | None = None  # (ids, matrix)
@@ -295,7 +295,7 @@ class MemoryStore:
         source_columns = {r['name'] for r in self.db.execute('PRAGMA table_info(ingest_sources)')}
         if 'retry_at' not in source_columns:
             self.db.execute('ALTER TABLE ingest_sources ADD COLUMN retry_at REAL NOT NULL DEFAULT 0')
-        # Epic U: users, teams, projects and per-row owner/visibility.
+        # Users, teams, projects and per-row owner/visibility.
         for statement in USERS_SCHEMA.split(";"):
             if statement.strip():
                 self.db.execute(statement)

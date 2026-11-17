@@ -101,5 +101,3 @@ item can read it back in the same turn.
 - **Verified.** Progress is recorded against the content that was read, not a timestamp.
 - **Bounded.** Every run has limits on sources, model calls and time.
 - **One writer per store.** Ingesters hold a lock; servers read and write plans alongside.
-
-The [engineering notes](engineering/) describe several of these mechanisms in detail.

@@ -7,6 +7,7 @@ from datetime import datetime
 import math
 
 from .autobiography import PersonalError, canonical, digest
+from .autobiography_config import NATIVE_SOURCE_MODE
 from .autobiography_inbox import PersonalInbox
 from .attribution import source_adapter
 from .readers import CompletedSourceReader
@@ -93,7 +94,7 @@ class PersonalExtraction:
         if not cfg.personal.enabled or not cfg.personal.extraction_enabled:
             return {'enabled':False,'parts':[]}
         selected=selected_sources(cfg)
-        strict=cfg.personal.source_mode=='native'
+        strict=cfg.personal.source_mode==NATIVE_SOURCE_MODE
         historical=cfg.personal.historical or strict
         boundary=parse_boundary(cfg.personal.source_since) if cfg.personal.source_since is not None else None
         policy=digest([cfg.personal.source_mode,cfg.personal.source_since])
@@ -279,7 +280,7 @@ class PersonalExtraction:
         scope_args=[]
         if strict:
             roots=[str(d.path.resolve()) for d in selected]
-            scope_sql=" AND json_extract(s.metadata,'$.personal_source_mode')='native' AND json_extract(s.metadata,'$.source_policy')=? AND json_extract(s.metadata,'$.source_root') IN ("+','.join('?' for _ in roots)+')'
+            scope_sql=" AND json_extract(s.metadata,'$.personal_source_mode')='"+NATIVE_SOURCE_MODE+"' AND json_extract(s.metadata,'$.source_policy')=? AND json_extract(s.metadata,'$.source_root') IN ("+','.join('?' for _ in roots)+')'
             scope_args=[policy,*roots]
         rows=s.db.execute('''SELECT p.*,s.metadata AS source_metadata FROM autobio_extraction_parts p JOIN autobio_sources s ON s.id=p.source_id
             WHERE p.state='pending' AND p.retry_after<=? AND s.generation=p.generation AND s.owner=? AND s.agent=? AND s.audience=?

@@ -16,6 +16,7 @@ from pathlib import Path
 import tempfile
 
 from .autobiography import PersonalError, canonical, digest
+from .autobiography_config import NATIVE_SOURCE_MODE
 from .personal_sources import selected_sources, parse_boundary, source_origin
 from .readers import CompletedSourceReader
 from .native_creation import creation_metadata, native_creation_proof
@@ -277,7 +278,7 @@ class ProspectiveActivation:
             raise PersonalError('stale_source', 'source policy or origin changed')
         # Match the extraction adapter's strict/source_since key derivation,
         # not an alternate permissive raw-key fallback.
-        if self.config.personal.source_mode == 'native' or self.config.personal.source_since is not None:
+        if self.config.personal.source_mode == NATIVE_SOURCE_MODE or self.config.personal.source_since is not None:
             keys = [digest([k, expected_policy, origin]) for k in keys]
         if type(unit) is not int or not 0 <= unit < len(keys) or not key or keys[unit] != key:
             raise PersonalError('stale_source', 'canonical source unit changed or proof unavailable')

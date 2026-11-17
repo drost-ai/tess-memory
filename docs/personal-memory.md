@@ -123,8 +123,3 @@ A session bound to personal memory gets its own tools, separate from the coding 
 | `autobiography_search` | Search personal records |
 | `autobiography_history` | Earlier revisions of a record |
 | `autobiography_update` | Write or revise a record, with a reason |
-
-## Further reading
-
-The mechanisms (leases, fencing, revision checks, the reflection cycle) are described in
-the [engineering notes](engineering/personal-memory.md).

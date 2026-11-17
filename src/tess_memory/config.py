@@ -15,7 +15,7 @@ import tomllib
 import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from .autobiography_config import PersonalConfig
+from .autobiography_config import PersonalConfig, is_native_mode
 from pathlib import Path
 
 # Project slugs that are not real work: ephemeral cwds of our own LLM calls
@@ -65,7 +65,7 @@ class DataStore:
     # tess-core it overrides cwd-derived attribution while cwd stays as
     # provenance on the session row.
     project: str | None = None
-    # Whose sessions these are and the team they work in (Epic U); unset =
+    # Whose sessions these are and the team they work in; unset =
     # the instance's default owner, as before.
     user: str | None = None
     team: str | None = None
@@ -128,7 +128,7 @@ class Config:
     planning_default_project: str = ""
     planning_lock_writes_to_default: bool = False
 
-    # -- identity (Epic U) ---------------------------------------------------
+    # -- identity -------------------------------------------------------------
     # Who reads and writes through this process, bound at start; never a
     # model argument. Unset = the instance's default owner, unrestricted.
     identity_user: str | None = None
@@ -165,7 +165,7 @@ class Config:
     search_evidence_limit: int = 12      # final curated evidence cap
 
     # -- embedding -----------------------------------------------------------
-    embed_provider: str = "embeddings"  # profile name, or "local"
+    embed_provider: str = "local"  # "local", or a profile name
     embed_dims: int = 4096
     embed_model: str = "BAAI/bge-small-en-v1.5"  # local fallback model
     # Explicit model prefixes (e5: "query: "/"passage: "). None keeps the
@@ -624,11 +624,11 @@ def parse_manifest(document: Mapping[str, object], *, store_settings: Path | str
     provenance_root = None
     if "provenance_source_root" in envelope:
         provenance_root = _absolute(envelope["provenance_source_root"], "provenance_source_root")
-    if personal.get("source_mode") == "native" and provenance_root is None:
+    if is_native_mode(personal.get("source_mode")) and provenance_root is None:
         raise ValueError("Native source mode requires explicit provenance_source_root")
     if "provenance_ledger" in envelope:
         ledger = _absolute(envelope["provenance_ledger"], "provenance_ledger")
-        if personal.get("source_mode") == "native":
+        if is_native_mode(personal.get("source_mode")):
             personal["native_creation_ledger"] = str(ledger)
     search = raw.setdefault("search", {})
     if "agent" in search and not isinstance(search["agent"], bool):
