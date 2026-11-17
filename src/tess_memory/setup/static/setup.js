@@ -168,7 +168,7 @@
     const total = chosen.reduce((sum, source) => sum + source.sessions, 0);
     return [
       h('p', { class: 'eyebrow' }, 'Step 1 of 5'),
-      h('h1', null, 'What should go ', h('mark', null, 'into memory?')),
+      h('h1', null, 'What should go into ', h('mark', null, 'memory?')),
       h('p', { class: 'lede' }, 'Tess Memory reads the sessions your agents have already written. It only reads them; nothing in these folders is changed.'),
       h('div', { class: 'section' },
         rows.length ? h('div', { class: 'list' }, rows)
