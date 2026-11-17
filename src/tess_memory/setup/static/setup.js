@@ -169,7 +169,7 @@
     return [
       h('p', { class: 'eyebrow' }, 'Step 1 of 5'),
       h('h1', null, 'What should go into ', h('mark', null, 'memory?')),
-      h('p', { class: 'lede' }, 'Tess Memory reads the sessions your agents have already written. It only reads them; nothing in these folders is changed.'),
+      h('p', { class: 'lede' }, 'Everything your agents have already done is sitting in these folders. Pick what should become memory. Nothing in them is changed. Tess Memory will then keep adding new sessions of these folders as you continue your work with these agents.'),
       h('div', { class: 'section' },
         rows.length ? h('div', { class: 'list' }, rows)
                     : h('p', { class: 'note' }, 'No Claude Code or Codex sessions were found in your home folder. Add a folder below.')),
