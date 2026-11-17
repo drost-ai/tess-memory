@@ -247,7 +247,7 @@
         h('div', { class: 'fields-2' },
           h('label', { class: 'field' }, h('span', null, 'Provider'), provider),
           h('label', { class: 'field' }, h('span', null, 'API key'), key)),
-        h('p', { class: 'hint' }, keyHint()),
+        h('p', { class: 'hint' }, keyHint() + ' You choose the models on the next screen, from the ones this account offers.'),
         h('div', null, h('button', { type: 'submit', class: 'button button-primary' + (ui.busy === 'key' ? ' busy' : ''), disabled: Boolean(ui.busy) }, 'Connect')));
     } else {
       const url = h('input', { type: 'url', class: 'mono', id: 'endpoint-url', autocomplete: 'off', spellcheck: 'false', placeholder: 'http://localhost:11434/v1' });
@@ -255,7 +255,7 @@
       panel = h('form', { class: 'panel', onsubmit: (event) => { event.preventDefault(); act('key', '/api/model/key', { kind: 'compatible', base_url: url.value, api_key: key.value }, () => { ui.changeModel = false; }); } },
         h('label', { class: 'field' }, h('span', null, 'Address'), url, h('small', null, 'The base address of any service that speaks the OpenAI chat API, including a model on your own machine.')),
         h('label', { class: 'field' }, h('span', null, 'API key'), key),
-        h('p', { class: 'hint' }, keyHint()),
+        h('p', { class: 'hint' }, keyHint() + ' You choose the models on the next screen, from the ones this account offers.'),
         h('div', null, h('button', { type: 'submit', class: 'button button-primary' + (ui.busy === 'key' ? ' busy' : ''), disabled: Boolean(ui.busy) }, 'Connect')));
     }
     return [
