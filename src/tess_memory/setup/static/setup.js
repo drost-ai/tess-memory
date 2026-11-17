@@ -204,7 +204,7 @@
     const picking = !connection || ui.changeModel;
     const head = [
       h('p', { class: 'eyebrow' }, 'Step 2 of 5'),
-      h('h1', null, 'Connect a ', h('mark', null, 'model.')),
+      h('h1', null, 'Connect a ', h('mark', null, 'provider.')),
       h('p', { class: 'lede' }, 'A model reads each session and writes down what mattered: the decisions, the fixes, the state of the work. Tess Memory needs one to do its job.'),
     ];
     return picking ? [...head, ...connectModel(connection)] : [...head, ...chooseModels(connection)];
