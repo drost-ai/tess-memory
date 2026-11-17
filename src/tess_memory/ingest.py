@@ -169,8 +169,12 @@ def ingest(
     refresh_aggregates: bool | None = None,
     aggregates_only: bool = False,
     aggregate_levels: tuple[str, ...] | None = None,
+    redistil: bool = False,
 ) -> IngestStats:
-    """Use a process lock only when the requested sources include Codex."""
+    """Use a process lock only when the requested sources include Codex.
+
+    ``redistil`` distils the selected sessions again even though nothing in
+    them changed. It is the only thing that does: see `tess-memory redistil`."""
     with ExitStack() as stack:
         from .locks import ingestion_lock as store_ingestion_lock
         stack.enter_context(store_ingestion_lock(cfg.data_dir))
@@ -182,7 +186,7 @@ def ingest(
             from .incremental import ingest_incremental
             return ingest_incremental(cfg, store, embedder, llm, fallback_llm, limit=limit,
                                       retry_extractive=retry_extractive, session_ids=session_ids,
-                                      refresh_aggregates=refresh_aggregates)
+                                      refresh_aggregates=refresh_aggregates, redistil=redistil)
         calls_pool = None
         if llm is not None and (cfg.segment_workers > 1 or cfg.distillation_cache):
             calls_pool = stack.enter_context(DistillationPool(

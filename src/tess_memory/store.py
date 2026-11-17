@@ -125,6 +125,11 @@ CREATE TABLE IF NOT EXISTS plan_items(
     updated_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_plan_project ON plan_items(project);
+-- The plan is authored, not derived: nothing can rebuild it. No code path
+-- deletes a plan item or its history, and the database refuses if one tries.
+CREATE TRIGGER IF NOT EXISTS plan_items_are_kept BEFORE DELETE ON plan_items BEGIN
+    SELECT RAISE(ABORT, 'plan items are never deleted');
+END;
 CREATE TABLE IF NOT EXISTS plan_events(
     id INTEGER PRIMARY KEY,
     item_id INTEGER NOT NULL REFERENCES plan_items(id),
@@ -133,6 +138,9 @@ CREATE TABLE IF NOT EXISTS plan_events(
     detail TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_plan_events_item ON plan_events(item_id);
+CREATE TRIGGER IF NOT EXISTS plan_events_are_kept BEFORE DELETE ON plan_events BEGIN
+    SELECT RAISE(ABORT, 'plan history is never deleted');
+END;
 CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS aggregate_refresh(
     level TEXT NOT NULL,
@@ -184,6 +192,29 @@ WHEN EXISTS(SELECT 1 FROM embeddings WHERE memory_id=new.id)
     INSERT INTO vector_scope_versions VALUES('P:'||COALESCE(new.project,''),1) ON CONFLICT(scope) DO UPDATE SET revision=revision+1;
 END;
 """
+
+
+class EmbedderMismatch(RuntimeError):
+    """The settings name another embedding model than the one this store's
+    vectors were made with. Nothing is lost; ``tess-memory reembed`` moves the
+    store to the configured model."""
+
+
+def vector_space(descriptor: str) -> str:
+    """What makes two embedders comparable: the model and the vector size.
+
+    A hosted embedder is recorded as ``<profile>:<model>:<dims>d``. The
+    profile is only the name the settings give a provider, so renaming it, or
+    reaching the same model through another profile, is still the same space.
+    A local embedder's descriptor is its model and prefixes, kept as it is."""
+    if descriptor.startswith("local:") or descriptor.count(":") < 2:
+        return descriptor
+    rest, dims = descriptor.rsplit(":", 1)
+    return f"{rest.split(':', 1)[1]}:{dims}"
+
+
+def same_vector_space(first: str | None, second: str | None) -> bool:
+    return first is not None and second is not None and vector_space(first) == vector_space(second)
 
 
 @dataclass
@@ -762,7 +793,7 @@ class MemoryStore:
             ):
                 return False
             current = self.get_meta("embedder")
-            if current is not None and current != descriptor:
+            if current is not None and not same_vector_space(current, descriptor):
                 raise ValueError("plan embedding model differs from the memory store")
             if current is None:
                 self.set_meta("embedder", descriptor)
@@ -921,17 +952,25 @@ class MemoryStore:
             "INSERT OR REPLACE INTO meta(key, value) VALUES(?,?)", (key, value)
         )
 
+    def embedder_matches(self, descriptor: str) -> bool:
+        """Whether the configured embedder writes vectors this store can use
+        (true for a store that has none yet)."""
+        current = self.get_meta("embedder")
+        return current is None or same_vector_space(current, descriptor)
+
     def assert_embedder(self, descriptor: str) -> None:
-        """Vectors from different models/dims are not comparable — refuse to mix."""
+        """Vectors from different models/dims are not comparable: never mix
+        them. A mismatch stops new vectors being written; it is never a reason
+        to discard the store."""
         current = self.get_meta("embedder")
         if current is None:
             self.set_meta("embedder", descriptor)
             self.db.commit()
-        elif current != descriptor:
-            raise RuntimeError(
-                f"store was embedded with '{current}' but the active embedder is "
-                f"'{descriptor}'. Set TESS_MEMORY_EMBED_PROVIDER to match, or "
-                f"delete the db and re-ingest to switch vector spaces."
+        elif not same_vector_space(current, descriptor):
+            raise EmbedderMismatch(
+                f"This store's memories were embedded with '{current}', and the settings now name "
+                f"'{descriptor}'. Nothing is lost. Run `tess-memory reembed` to move the store to the "
+                f"new model; until then ingestion waits and search uses keywords only."
             )
 
     # ---------------- principals ----------------

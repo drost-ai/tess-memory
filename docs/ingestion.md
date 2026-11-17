@@ -128,7 +128,40 @@ A failed refresh keeps the previous version and stays queued.
   that is new.
 - You pay for retrieval only in agentic mode, a few short calls per search.
 - Re-checking unchanged sources is free.
-- Changing models does not re-process history.
+- Changing models, settings or the version of Tess Memory does not re-process history.
+
+## What never redoes your memory
+
+A session that has been distilled stays distilled. As long as its content has not changed,
+none of these sends it back to a model or changes what is stored for it:
+
+- another distillation, fallback or retrieval model, or another provider;
+- any `[ingest]` setting: segment sizes, the importance threshold, chunk size, how much
+  tool output is kept;
+- a new release of Tess Memory, including one that rewords its prompts.
+
+New settings and prompts apply to new sessions, and to what is added to an old session
+later. The first run after such a change reads each source once to confirm it still
+matches, with no model or embedding call.
+
+If you *want* old sessions distilled again, for example to benefit from a better model, ask
+for it. Nothing else does this:
+
+```sh
+tess-memory redistil --project ~/work/shop-api       # shows how many sessions
+tess-memory redistil --project ~/work/shop-api --yes
+tess-memory redistil --since 2026-10-01 --yes
+tess-memory redistil --all --yes
+```
+
+A session's current memory is replaced only when its new distillation succeeds.
+
+Changing the embedding model is the one change that needs a step from you, and it does not
+redo any distillation either: see
+[Changing the embedding model](models.md#embeddings).
+
+The plan board is never rebuilt, replaced or deleted by any of this. It is authored, not
+derived, and the database itself refuses to delete a plan item or its history.
 
 Run `tess-memory status` to see what is stored and what is pending, or
 `audit-sources` for a read-only inventory of sources against memory.

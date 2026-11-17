@@ -65,20 +65,40 @@ def search(
         return []
     filters = dict(project=project, levels=levels, kinds=kinds, after=after, before=before)
     with store.lock:
-        store.assert_embedder(embedder.descriptor)
-        needs_vector = store.has_vectors(**filters)
+        # A store whose vectors were made by another model than the settings
+        # name is still searched: by keywords, importance and recency, without
+        # the meaning signal, until `tess-memory reembed` has moved it over.
+        comparable = store.embedder_matches(embedder.descriptor)
+        if comparable:
+            store.assert_embedder(embedder.descriptor)
+        else:
+            _warn_keyword_only(store, embedder)
+        needs_vector = comparable and store.has_vectors(**filters)
     # Network work stays outside the SQLite snapshot and its local lock.
     qv = embedder.embed_query(query) if needs_vector else None
     while True:
         with store.read_snapshot() as cacheable:
-            if store.get_meta("embedder") != embedder.descriptor:
+            if store.embedder_matches(embedder.descriptor) != comparable:
                 raise RuntimeError("embedding space changed while preparing the query")
-            if qv is None and store.has_vectors(**filters):
+            if comparable and qv is None and store.has_vectors(**filters):
                 needs_vector = True
             else:
                 return _search_snapshot(store, query, qv, filters, limit, candidates, expand_chunks, cacheable)
         if needs_vector:
             qv = embedder.embed_query(query)
+
+
+_WARNED: set[int] = set()
+
+
+def _warn_keyword_only(store, embedder) -> None:
+    if id(store) in _WARNED:
+        return
+    _WARNED.add(id(store))
+    import sys
+    print(f"[search] this store was embedded with '{store.get_meta('embedder')}' and the settings name "
+          f"'{embedder.descriptor}': searching by keywords only. Run `tess-memory reembed` to restore search by meaning.",
+          file=sys.stderr)
 
 
 def _search_snapshot(store, query, qv, filters, limit, candidates, expand_chunks, cacheable):

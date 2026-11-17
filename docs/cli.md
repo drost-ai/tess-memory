@@ -73,6 +73,10 @@ tess-memory serve --user ana    # bind this server to one user
 | `refresh-aggregates` | Refresh pending project profiles and weekly digests, without reading sources |
 | `audit-sources` | A read-only inventory of sources against what is in memory. No model calls. |
 | `reconcile-attribution` | Move sessions to the right project after a configuration change. No model calls. |
+| `reembed` | Move the store to the embedding model the settings name, in place. Resumable; nothing is distilled again. |
+| `redistil` | Distil chosen sessions again with the current model and prompts. The only thing that redoes published memory. |
+
+Both show what they would do and change nothing until you add `--yes`.
 
 `reconcile-attribution --dry-run` reports what would move.
 
@@ -135,6 +139,9 @@ See [Scheduler](scheduler.md).
 | `observe` | Record service health over time, without model calls |
 
 ## Exit codes
+
+`ingest` exits 3 when the settings name another embedding model than the store was built
+with; nothing is changed, and `reembed` resolves it.
 
 Commands exit nonzero when errors remain, for example when a session could not be
 distilled by either model. A run that preserved existing memory after a failure still

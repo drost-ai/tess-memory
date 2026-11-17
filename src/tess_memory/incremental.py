@@ -35,10 +35,11 @@ def _policy_shape(cfg, embedder):
 
 
 def pipeline_policy(cfg, embedder):
-    """What a published distillation depends on: how sources are cut, the
-    prompts, and the embedding space. The model that wrote it is not part of
-    it: models change all the time, and a session someone already paid to
-    distil is not redone because the primary or fallback model changed."""
+    """How sessions are distilled now: how sources are cut, the prompts and
+    the embedding space. It is recorded with each publication and decides how
+    NEW work is done. It never makes published work stale: a session someone
+    already paid to distil is not redone because a setting, a prompt in a
+    newer release, or a model changed. Only `tess-memory redistil` redoes it."""
     return content_key(_policy_shape(cfg, embedder))
 
 
@@ -134,7 +135,7 @@ def _embed_changed(rows, previous, cache, embedder):
 
 
 def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=None,
-                       retry_extractive=False, session_ids=None, refresh_aggregates=None):
+                       retry_extractive=False, session_ids=None, refresh_aggregates=None, redistil=False):
     stats = IngestStats()
     started = time.monotonic()
     store.assert_embedder(embedder.descriptor)
@@ -296,7 +297,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             continue
                         if (not recovery and progress and progress['observed_signature'] == signature
                                 and progress['project'] == project
-                                and progress['status'] in {'indexed', 'pending_tail', 'trivial'} and not retry_extractive):
+                                and progress['status'] in {'indexed', 'pending_tail', 'trivial'} and not retry_extractive and not redistil):
                             if progress['session_id']:
                                 seen_sessions.setdefault(progress['session_id'], str(path))
                             stats.unchanged += 1
@@ -376,17 +377,17 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             continue
                         known_status = old_status or (store.file_status(old['source_path']) if old else None)
                         previous = store.session_rows_with_vectors(st.session_id)
-                        if 'models' not in state and state.get('indexed_units') and state.get('policy') not in (None, policy):
-                            # Published before the policy stopped naming models,
-                            # under whichever models and earlier form of the policy
-                            # were current then. That work was paid for: each such
-                            # source is re-read once after the upgrade and carried
-                            # forward here if its content still matches, never
-                            # redistilled because the recorded policy is unknown.
-                            # From then on it follows the policy like any other.
+                        if state.get('indexed_units') and state.get('policy') not in (None, policy):
+                            # Published under other settings, other prompts or
+                            # an earlier release. That work was paid for and is
+                            # the person's memory: the source is re-read once
+                            # and carried forward here while its content still
+                            # matches, never redistilled because how sessions
+                            # are processed has changed since. What is appended
+                            # to it later is distilled the current way.
                             state['policy'] = policy
-                            state['models'] = CARRIED_MODELS
-                        if (not retry_extractive and state.get('policy') == policy and state.get('indexed_units') == keys and old is not None):
+                            state.setdefault('models', CARRIED_MODELS)
+                        if (not retry_extractive and not redistil and state.get('policy') == policy and state.get('indexed_units') == keys and old is not None):
                             state.update(pending_tail=snapshot.pending_tail,
                                          revisions=[asdict(r) for r in snapshot.revisions])
                             if recovery:
@@ -410,7 +411,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                         # change an appended session would pay for its earlier
                         # units again. Seed it from its verified paid rows instead.
                         other_models = same_policy and not seed and state.get('models') != legacy_policy
-                        if (not retry_extractive and
+                        if (not retry_extractive and not redistil and
                                 (not indexed or (same_policy and (not tracking_matches or not seed_matches))
                                  or other_models or state.get('policy') in cfg.adopt_published_policies)):
                             seed = _bootstrap(snapshot, old, previous, cfg)
@@ -420,7 +421,7 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
                             stats.preserved += 1
                             record(ds, path, project, signature, 'awaiting_model', state, st.session_id)
                             continue
-                        if seed and seed['units'] == keys and old is not None and not retry_extractive:
+                        if seed and seed['units'] == keys and old is not None and not retry_extractive and not redistil:
                             state = {"policy": policy, "indexed_units": keys, "seed": seed,
                                      "pending_tail": snapshot.pending_tail, "revisions": [asdict(r) for r in snapshot.revisions],
                                      "boundary_kinds": snapshot.unit_kinds}

@@ -302,7 +302,7 @@ class EmbeddedConfigurationTests(unittest.TestCase):
         embedder.embed_query.side_effect = AssertionError('no query embedding')
         for incremental in (False, True):
             cfg = Config(data_dir=self.root, incremental_ingestion=incremental)
-            with self.subTest(incremental=incremental), self.assertRaisesRegex(RuntimeError, 'store was embedded with'):
+            with self.subTest(incremental=incremental), self.assertRaisesRegex(RuntimeError, 'Nothing is lost. Run `tess-memory reembed`'):
                 ingest(cfg, store, embedder, None)
             self.assertEqual(list(store.db.iterdump()), before)
         embedder.embed_passages.assert_not_called()

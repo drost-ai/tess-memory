@@ -175,7 +175,10 @@ aspirations:
 - **It never loses what it has.** If a model fails, refuses or returns garbage, the
   last good memory is kept and the work is retried. Writes are transactional.
 - **You never pay twice.** Ingestion is incremental and content-verified. An unchanged
-  session costs nothing to re-check, and changing models does not re-process your history.
+  session costs nothing to re-check, and no change of model, settings or version
+  re-processes your history. Even the embedding model can be changed in place.
+- **The plan cannot be wiped.** It is authored, not derived, so nothing could rebuild it.
+  No command deletes it, and the database itself refuses to.
 - **Bounded cost.** Per-run limits on sources and model calls, shared rate limits across
   workers, quiet periods so an active conversation is not distilled mid-thought.
 - **Private by default, shareable by choice.** In a team store, distilled knowledge and the

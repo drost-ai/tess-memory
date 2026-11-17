@@ -157,6 +157,8 @@ def _write_keyword_mirror(store: MemoryStore, item) -> MemoryRow:
 
 
 def _embed_mirror(store: MemoryStore, embedder: Embedder, item, row: MemoryRow) -> None:
+    if not store.embedder_matches(embedder.descriptor):
+        return  # keyword-only until `tess-memory reembed`; the plan item itself is saved
     try:
         vector = embedder.embed_passages([row.content])[0]
         store.attach_plan_embedding(item["id"], row, vector, embedder.descriptor)

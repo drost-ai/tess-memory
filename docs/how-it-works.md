@@ -44,7 +44,8 @@ an extractive summary so it is still searchable.
 
 Chunks, memories, summaries and plan items are embedded, by a hosted embedding model or a
 local one. A store holds one vector space: it records which model produced its vectors and
-refuses to mix in another.
+never mixes in another. Moving a store to another embedding model is done in place, with
+`tess-memory reembed`.
 
 ## 4. Publish
 

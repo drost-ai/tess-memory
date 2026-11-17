@@ -347,18 +347,60 @@ class IncrementalIngestTests(unittest.TestCase):
         self.backend.cache_identity = 'a-later-model'
         self.assertEqual(self.run_ingest().model_calls, 0)
         self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
-        # A later real change to the policy applies to it like to any other source.
+        # Nor on how sessions are cut: a later change to the policy leaves it published.
         self.cfg.segment_chars = self.cfg.segment_chars + 1
-        self.assertGreater(self.run_ingest().model_calls, 0)
+        self.assertEqual(self.run_ingest().model_calls, 0)
+        self.assertEqual(before, self.paid_rows())
 
-    def test_a_policy_change_still_redistils_work_published_under_the_current_scheme(self):
+    def test_no_setting_and_no_new_release_redistils_a_published_session(self):
+        from tess_memory import incremental
+        from tess_memory.incremental import pipeline_policy
         self.run_ingest()
-        self.assertIn('models', json.loads(self.store.source_progress(str(self.path))['state']))
-        self.cfg.segment_chars = self.cfg.segment_chars + 1
-        # It goes through distillation again (identical requests come from the
-        # checkpoint cache), not through the carry-forward.
-        result = self.run_ingest()
-        self.assertEqual((result.unchanged, result.distilled), (0, 1))
+        before = self.paid_rows()
+        models = json.loads(self.store.source_progress(str(self.path))['state'])['models']
+        counts = len(self.backend.calls), len(self.embedder.calls)
+        changes = [lambda: setattr(self.cfg, 'segment_chars', self.cfg.segment_chars + 1),
+                   lambda: setattr(self.cfg, 'min_importance', 0.9),
+                   lambda: setattr(self.cfg, 'chunk_chars', self.cfg.chunk_chars - 500),
+                   lambda: setattr(self.cfg, 'tool_result_snippet', 50),
+                   lambda: setattr(self.cfg, 'min_session_chars', 1),
+                   # a release that rewords a distillation prompt
+                   lambda: self.patch_prompt(incremental, 'REDUCE_PROMPT', incremental.REDUCE_PROMPT + ' Be brief.')]
+        for change in changes:
+            previous = pipeline_policy(self.cfg, self.embedder)
+            change()
+            self.assertNotEqual(pipeline_policy(self.cfg, self.embedder), previous)
+            result = self.run_ingest()
+            self.assertEqual((result.unchanged, result.distilled, result.model_calls, result.embedded_passages), (1, 0, 0, 0))
+            self.assertEqual(before, self.paid_rows())
+        self.assertEqual(counts, (len(self.backend.calls), len(self.embedder.calls)))
+        state = json.loads(self.store.source_progress(str(self.path))['state'])
+        self.assertEqual((state['policy'], state['models']), (pipeline_policy(self.cfg, self.embedder), models))
+        # What is added to the session afterwards is the only thing paid for.
+        self.add_unit()
+        count = len(self.backend.calls)
+        self.run_ingest()
+        maps = [p for p in self.backend.calls[count:] if p.startswith('A completed persisted-message')]
+        self.assertEqual(len(maps), 1)
+        self.assertNotIn('Remember the durable workspace decision', maps[0])
+
+    def patch_prompt(self, module, name, value):
+        original = getattr(module, name)
+        setattr(module, name, value)
+        self.addCleanup(setattr, module, name, original)
+
+    def test_only_an_explicit_redistil_distils_a_published_session_again(self):
+        self.run_ingest()
+        self.cfg.min_importance = 0.9  # a change that makes the old checkpoint requests differ in outcome
+        count = len(self.backend.calls)
+        again = ingest(self.cfg, self.store, self.embedder, self.backend, refresh_aggregates=False,
+                       session_ids={row[0] for row in self.store.db.execute('SELECT id FROM sessions')}, redistil=True)
+        self.assertEqual((again.unchanged, again.distilled), (0, 1))
+        other = ingest(self.cfg, self.store, self.embedder, self.backend, refresh_aggregates=False,
+                       session_ids={'some-other-session'}, redistil=True)
+        self.assertEqual((other.distilled, other.model_calls), (0, 0))
+        self.assertGreaterEqual(len(self.backend.calls), count)
+        self.assertEqual(self.run_ingest().distilled, 0)
 
     def test_explicit_profile_repair_preserves_verified_published_rows(self):
         self.run_ingest();before=self.paid_rows()

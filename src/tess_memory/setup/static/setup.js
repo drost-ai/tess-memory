@@ -369,7 +369,7 @@
     return [
       h('p', { class: 'eyebrow' }, 'Step 3 of 5'),
       h('h1', null, 'Connect an ', h('mark', null, 'embedding model.')),
-      h('p', { class: 'lede' }, 'An embedding model turns text into numbers so a question can find what it means, not just the words it uses. One store uses one embedding model, so this is the choice to make before a large history is read.'),
+      h('p', { class: 'lede' }, 'An embedding model turns text into numbers, so a search can match on meaning and not just words. You can change it later, but every memory then has to be embedded again.'),
       h('div', { class: 'section choices' },
         tab('local', 'On this machine', 'Private and free. A small model is downloaded once.'),
         tab('google', 'Google', 'Gemini embeddings, with your own API key.'),

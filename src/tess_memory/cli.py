@@ -29,7 +29,7 @@ def cmd_ingest(args: argparse.Namespace) -> int:
     from .embed import make_embedder
     from .ingest import ingest
     from .llm import EngineBackend
-    from .store import MemoryStore
+    from .store import EmbedderMismatch, MemoryStore
 
     cfg = CONFIG
     if getattr(args, "codex_only", False):
@@ -65,6 +65,9 @@ def cmd_ingest(args: argparse.Namespace) -> int:
             aggregates_only=getattr(args, "aggregates_only", False),
             aggregate_levels=tuple(args.aggregate_levels) if getattr(args, 'aggregate_levels', None) else None,
         )
+    except EmbedderMismatch as exc:
+        print(f"[ingest] {exc}", file=sys.stderr)
+        return 3
     except ValueError as exc:
         if not any(ds.type == "codex" for ds in cfg.data_stores):
             raise
@@ -349,6 +352,97 @@ def cmd_codex_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_redistil(args: argparse.Namespace) -> int:
+    """Distil sessions again that are already in memory. Nothing else does."""
+    from dataclasses import replace
+    from .embed import make_embedder
+    from .ingest import ingest
+    from .llm import EngineBackend
+    from .store import MemoryStore
+
+    cfg = CONFIG
+    store = MemoryStore(cfg.db_path)
+    try:
+        query, values = "SELECT id FROM sessions WHERE 1=1", []
+        if args.project:
+            query, values = query + " AND project=?", values + [_to_slug(args.project)]
+        if args.since:
+            query, values = query + " AND COALESCE(ended_at, started_at) >= ?", values + [args.since]
+        chosen = {row["id"] for row in store.db.execute(query, values)}
+        if args.session_id:
+            chosen = {sid for sid in chosen if sid in set(args.session_id) or "codex:" + sid in set(args.session_id)} \
+                if (args.project or args.since) else set(args.session_id)
+        if not (args.all or args.project or args.since or args.session_id):
+            print("Choose what to distil again: --session-id, --project, --since, or --all.", file=sys.stderr)
+            return 2
+        print(f"{len(chosen)} session(s) would be distilled again with the model and prompts now configured. "
+              "Their current memories are replaced only when the new distillation succeeds.", file=sys.stderr)
+        if not chosen:
+            return 0
+        if not args.yes:
+            print("Nothing was changed. Run again with --yes to do it.", file=sys.stderr)
+            return 0
+        # The verified-unit path is the one that keeps the last good memory when a model fails.
+        cfg = replace(cfg, incremental_ingestion=True, distillation_cache=True)
+        llm = EngineBackend(cfg, probe=False)
+        fallback = EngineBackend.for_role(cfg, "fallback") if cfg.engine_fallback_profile else None
+        stats = ingest(cfg, store, make_embedder(cfg), llm, fallback_llm=fallback, session_ids=chosen,
+                       refresh_aggregates=False, redistil=True)
+    finally:
+        store.close()
+    print(json.dumps({key: getattr(stats, key) for key in ("scanned", "distilled", "unchanged", "model_calls", "errors")}, indent=2))
+    return 1 if stats.errors else 0
+
+
+def cmd_reembed(args: argparse.Namespace) -> int:
+    """Move the store to the embedding model the settings (or --to) name."""
+    from pathlib import Path
+    from . import reembed
+    from .config import load_config
+    from .embed import make_embedder
+    from .store import MemoryStore
+
+    cfg = CONFIG
+    target_cfg = load_config(Path(args.to).expanduser()) if args.to else cfg
+    if args.to and target_cfg.db_path.resolve() != cfg.db_path.resolve():
+        print("--to must describe the same store (the same [storage] data_dir) with another [embedding].", file=sys.stderr)
+        return 2
+    store = MemoryStore(cfg.db_path)
+    try:
+        embedder = make_embedder(target_cfg)
+        before = reembed.status(store, embedder.descriptor)
+        if not before["needed"]:
+            print(f"Nothing to do: the store already uses {before['current'] or 'no embedding model yet'}.", file=sys.stderr)
+            return 0
+        print(f"Re-embedding {before['rows']} stored rows: {before['current']} -> {before['target']}"
+              + (f" ({before['staged']} already done)" if before["staged"] else "") + ".\n"
+              "No session is read or distilled again and the plan is not touched. The store keeps working on its "
+              "current vectors until every row is done; stopping this is safe and it resumes where it stopped.", file=sys.stderr)
+        if not args.yes:
+            print("Nothing was changed. Run again with --yes to do it.", file=sys.stderr)
+            return 0
+        shown = [-1]
+
+        def progress(done: int, total: int) -> None:
+            percent = int(done * 100 / max(1, total))
+            if percent != shown[0]:
+                shown[0] = percent
+                print(f"[reembed] {done}/{total} ({percent}%)", file=sys.stderr, flush=True)
+
+        try:
+            result = reembed.reembed(store, embedder, progress=progress)
+        except KeyboardInterrupt:
+            print("\nStopped. Nothing was switched; run the same command to continue.", file=sys.stderr)
+            return 130
+    finally:
+        store.close()
+    print(json.dumps(result, indent=2))
+    if args.to:
+        print(f"The store now uses {result['target']}. Put the [embedding] section of {args.to} into your settings file "
+              "now: until it matches, ingestion waits and search uses keywords only.", file=sys.stderr)
+    return 0
+
+
 def cmd_setup(args: argparse.Namespace) -> int:
     from pathlib import Path
     from .setup.app import run
@@ -413,6 +507,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--no-keychain", action="store_true",
                    help="keep API keys in a private file beside the settings instead of the system keychain")
     p.set_defaults(fn=cmd_setup)
+
+    p = sub.add_parser("redistil", help="Distil sessions again that are already in memory (never happens by itself)")
+    p.add_argument("--session-id", action="append", help="one session; repeat for several")
+    p.add_argument("--project", help="every session of a project (slug or path)")
+    p.add_argument("--since", help="sessions that ended on or after this ISO date")
+    p.add_argument("--all", action="store_true", help="every session in the store")
+    p.add_argument("--yes", action="store_true", help="do it; without this only the count is shown")
+    p.set_defaults(fn=cmd_redistil)
+
+    p = sub.add_parser("reembed", help="Move the store to another embedding model, in place")
+    p.add_argument("--to", help="a settings file for this store with the new [embedding]; default: the active settings")
+    p.add_argument("--yes", action="store_true", help="do it; without this only what would happen is shown")
+    p.set_defaults(fn=cmd_reembed)
 
     p = sub.add_parser("ingest", help="Ingest new/changed session transcripts")
     p.add_argument("--limit", type=int, default=None, help="max sessions to process")

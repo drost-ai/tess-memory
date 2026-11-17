@@ -112,9 +112,28 @@ batch_size = 64
 ```
 
 **One store, one vector space.** A store records which model produced its vectors and
-refuses to mix in another, because vectors from different models cannot be compared.
-Choose before you ingest a large history: changing the embedding model later means
-embedding the store again.
+never mixes in another, because vectors from different models cannot be compared. The
+provider profile's name is not part of that: renaming a profile, or reaching the same model
+through another one, changes nothing.
+
+**Changing the embedding model.** You can, and you lose nothing. Point `[embedding]` at the
+new model and run:
+
+```sh
+tess-memory reembed          # shows what it would do
+tess-memory reembed --yes
+```
+
+Every stored row is embedded again with the new model. No session is read or distilled
+again, and the plan is not touched. The new vectors are staged beside the old ones, so it
+can be stopped and continued, and one transaction switches the store over when every row
+is done. If it is interrupted before that, the store is exactly as it was.
+
+Between changing the setting and finishing `reembed`, ingestion waits and search uses
+keywords, importance and recency without the meaning signal. To avoid that gap on a large
+store, leave your settings as they are and give `reembed` the new ones in a copy
+(`tess-memory reembed --to new-settings.toml --yes`): the store keeps working on its
+current vectors throughout, and you switch your settings file when it finishes.
 
 A failure of a hosted embedding provider never silently falls back to local vectors.
 
@@ -122,7 +141,8 @@ A failure of a hosted embedding provider never silently falls back to local vect
 
 Changing the distillation or retrieval model is free. Existing memories stay as they are,
 and only new or changed sessions use the new model. Tess Memory does not re-distil your
-history because a setting changed.
+history because a model, a setting, or a prompt in a newer release changed. See
+[what never redoes your memory](ingestion.md#what-never-redoes-your-memory).
 
 ## Running fully offline
 
