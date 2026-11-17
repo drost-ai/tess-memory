@@ -400,7 +400,7 @@
           h('div', { class: 'row-title' }, target.label, ' ',
             ready ? h('span', { class: 'badge ok' }, 'Connected')
               : target.current ? h('span', { class: 'badge' }, 'Connected, no instructions yet')
-                : target.registered ? h('span', { class: 'badge' }, 'Connected to another store') : null),
+                : target.registered ? h('span', { class: 'badge' }, 'Connected to another store' + (target.registered_as && target.registered_as !== 'tess-memory' ? ' as ' + target.registered_as : '')) : null),
           h('div', { class: 'row-sub mono' }, target.display_path),
           h('div', { class: 'row-sub' }, target.guidance
             ? 'Usage instructions are in ' + target.guidance_file + '.'

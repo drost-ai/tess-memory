@@ -36,14 +36,36 @@ def _claude_config(home: Path) -> Path:
     return home.parent / ".claude.json" if home.name == ".claude" else home / ".claude.json"
 
 
-def _registered(kind: str, home: Path) -> dict[str, Any] | None:
+def _is_memory_server(entry: Any) -> bool:
+    """Whether a registered server is Tess Memory, whatever it was named."""
+    if not isinstance(entry, dict):
+        return False
+    words = [str(entry.get("command") or ""), *[str(item) for item in entry.get("args") or []]]
+    ours = any(word in ("tess-memory", "tess_memory.cli") or word.endswith("/tess-memory") for word in words)
+    return ours and any(word in ("serve", "codex-serve") for word in words)
+
+
+def _settings_of(entry: dict[str, Any]) -> str | None:
+    """The settings file a registered memory server was given."""
+    named = (entry.get("env") or {}).get("TESS_MEMORY_SETTINGS")
+    args = [str(item) for item in entry.get("args") or []]
+    if not named and "--settings" in args[:-1]:
+        named = args[args.index("--settings") + 1]
+    return str(Path(named).expanduser()) if named else None
+
+
+def _registered(kind: str, home: Path) -> tuple[str, dict[str, Any]] | None:
+    """The agent's Tess Memory server and the name it is registered under.
+    The usual name wins; otherwise any server that runs Tess Memory counts,
+    so an install made by hand under another name is not given a second one."""
     try:
         if kind == "claude-code":
             servers = json.loads(_claude_config(home).read_text(encoding="utf-8")).get("mcpServers") or {}
         else:
             servers = tomllib.loads((home / "config.toml").read_text(encoding="utf-8")).get("mcp_servers") or {}
-        entry = servers.get(SERVER)
-        return entry if isinstance(entry, dict) else None
+        if isinstance(servers.get(SERVER), dict):
+            return SERVER, servers[SERVER]
+        return next(((name, entry) for name, entry in servers.items() if _is_memory_server(entry)), None)
     except (OSError, ValueError, AttributeError):
         return None
 
@@ -56,13 +78,12 @@ def targets(sources: list[dict[str, Any]], settings: Path) -> list[dict[str, Any
         if kind not in ("claude-code", "codex") or not home or home in seen:
             continue
         seen.add(home)
-        entry = _registered(kind, Path(home))
-        env = (entry or {}).get("env") or {}
+        name, entry = _registered(kind, Path(home)) or (None, None)
         found.append({"id": f"{kind}:{home}", "type": kind, "home": home, "label": source.get("label"),
                       "display_path": source.get("display_home") or home,
                       "cli": shutil.which("claude" if kind == "claude-code" else "codex") is not None,
-                      "registered": entry is not None,
-                      "current": bool(entry) and env.get("TESS_MEMORY_SETTINGS") == str(settings),
+                      "registered": entry is not None, "registered_as": name,
+                      "current": name == SERVER and _settings_of(entry) == str(settings),
                       "guidance": guidance.present(kind, Path(home)),
                       "guidance_file": guidance.FILES[kind]})
     return found
@@ -84,11 +105,11 @@ def register(target_id: str, sources: list[dict[str, Any]], settings: Path, *, r
     if target["type"] == "claude-code":
         if home.name != ".claude":
             environment["CLAUDE_CONFIG_DIR"] = str(home)
-        remove = ["claude", "mcp", "remove", "--scope", "user", SERVER]
+        remove = ["claude", "mcp", "remove", "--scope", "user", target["registered_as"] or SERVER]
         add = ["claude", "mcp", "add-json", "--scope", "user", SERVER, json.dumps({"type": "stdio", **entry})]
     else:
         environment["CODEX_HOME"] = str(home)
-        remove = ["codex", "mcp", "remove", SERVER]
+        remove = ["codex", "mcp", "remove", target["registered_as"] or SERVER]
         add = ["codex", "mcp", "add", SERVER, *[f"--env={key}={value}" for key, value in entry["env"].items()],
                "--", entry["command"], *entry["args"]]
     try:

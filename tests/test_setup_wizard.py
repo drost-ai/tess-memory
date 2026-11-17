@@ -405,3 +405,27 @@ def test_the_first_batch_hands_the_rest_to_the_background_service(machine, monke
     monkeypatch.setattr(keepcurrent, "install", refuse)
     setup.ingest.after()
     assert client.get("/api/state").json()["scheduler"]["error"] == {"code": "scheduler_install_failed", "detail": "launchctl said no"}
+
+
+def test_a_memory_server_registered_under_another_name_is_recognised(machine, monkeypatch):
+    _, user = machine
+    settings = user / "store/settings.toml"
+    sources = [{**item, "enabled": True} for item in detect.detect_sources(user)]
+    (user / ".codex/config.toml").write_text(
+        '[mcp_servers.docs]\ncommand = "npx"\nargs = ["docs-server", "serve"]\n\n'
+        '[mcp_servers.tess-memory-codex]\ncommand = "/usr/local/bin/uv"\n'
+        'args = ["run", "--directory", "/src/tess-memory", "tess-memory", "codex-serve", "--settings", "/elsewhere/settings.toml"]\n')
+    monkeypatch.setattr(agents.shutil, "which", lambda name: "/usr/bin/" + name)
+    codex = next(item for item in agents.targets(sources, settings) if item["type"] == "codex")
+    assert (codex["registered"], codex["registered_as"], codex["current"]) == (True, "tess-memory-codex", False)
+    calls = []
+
+    def run(command, **_):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    agents.register(codex["id"], sources, settings, run=run)
+    assert calls[0] == ["codex", "mcp", "remove", "tess-memory-codex"] and calls[1][:4] == ["codex", "mcp", "add", "tess-memory"]
+    assert agents._settings_of({"args": ["serve", "--settings", "~/x.toml"]}) == str(Path("~/x.toml").expanduser())
+    assert agents._is_memory_server({"command": "python", "args": ["-m", "tess_memory.cli", "serve"]})
+    assert not agents._is_memory_server({"command": "npx", "args": ["docs-server", "serve"]})
