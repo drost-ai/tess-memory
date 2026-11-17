@@ -229,3 +229,24 @@ def test_settings_cannot_be_rendered_from_half_a_setup():
     assert apply.missing({}) == ["sources", "model", "embedding"]
     with pytest.raises(SetupError, match="incomplete"):
         apply.render(Path("/store"), Path("/store/providers.yaml"), {"sources": [{"name": "a", "type": "codex", "path": "/a"}]})
+
+
+def test_the_chatgpt_sign_in_link_carries_a_host_id_openai_accepts(machine):
+    import asyncio
+    import uuid
+    from urllib.parse import parse_qs, urlsplit
+
+    setup, _ = session(machine, keychain=FakeKeychain())
+    setup.vault.meta["chatgpt"]["host_id"] = "an-id-from-before"  # not in the form OpenAI takes: replaced
+
+    async def link():
+        started = await setup.chatgpt.start()
+        await setup.chatgpt.cancel()
+        return started["url"]
+
+    query = parse_qs(urlsplit(asyncio.run(link())).query)
+    host_id = query["ext_agent_host_id"][0]
+    assert host_id.startswith("urn:uuid:") and str(uuid.UUID(host_id[9:])) == host_id[9:]
+    assert host_id == setup.vault.meta["chatgpt"]["host_id"]
+    assert (query["client_id"], query["agent_name_hint"]) == (["dynamic_agent_client"], ["Tess Memory"])
+    assert query["redirect_uri"][0].startswith("http://127.0.0.1:")

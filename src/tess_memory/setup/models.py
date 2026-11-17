@@ -22,6 +22,13 @@ DISCLOSURE = ("Signing in with ChatGPT lets Tess Memory use your ChatGPT plan to
               "ChatGPT conversations.")
 
 
+def new_host_id() -> str:
+    """This installation's stable id for OpenAI's sign-in, made once and kept.
+    OpenAI accepts only a UUID in ``urn:uuid:`` form here."""
+    import uuid
+    return f"urn:uuid:{uuid.uuid4()}"
+
+
 async def connect_with_key(vault: Vault, providers: ProviderFile, kind: str, *, api_key: Any = None, base_url: Any = None) -> dict[str, Any]:
     """Keep the key, reach the provider with it, and record the connection.
     A key that does not work is not kept."""
@@ -70,10 +77,10 @@ class ChatGPT:
         ok, reason = await self.available()
         if not ok:
             raise SetupError(reason)
-        from tess_core.providers.chatgpt_account import SignIn, new_host_id
+        from tess_core.providers.chatgpt_account import SignIn
         await self.cancel()
         saved = self.vault.meta["chatgpt"]
-        if not saved.get("host_id"):
+        if not str(saved.get("host_id") or "").startswith("urn:uuid:"):
             saved["host_id"] = new_host_id()
             self.vault.save()
         try:
