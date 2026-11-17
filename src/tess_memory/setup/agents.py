@@ -71,7 +71,8 @@ def _registered(kind: str, home: Path) -> tuple[str, dict[str, Any]] | None:
 
 
 def targets(sources: list[dict[str, Any]], settings: Path) -> list[dict[str, Any]]:
-    """Each agent home among the chosen sources, and whether it has the server."""
+    """Each agent home given, and whether it has the server. ``sources`` is
+    any list of records with a ``type`` and a ``home``."""
     found, seen = [], set()
     for source in sources:
         kind, home = source.get("type"), source.get("home")

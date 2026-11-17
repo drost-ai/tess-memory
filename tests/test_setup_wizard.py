@@ -429,3 +429,17 @@ def test_a_memory_server_registered_under_another_name_is_recognised(machine, mo
     assert agents._settings_of({"args": ["serve", "--settings", "~/x.toml"]}) == str(Path("~/x.toml").expanduser())
     assert agents._is_memory_server({"command": "python", "args": ["-m", "tess_memory.cli", "serve"]})
     assert not agents._is_memory_server({"command": "npx", "args": ["docs-server", "serve"]})
+
+
+def test_every_agent_can_be_connected_whatever_sources_were_chosen(machine):
+    setup, client = session(machine, keychain=None)
+    _, user = machine
+    (user / ".claude-second").mkdir()
+    (user / ".claude-second/settings.json").write_text("{}")  # an agent home with no sessions yet
+    (user / ".codex-notes.txt").write_text("not a home")
+    found = client.get("/api/state").json()["sources"]
+    only_codex = [{"type": s["type"], "path": s["path"], "enabled": s["type"] == "codex"} for s in found]
+    state = client.post("/api/sources", json={"sources": only_codex}).json()
+    assert [s["name"] for s in state["sources"] if s["enabled"]] == ["codex"]
+    assert [(t["type"], t["display_path"]) for t in state["agents"]["targets"]] == [
+        ("claude-code", "~/.claude"), ("claude-code", "~/.claude-second"), ("codex", "~/.codex")]

@@ -82,6 +82,20 @@ def detect_sources(home: Path | None = None) -> list[dict[str, Any]]:
     return found
 
 
+def agent_homes(home: Path | None = None) -> list[dict[str, Any]]:
+    """Every Claude Code and Codex home on this machine, whether or not it has
+    sessions yet and whether or not it was chosen as a source: any of them
+    may be given the memory."""
+    home = Path(home or Path.home())
+    found = []
+    for kind, pattern, marks in (("claude-code", ".claude*", ("projects", "settings.json", ".claude.json", "CLAUDE.md")),
+                                 ("codex", ".codex*", ("config.toml", "auth.json", "sessions", "AGENTS.md"))):
+        for directory in sorted(home.glob(pattern)):
+            if directory.is_dir() and any((directory / mark).exists() for mark in marks):
+                found.append({"type": kind, "home": str(directory), "label": LABELS[kind], "display_home": _tilde(str(directory), home)})
+    return found
+
+
 def _tilde(path: str, home: Path) -> str:
     try:
         return "~/" + str(Path(path).relative_to(home))

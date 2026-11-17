@@ -76,6 +76,14 @@ class Setup:
         except SetupError as error:
             self.scheduler_error = {"code": error.code, "detail": error.detail}
 
+    def agent_homes(self) -> list[dict[str, Any]]:
+        """Every agent that can be given the memory: all the agent homes on
+        this machine, plus any folder added by hand as a source. Which
+        sources are read and which agents are connected are separate choices."""
+        homes = detect.agent_homes(self.user_home)
+        known = {item["home"] for item in homes}
+        return homes + [source for source in self.chosen_sources() if source.get("home") not in known]
+
     def chosen_sources(self) -> list[dict[str, Any]]:
         saved = self.vault.draft.get("sources")
         if saved is not None:
@@ -97,7 +105,7 @@ class Setup:
                                                             "attempt": self.chatgpt.outcome, "disclosure": models.DISCLOSURE}},
             "embedding": {"choice": embedding, "local": self.local_models.catalogue(), "job": self.local_models.job,
                           "presets": embeddings.PRESETS},
-            "agents": {"targets": agents.targets([s for s in sources if s.get("enabled", True)], self.settings),
+            "agents": {"targets": agents.targets(self.agent_homes(), self.settings),
                        "entry": {"mcpServers": {agents.SERVER: agents.server_entry(self.settings)}},
                        "guidance": guidance.text("claude-code")},
             "ingest": self.ingest.status,
@@ -223,8 +231,7 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
     async def register(body):
         if not setup.vault.meta.get("applied"):
             raise SetupError("settings_not_written")
-        return await asyncio.to_thread(agents.register, body.get("id"), [s for s in setup.chosen_sources() if s.get("enabled", True)],
-                                       setup.settings)
+        return await asyncio.to_thread(agents.register, body.get("id"), setup.agent_homes(), setup.settings)
 
     async def ingest_start(body):
         if not setup.vault.meta.get("applied"):

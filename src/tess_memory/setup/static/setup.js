@@ -412,7 +412,7 @@
     return [
       h('p', { class: 'eyebrow' }, 'Step 4 of 5'),
       h('h1', null, 'Give your agents ', h('mark', null, 'the memory.')),
-      h('p', { class: 'lede' }, 'Each agent you connect gets twelve tools: search what was done before, pick up a project where it was left, and keep a plan that outlasts the session. Connecting also adds a short set of instructions to the agent\'s own instruction file, so it reaches for them without being asked.'),
+      h('p', { class: 'lede' }, 'Connect any agent on this machine, whether or not its own sessions are being read. Each agent you connect gets twelve tools: search what was done before, pick up a project where it was left, and keep a plan that outlasts the session. Connecting also adds a short set of instructions to the agent\'s own instruction file, so it reaches for them without being asked.'),
       h('p', { class: 'section note ok' }, 'Settings saved to ', h('span', { class: 'mono' }, S.settings), '.',
         ui.written && ui.written.backup ? [' The earlier file was kept as ', h('span', { class: 'mono' }, ui.written.backup), '.'] : null),
       rows.length ? h('div', { class: 'section' }, h('h2', null, 'Agents on this machine'), h('div', { class: 'list' }, rows)) : null,
