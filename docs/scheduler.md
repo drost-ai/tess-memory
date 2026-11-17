@@ -6,6 +6,17 @@ and digests on their own cadence, and recovers by itself when something goes wro
 
 One scheduler can look after several stores.
 
+`tess-memory setup` turns it on for the store it sets up, unless you untick "Keep reading
+in the background": after the first batch of sessions it writes `scheduler.toml` beside the
+settings and installs the scheduler as a login service (launchd on macOS, a systemd user
+service on Linux). It checks for new sessions every 5 minutes, reads a session once it has
+been still for 15 minutes, refreshes profiles hourly and digests daily, and at 10 PM in
+your time zone retries what failed that day. Setup never replaces a scheduler it did not
+install, and "Turn it off" on the same page removes it again. On Linux, run
+`loginctl enable-linger` once if it should keep running while you are logged out.
+
+The rest of this page is for configuring it by hand, or for several stores.
+
 ## Configure
 
 Write a scheduler file, outside the checkout:

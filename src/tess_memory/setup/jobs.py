@@ -29,6 +29,7 @@ class FirstIngest:
     def __init__(self, settings: Path) -> None:
         self.settings = settings
         self.status: dict[str, Any] = {"state": "idle"}
+        self.after: Any = None  # called once a run has finished by itself
         self._process: subprocess.Popen[str] | None = None
 
     def _environment(self) -> dict[str, str]:
@@ -69,6 +70,11 @@ class FirstIngest:
         if status["state"] == "running":
             status["state"] = "finished" if code == 0 or (status["stats"] or {}).get("distilled") else "failed"
         status["exit_code"] = code
+        if status["state"] == "finished" and self.after is not None:
+            try:
+                self.after()
+            except Exception:  # noqa: BLE001 (what follows a run must not undo it)
+                pass
 
     def stop(self) -> None:
         if self._process is not None and self._process.poll() is None:

@@ -310,3 +310,98 @@ def test_an_agent_already_connected_only_gets_the_missing_instructions(machine, 
         raise AssertionError("the agent's command must not run")
 
     assert agents.register(target["id"], sources, settings, run=run)["guidance_outcome"] == "created"
+
+
+def _store_settings(home: Path, user: Path) -> Path:
+    home.mkdir(parents=True, exist_ok=True)
+    settings = home / "settings.toml"
+    settings.write_text(f'[[data_stores]]\nname = "codex"\ntype = "codex"\npath = "{user / ".codex"}"\n\n[storage]\ndata_dir = "{home}"\n')
+    return settings
+
+
+def test_the_scheduler_setup_writes_runs_by_the_documented_rules(machine, monkeypatch):
+    from tess_memory.scheduler_config import load_service
+    from tess_memory.setup import keepcurrent
+
+    root, user = machine
+    home = root / "store"
+    settings = _store_settings(home, user)
+    (home / "scheduler.toml").write_text(keepcurrent.config_text(home, settings, timezone="America/Los_Angeles"))
+    service = load_service(home / "scheduler.toml")
+    store = service.stores[0]
+    assert (store.poll_seconds, store.profile_seconds, store.digest_seconds) == (300, 3600, 86400)
+    assert (store.recovery_hour, store.recovery_timezone, store.model_calls_per_run, store.enabled) == (22, "America/Los_Angeles", 128, True)
+    assert service.backlog_seconds == 15 and store.settings == settings.resolve()
+    monkeypatch.setenv("TZ", "Europe/Lisbon")
+    assert keepcurrent.local_timezone() == "Europe/Lisbon"
+
+
+def test_on_linux_the_scheduler_becomes_a_user_service_and_can_be_removed(machine, monkeypatch):
+    from tess_memory.setup import keepcurrent
+
+    root, user = machine
+    home = root / "store"
+    settings = _store_settings(home, user)
+    monkeypatch.setattr(keepcurrent, "_platform", lambda: "systemd")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(root / "config"))
+    commands = []
+
+    def run(command, **_):
+        commands.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    assert keepcurrent.status(home)["installed"] is False
+    installed = keepcurrent.install(home, settings, run=run)
+    unit = root / "config/systemd/user/tess-memory-scheduler.service"
+    assert (installed["installed"], installed["ours"]) == (True, True)
+    assert f"--config {home / 'scheduler.toml'} serve" in unit.read_text() and "Restart=always" in unit.read_text()
+    assert commands == [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", "--now", "tess-memory-scheduler.service"]]
+
+    removed = keepcurrent.remove(home, run=run)
+    assert removed["installed"] is False and not unit.exists()
+    assert (home / "scheduler.toml").exists() and settings.exists()  # nothing of the store is removed
+
+
+def test_a_scheduler_that_setup_did_not_install_is_never_replaced_or_removed(machine, monkeypatch):
+    from tess_memory.setup import keepcurrent
+
+    root, user = machine
+    home = root / "store"
+    settings = _store_settings(home, user)
+    monkeypatch.setattr(keepcurrent, "_platform", lambda: "systemd")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(root / "config"))
+    unit = root / "config/systemd/user/tess-memory-scheduler.service"
+    unit.parent.mkdir(parents=True)
+    unit.write_text("[Service]\nExecStart=python -m tess_memory.cli scheduler --config /someone/else.toml serve\n")
+    assert (keepcurrent.status(home)["installed"], keepcurrent.status(home)["ours"]) == (True, False)
+    for action in (lambda: keepcurrent.install(home, settings), lambda: keepcurrent.remove(home)):
+        with pytest.raises(SetupError, match="scheduler_already_installed"):
+            action()
+    assert "/someone/else.toml" in unit.read_text()
+
+
+def test_the_first_batch_hands_the_rest_to_the_background_service(machine, monkeypatch):
+    from tess_memory.setup import keepcurrent
+
+    setup, client = session(machine, keychain=None)
+    installs = []
+    monkeypatch.setattr(keepcurrent, "status", lambda home: {"supported": True, "kind": "launchd", "installed": bool(installs), "ours": bool(installs),
+                                                             "running": False, "command": "", "timezone": "UTC"})
+    monkeypatch.setattr(keepcurrent, "install", lambda home, settings: installs.append((home, settings)))
+    assert client.get("/api/state").json()["scheduler"]["wanted"] is True  # on unless the person says otherwise
+
+    setup.vault.draft["keep_current"] = False
+    setup.ingest.after()
+    assert installs == []
+    setup.vault.draft["keep_current"] = True
+    setup.ingest.after()
+    setup.ingest.after()  # already installed: not installed twice
+    assert installs == [(setup.home, setup.settings)]
+
+    def refuse(home, settings):
+        raise SetupError("scheduler_install_failed", "launchctl said no")
+
+    installs.clear()
+    monkeypatch.setattr(keepcurrent, "install", refuse)
+    setup.ingest.after()
+    assert client.get("/api/state").json()["scheduler"]["error"] == {"code": "scheduler_install_failed", "detail": "launchctl said no"}

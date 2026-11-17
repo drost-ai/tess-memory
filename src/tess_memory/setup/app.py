@@ -57,8 +57,24 @@ class Setup:
         self.local_models = embeddings.LocalModels(self.vault)
         self.settings = self.home / apply.SETTINGS
         self.ingest = FirstIngest(self.settings)
+        self.ingest.after = self._keep_current
+        self.scheduler_error: dict[str, str] | None = None
         self.token = secrets.token_urlsafe(32)
         self.on_quit: Any = None
+
+    def _keep_current(self) -> None:
+        """Once the first batch is in, hand the rest to the scheduler, so the
+        history is read whether or not this page stays open."""
+        if not self.vault.draft.get("keep_current"):
+            return
+        current = keepcurrent.status(self.home)
+        if not current["supported"] or current["installed"]:
+            return
+        try:
+            keepcurrent.install(self.home, self.settings)
+            self.scheduler_error = None
+        except SetupError as error:
+            self.scheduler_error = {"code": error.code, "detail": error.detail}
 
     def chosen_sources(self) -> list[dict[str, Any]]:
         saved = self.vault.draft.get("sources")
@@ -84,7 +100,9 @@ class Setup:
             "agents": {"targets": agents.targets([s for s in sources if s.get("enabled", True)], self.settings),
                        "entry": {"mcpServers": {agents.SERVER: agents.server_entry(self.settings)}},
                        "guidance": guidance.text("claude-code")},
-            "ingest": self.ingest.status, "scheduler": keepcurrent.status(self.home),
+            "ingest": self.ingest.status,
+            "scheduler": {**keepcurrent.status(self.home), "wanted": bool(draft.get("keep_current", True)),
+                          "error": self.scheduler_error},
             "missing": apply.missing({**draft, "sources": sources if draft.get("sources") is not None else []}),
         }
 
@@ -211,6 +229,9 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
     async def ingest_start(body):
         if not setup.vault.meta.get("applied"):
             raise SetupError("settings_not_written")
+        if "keep_current" in body:
+            setup.vault.draft["keep_current"] = bool(body["keep_current"])
+            setup.vault.save()
         setup.ingest.start(body.get("limit"))
 
     async def ingest_stop(_body):
@@ -223,6 +244,14 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
         if not setup.vault.meta.get("applied"):
             raise SetupError("settings_not_written")
         await asyncio.to_thread(keepcurrent.install, setup.home, setup.settings)
+        setup.scheduler_error = None
+        setup.vault.draft["keep_current"] = True
+        setup.vault.save()
+
+    async def scheduler_remove(_body):
+        await asyncio.to_thread(keepcurrent.remove, setup.home)
+        setup.vault.draft["keep_current"] = False
+        setup.vault.save()
 
     async def quit_setup(_body):
         await setup.chatgpt.cancel()
@@ -246,7 +275,8 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
         post("/api/embedding/local/use", local_use), post("/api/embedding/hosted", hosted),
         post("/api/apply", apply_settings), post("/api/agents/register", register),
         post("/api/ingest/start", ingest_start), post("/api/ingest/stop", ingest_stop), post("/api/search", search),
-        post("/api/scheduler/install", scheduler_install), post("/api/quit", quit_setup),
+        post("/api/scheduler/install", scheduler_install), post("/api/scheduler/remove", scheduler_remove),
+        post("/api/quit", quit_setup),
         Mount("/static", _Fresh(directory=STATIC), name="static"),
     ])
 

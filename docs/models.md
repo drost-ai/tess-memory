@@ -64,9 +64,12 @@ workers = 4                    # distillation calls in parallel
 Optional overrides pin a model or reasoning effort for this store only, without changing
 the profile: `model`, `reasoning_effort`, `fallback_model`, `fallback_reasoning_effort`.
 
-**Which model?** Distillation is where quality matters most: the model decides what was
-worth remembering and how important it is. Use the best model you are comfortable paying
-for. Because ingestion is incremental, you pay once per session, not once per search.
+**Which model?** Distillation reads every session once and decides what was worth
+remembering and how important it is, so it sets the quality of the memory. It is also where
+nearly all the usage goes. A stronger model writes better memories and costs more per
+session; a cheaper one makes a long history affordable. Because ingestion is incremental,
+you pay once per session, not once per search, and you can change the model later without
+re-reading anything.
 
 **The fallback.** Some models refuse some transcripts, for example security work. A
 fallback from a different provider turns a refusal into a completed distillation. If both
@@ -83,8 +86,10 @@ queries_per_round = 3
 evidence_limit = 12
 ```
 
-The retrieval agent makes a few short calls per search, so a fast, inexpensive model is a
-good choice. If its model fails, the search returns the plain hybrid results.
+The retrieval agent makes a few short calls per search, while an agent waits for the
+answer. It uses far fewer tokens than distillation, so a strong model is affordable here,
+and a fast one keeps searches quick. If its model fails, the search returns the plain
+hybrid results.
 
 ## Embeddings
 
