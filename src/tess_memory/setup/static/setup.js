@@ -48,7 +48,6 @@
     agent_command_failed: 'The agent\'s command did not accept the registration.',
     guidance_not_written: 'The agent is connected, but its instruction file could not be written.',
     ingest_running: 'Ingestion is already running.',
-    search_failed: 'The search could not be run.',
     scheduler_already_installed: 'A scheduler is already installed on this machine and was left alone.',
     scheduler_install_failed: 'The background service could not be installed.',
     scheduler_remove_failed: 'The background service could not be turned off.',
@@ -72,7 +71,7 @@
 
   let S = null;                       // the server's state
   const ui = { step: 'sources', modelTab: 'chatgpt', embedTab: 'local', error: null, busy: null,
-               sources: null, changeModel: false, signInUrl: null, results: null, written: null, finished: false, limit: 25 };
+               sources: null, changeModel: false, signInUrl: null, written: null, finished: false, limit: 25 };
 
   async function api(path, body) {
     const response = await fetch(path, {
@@ -478,23 +477,13 @@
             h('span', { class: 'row-main' },
               h('span', { class: 'row-title' }, 'Keep ingesting in the background'),
               h('span', { class: 'row-sub' }, ' Recommended. A small service that starts when you log in.'))) : null,
-          keeping ? h('p', { class: 'section hint' }, 'Setup ingests 25 sessions now, so you can see it work and search them. The background service then ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
+          keeping ? h('p', { class: 'section hint' }, 'Setup ingests 25 sessions now, so you can see it work. The background service then ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
             : h('div', { class: 'section' }, h('h2', null, 'How much to ingest now'), amounts),
           h('div', { class: 'actions' }, button('Start ingesting', 'ingest', begin)))
           : keeping ? null : h('div', { class: 'section' }, h('h2', null, 'Ingest more'), amounts,
               h('div', { class: 'actions' }, button('Ingest more', 'ingest', begin))),
       ];
     }
-
-    const query = h('input', { type: 'search', id: 'query', placeholder: 'Ask about something you worked on', autocomplete: 'off' });
-    const searching = !idle ? h('div', { class: 'section' },
-      h('h2', null, 'Try it'),
-      h('form', { class: 'fields-2', onsubmit: (event) => { event.preventDefault(); act('search', '/api/search', { query: query.value }, (result) => { ui.results = result; }); } },
-        query, h('div', null, h('button', { type: 'submit', class: 'button button-outline' + (ui.busy === 'search' ? ' busy' : ''), disabled: Boolean(ui.busy) }, 'Search'))),
-      ui.results ? h('div', { class: 'section list' }, ui.results.length ? ui.results.map((hit) => h('div', { class: 'result' },
-        h('div', { class: 'result-head' }, h('span', { class: 'badge' }, hit.kind || hit.level), h('span', { class: 'mono' }, hit.project || ''), h('span', null, (hit.ts || '').slice(0, 10))),
-        h('div', { class: 'result-body' }, (hit.content || '').slice(0, 600))))
-        : h('p', { class: 'row hint' }, 'Nothing found yet. Try again once more sessions have been ingested.')) : null) : null;
 
     const rules = h('ul', { class: 'rules hint' },
       h('li', null, 'Every 5 minutes it looks for new or changed sessions.'),
@@ -524,7 +513,7 @@
       h('p', { class: 'eyebrow' }, 'Step 5 of 5'),
       h('h1', null, 'Ingest what you have ', h('mark', null, 'already done.')),
       h('p', { class: 'lede' }, 'Tess Memory ingests your past sessions, distilling each one into memories, then keeps up as you work. Sessions that changed in the last fifteen minutes are left until they go quiet.'),
-      body, searching,
+      body,
       h('div', { class: 'section' }, h('h2', null, 'Keeping it current'), keep),
       errorNote(),
       h('div', { class: 'actions' }, button('Finish setup', 'quit', () => act('quit', '/api/quit', {}, () => { ui.finished = true; }), 'primary', { disabled: idle })),

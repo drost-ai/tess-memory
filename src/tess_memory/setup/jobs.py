@@ -1,7 +1,7 @@
-"""The first ingestion, run as the ordinary command, and a search to prove it.
+"""The first ingestion, run as the ordinary command.
 
-Both run in a child process with the settings file setup has just written,
-so what the person sees working here is exactly what their agents will use.
+It runs in a child process with the settings file setup has just written, so
+what the person sees working here is exactly what the scheduler will run.
 """
 from __future__ import annotations
 
@@ -18,12 +18,6 @@ from .providers import SetupError
 
 _PUBLISHED = re.compile(r"^\[(ingest|incremental)\] .*(distilled|fallback|extractive|published|preserv)")
 _COUNTED = re.compile(r"^\[ingest\] \((\d+)/(\d+)\)")
-_SEARCH = ("import json,sys\nfrom tess_memory.config import CONFIG\nfrom tess_memory.embed import make_embedder\n"
-           "from tess_memory.retrieval import search\nfrom tess_memory.store import MemoryStore\n"
-           "store=MemoryStore(CONFIG.db_path)\n"
-           "hits=search(store,make_embedder(CONFIG),sys.argv[1],limit=6) if store.has_memories() else []\n"
-           "print(json.dumps([{k:h[k] for k in('level','kind','content','project','ts','session_title','score')} for h in hits]))\n")
-
 
 class FirstIngest:
     def __init__(self, settings: Path) -> None:
@@ -80,13 +74,3 @@ class FirstIngest:
         if self._process is not None and self._process.poll() is None:
             self.status["state"] = "stopped"
             self._process.terminate()
-
-    def search(self, query: str) -> list[dict[str, Any]]:
-        if not isinstance(query, str) or not query.strip() or len(query) > 500:
-            raise SetupError("invalid_query")
-        try:
-            result = subprocess.run([sys.executable, "-c", _SEARCH, query.strip()], env=self._environment(),
-                                    capture_output=True, text=True, timeout=180)
-            return json.loads(result.stdout.strip().splitlines()[-1])
-        except (subprocess.SubprocessError, ValueError, IndexError):
-            raise SetupError("search_failed") from None

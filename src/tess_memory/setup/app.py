@@ -244,9 +244,6 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
     async def ingest_stop(_body):
         setup.ingest.stop()
 
-    async def search(body):
-        return await asyncio.to_thread(setup.ingest.search, body.get("query"))
-
     async def scheduler_install(_body):
         if not setup.vault.meta.get("applied"):
             raise SetupError("settings_not_written")
@@ -281,7 +278,7 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
         post("/api/embedding/local/download", local_download), post("/api/embedding/local/cancel", local_cancel),
         post("/api/embedding/local/use", local_use), post("/api/embedding/hosted", hosted),
         post("/api/apply", apply_settings), post("/api/agents/register", register),
-        post("/api/ingest/start", ingest_start), post("/api/ingest/stop", ingest_stop), post("/api/search", search),
+        post("/api/ingest/start", ingest_start), post("/api/ingest/stop", ingest_stop),
         post("/api/scheduler/install", scheduler_install), post("/api/scheduler/remove", scheduler_remove),
         post("/api/quit", quit_setup),
         Mount("/static", _Fresh(directory=STATIC), name="static"),

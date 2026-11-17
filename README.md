@@ -88,7 +88,8 @@ uv run tess-memory setup
 3. **Embeddings.** Use a small model on this machine (downloaded once, then offline),
    Google, or any OpenAI-compatible embeddings service.
 4. **Connect agents.** One click registers the memory server with each agent.
-5. **First run.** It reads your past sessions while you watch, then lets you search them.
+5. **First run.** It ingests a first batch of your past sessions while you watch, then
+   keeps ingesting in the background: the rest of your history, and every new session.
 
 Keys go into your system keychain, not into a file. The page is served on `127.0.0.1`
 only and needs the one-time link printed in your terminal.
