@@ -479,8 +479,8 @@
       h('span', { class: 'row-main' }, h('span', { class: 'row-title' }, label), h('span', { class: 'row-sub' }, ' ' + sub)));
     if (ui.limit !== null && total <= ui.limit) ui.limit = null;   // nothing smaller than everything to offer
     const amounts = h('div', { class: 'list' },
-      total > 25 ? amount(25, '25 sessions', 'A quick first pass to see it work.') : null,
-      total > 200 ? amount(200, '200 sessions', 'A solid start. Takes a while and costs model calls.') : null,
+      total > 25 ? amount(25, '25 more sessions', 'A quick pass to see it work.') : null,
+      total > 200 ? amount(200, '200 more sessions', 'A solid start. Takes a while and costs model calls.') : null,
       amount(null, 'Everything', 'Up to ' + number(total) + ' session files.' + (total > 200 ? ' Can run for hours on a long history.' : '')));
     const begin = () => act('ingest', '/api/ingest/start', { limit: keeping ? 25 : ui.limit, keep_current: canKeep ? Boolean(ui.keep) : false });
 
@@ -489,7 +489,7 @@
       body = h('div', { class: 'section panel' },
         h('progress', { id: 'ingest-bar', max: ingest.total || 1, value: ingest.total ? ingest.done : undefined }),
         h('div', { class: 'progress-line' },
-          h('span', { id: 'ingest-text' }, number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions ingested'),
+          h('span', { id: 'ingest-text' }, number(ingest.done) + (ingest.total ? ' of up to ' + number(ingest.total) : '') + ' sessions ingested in this batch'),
           button('Stop ingesting', 'ingest-stop', () => act('ingest-stop', '/api/ingest/stop', {}), 'outline', { attrs: { class: 'button button-outline button-small' } })),
         h('pre', { class: 'block log', id: 'ingest-log' }, (ingest.lines || []).join('\n')),
         h('p', { class: 'hint' }, keeping ? 'The background service is on and takes over when this first batch is in. You can close this page.' : 'You can leave this running. What is finished is kept if it stops.'));
@@ -511,7 +511,7 @@
             h('span', { class: 'row-main' },
               h('span', { class: 'row-title' }, 'Keep ingesting in the background'),
               h('span', { class: 'row-sub' }, ' Recommended. A small service that starts when you log in.'))) : null,
-          keeping ? h('p', { class: 'section hint' }, 'Setup ingests 25 sessions now, so you can see it work. The background service starts at the same time and ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
+          keeping ? h('p', { class: 'section hint' }, 'Setup ingests up to 25 more sessions now, so you can see it work. The background service starts at the same time and ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
             : h('div', { class: 'section' }, h('h2', null, 'How much to ingest now'), amounts),
           h('div', { class: 'actions' }, button('Start ingesting', 'ingest', begin)))
           : keeping ? null : h('div', { class: 'section' }, h('h2', null, 'Ingest more'), amounts,
@@ -553,6 +553,7 @@
       h('p', { class: 'eyebrow' }, 'Step 5 of 5'),
       h('h1', null, 'Ingest what you have ', h('mark', null, 'already done.')),
       h('p', { class: 'lede' }, 'Tess Memory ingests your past sessions, distilling each one into memories, then keeps up as you work. Sessions that changed in the last fifteen minutes are left until they go quiet.'),
+      S.stored_sessions ? h('p', { class: 'section note ok' }, number(S.stored_sessions) + (S.stored_sessions === 1 ? ' session is' : ' sessions are') + ' in memory so far. Each batch adds more; nothing already ingested is done again.') : null,
       body,
       h('div', { class: 'section' }, h('h2', null, 'Keeping it current'), keep),
       errorNote(),
@@ -639,7 +640,7 @@
     const ingestBar = document.getElementById('ingest-bar');
     if (ingestBar) {
       if (ingest.total) { ingestBar.max = ingest.total; ingestBar.value = ingest.done; }
-      document.getElementById('ingest-text').textContent = number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions ingested';
+      document.getElementById('ingest-text').textContent = number(ingest.done) + (ingest.total ? ' of up to ' + number(ingest.total) : '') + ' sessions ingested in this batch';
       const log = document.getElementById('ingest-log');
       log.textContent = (ingest.lines || []).join('\n');
       log.scrollTop = log.scrollHeight;

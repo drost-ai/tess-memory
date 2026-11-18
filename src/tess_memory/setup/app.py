@@ -112,7 +112,7 @@ class Setup:
             "agents": {"targets": agents.targets(self.agent_homes(), self.settings),
                        "entry": {"mcpServers": {agents.SERVER: agents.server_entry(self.settings)}},
                        "guidance": guidance.text("claude-code")},
-            "ingest": self.ingest.status,
+            "ingest": self.ingest.status, "stored_sessions": reembedding.stored_sessions(self.home),
             "scheduler": {**keepcurrent.status(self.home), "wanted": bool(draft.get("keep_current", True)),
                           "error": self.scheduler_error},
             "reembed": {"pending": self.reembedding.info, "job": self.reembedding.job},

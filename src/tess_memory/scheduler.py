@@ -37,6 +37,32 @@ def _scheduled_config(settings: Path):
     return load_config(settings)
 
 
+def store_config(settings: Path):
+    """The configuration a scheduled run uses for one store.
+
+    A store may hold any mix of sources: Claude Code and Codex in one store is
+    the ordinary way to give several agents one memory, and it is scheduled
+    like any other. Only a store declared with Codex sources alone is held to
+    the dedicated-store checks, which keep such a store from being pointed at
+    a database that already holds something else."""
+    cfg = _scheduled_config(settings)
+    # Keep each destination explicit even in a non-Codex instance.
+    import tomllib
+    declared = tomllib.loads(settings.read_text())['storage']['data_dir']
+    if cfg.data_dir.resolve() != Path(declared).expanduser().resolve():
+        raise ValueError('environment overrides conflict with scheduled store settings')
+    kinds = {ds.type for ds in cfg.data_stores}
+    if 'codex' in kinds:
+        from .codex import load_dedicated_config, validate_dedicated_database
+        if cfg.embedded:
+            if kinds != {'codex'}:
+                raise ValueError('Codex memory requires exclusively Codex sources')
+            validate_dedicated_database(cfg.db_path)
+        elif kinds == {'codex'}:
+            cfg = load_dedicated_config(settings)
+    return cfg
+
+
 def _gate(config, *, readonly=False):
     return ProviderGate(config.provider_gate_db or config.db_path, model_limit=config.model_limit, embedding_limit=config.embedding_limit,
                         provider_limits=config.provider_limits, readonly=readonly)
@@ -122,20 +148,7 @@ def worker(config_path: Path, run_id: str) -> int:
     thread.start()
     store = None
     try:
-        cfg = _scheduled_config(scheduled.settings)
-        # Keep each destination explicit even in a non-Codex instance.
-        import tomllib
-        declared = tomllib.loads(scheduled.settings.read_text())['storage']['data_dir']
-        if cfg.data_dir.resolve() != Path(declared).expanduser().resolve():
-            raise ValueError('environment overrides conflict with scheduled store settings')
-        if any(ds.type == 'codex' for ds in cfg.data_stores):
-            from .codex import load_dedicated_config, validate_dedicated_database
-            if cfg.embedded:
-                if any(ds.type != 'codex' for ds in cfg.data_stores):
-                    raise ValueError('Codex memory requires exclusively Codex sources')
-                validate_dedicated_database(cfg.db_path)
-            else:
-                cfg = load_dedicated_config(scheduled.settings)
+        cfg = store_config(scheduled.settings)
         workers = scheduled.workers or cfg.llm_workers
         if run['kind'] == 'detect':
             from .detection import detect_sources

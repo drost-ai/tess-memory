@@ -42,6 +42,21 @@ def _stored(home: Path) -> tuple[str | None, int]:
         return None, 0
 
 
+def stored_sessions(home: Path) -> int:
+    """How many sessions the store holds, read without opening it for writing."""
+    database = Path(home) / "memory.db"
+    if not database.exists():
+        return 0
+    try:
+        connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=5)
+        try:
+            return connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+        finally:
+            connection.close()
+    except sqlite3.Error:
+        return 0
+
+
 def _target(home: Path, registry: Path, draft: dict[str, Any]):
     """The configuration the chosen settings describe, and its embedder's name."""
     from ..config import load_config
