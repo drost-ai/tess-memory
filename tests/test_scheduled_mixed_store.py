@@ -58,3 +58,25 @@ def test_the_scheduler_configuration_setup_writes_points_at_a_store_it_can_run(t
     (home / "scheduler.toml").write_text(keepcurrent.config_text(home, settings, timezone="UTC"))
     service = load_service(home / "scheduler.toml")
     assert store_config(service.stores[0].settings).db_path == (home / "memory.db").resolve()
+
+
+def test_provider_limits_read_the_provider_file_setup_writes(tmp_path):
+    """The scheduler read the provider file as JSON; setup writes YAML, as the
+    guides do, so every scheduled ingestion ended in a JSON error."""
+    import json
+    from types import SimpleNamespace
+    from tess_memory.provider_limits import provider_key
+
+    yaml_file = tmp_path / "providers.yaml"
+    yaml_file.write_text("# Written by `tess-memory setup`.\nschema_version: 1\nproviderProfiles:\n"
+                         "  chatgpt:\n    kind: openai\n    apiMode: responses\n    defaultModel: large\n    auth:\n      kind: none\n"
+                         "  embeddings-gemini:\n    kind: openai\n    apiMode: chat_completions\n"
+                         "    baseUrl: https://generativelanguage.googleapis.com/v1beta/openai\n    defaultModel: e\n    auth:\n      kind: none\n")
+    cfg = SimpleNamespace(provider_registry=None, engine_settings=yaml_file)
+    assert provider_key(cfg, "embeddings-gemini") == "generativelanguage.googleapis.com"
+    assert provider_key(cfg, "chatgpt") == "chatgpt" and provider_key(cfg, "not-declared") == "not-declared"
+    # A settings JSON that carries profiles among other things still works as before.
+    json_file = tmp_path / "settings.json"
+    json_file.write_text(json.dumps({"env": {"KEY": "x"}, "providerProfiles": {"claude": {"kind": "anthropic", "defaultModel": "m"}}}))
+    assert provider_key(SimpleNamespace(provider_registry=None, engine_settings=json_file), "claude") == "anthropic"
+    assert provider_key(SimpleNamespace(provider_registry=None, engine_settings=tmp_path / "missing.yaml"), "x") == "x"

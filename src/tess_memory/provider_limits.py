@@ -28,13 +28,30 @@ def process_alive(pid: int | None) -> bool:
         return True
 
 
+def _declared_profile(path: Path, profile_name: str) -> dict:
+    """A profile as the provider file declares it, whichever form the file
+    takes: a YAML or JSON registry, or a settings JSON that carries profiles
+    among other things. An unknown profile is an empty one, not an error:
+    this only decides which provider's limit a call counts against."""
+    try:
+        from tess_core.config import ProviderRegistry
+        return ProviderRegistry(path).profiles.get(profile_name, {})
+    except Exception:  # noqa: BLE001 (not a registry the engine accepts as a whole)
+        pass
+    try:
+        with Path(path).open() as handle:
+            document = json.load(handle)
+        return (document.get('providerProfiles') or document.get('profiles') or {}).get(profile_name, {})
+    except (OSError, ValueError, AttributeError):
+        return {}
+
+
 def provider_key(cfg, profile_name: str) -> str:
     if getattr(cfg, 'provider_registry', None) is not None:
         from tess_core.config import ProviderRegistry
         profile = ProviderRegistry(cfg.provider_registry).resolve_profile(profile_name)
     else:
-        with cfg.engine_settings.open() as handle:
-            profile = (json.load(handle).get('providerProfiles') or {}).get(profile_name, {})
+        profile = _declared_profile(cfg.engine_settings, profile_name)
     mode = str(profile.get('apiMode', '')).lower()
     host = (urlparse(profile.get('baseUrl') or '').hostname or '').lower()
     kind = str(profile.get('kind', '')).lower()
