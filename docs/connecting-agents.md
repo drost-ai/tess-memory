@@ -10,6 +10,14 @@ so any agent that speaks MCP can use it. Connecting an agent has two halves:
 An agent can have either half without the other. An agent with only the tools can use
 memory other agents produced, and can keep a plan.
 
+[`tess-memory setup`](setup.md) does both for Claude Code and Codex from its page, and also
+adds the usage instructions to each agent's instruction file. The rest of this page is for
+doing it by hand, and for other MCP clients.
+
+One store can hold several agents' sessions at once. Claude Code and Codex in the same
+store is the usual way to give them one shared memory, and the scheduler keeps such a store
+current like any other.
+
 ## Claude Code
 
 Source:
@@ -128,9 +136,10 @@ data_dir = "~/.assistant/memory"
 Here `project = "assistant"` gives the assistant one memory wherever it runs, and the
 `[planning]` section keeps its plan on one board.
 
-Codex has a dedicated pair of commands, `codex-ingest` and `codex-serve`, for a store that
-holds only Codex sessions. They refuse to start against a store that contains anything
-else, which protects you from pointing them at the wrong database.
+If you would rather keep Codex in a store of its own, there is a dedicated pair of
+commands for that, `codex-ingest` and `codex-serve`. They refuse to start against a store
+that contains anything else, which protects you from pointing them at the wrong database.
+You do not need them to use Codex in a shared store.
 
 ## Teaching the agent to use it
 

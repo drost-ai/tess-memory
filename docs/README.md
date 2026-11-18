@@ -9,6 +9,7 @@ maintain themselves. These pages explain how to use it and how it works.
 | | |
 |---|---|
 | [Getting started](getting-started.md) | Install, run the guided setup, connect an agent |
+| [Setup](setup.md) | The guided setup, step by step: what it asks, what it writes, running it again |
 | [Concepts](concepts.md) | Stores, sources, projects, memory levels, the plan |
 | [How it works](how-it-works.md) | The pipeline from transcript to answer |
 

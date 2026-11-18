@@ -35,7 +35,7 @@ terminal. Keys you enter go to your system keychain (macOS Keychain, or the Secr
 on Linux); on a machine without one, start it with `--no-keychain` and they are kept in a
 file only you can read. Setup writes a settings file and a provider file in
 `~/.tess-memory` (choose another folder with `--home`), and keeps a dated copy of a
-settings file it replaces.
+settings file it replaces. Each step is described in [Setup](setup.md).
 
 If you used setup, you are done: skip to [Memory](#memory). The rest of this guide does
 the same thing by hand, one file and one command at a time, and shows what setup wrote.

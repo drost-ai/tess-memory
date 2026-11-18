@@ -80,6 +80,10 @@ uv run tess-memory setup
 
 `setup` opens a page on your own machine and walks you through five steps:
 
+<p align="center">
+  <img src="docs/assets/setup.jpg" alt="Tess Memory setup: choosing which agents' sessions go into memory" width="820">
+</p>
+
 1. **Sources.** It finds the Claude Code and Codex sessions already on your disk. Tick the
    ones to remember.
 2. **Provider.** Sign in with your ChatGPT account, paste an Anthropic or OpenAI API key, or
@@ -97,7 +101,8 @@ only and needs the one-time link printed in your terminal.
 Then start a new session in a connected agent and ask it to pick up where you left off.
 
 Setup writes ordinary files you can read and edit: a settings file and a provider file in
-`~/.tess-memory`. To write them by hand instead, see
+`~/.tess-memory`. The [Setup guide](docs/setup.md) covers each step. To write the files by
+hand instead, see
 [Getting started](docs/getting-started.md) and
 [Configuration](docs/configuration.md). To keep the store current without thinking about
 it, [turn on the scheduler](https://continuityresearch.ai/tess-memory/docs/scheduler).
@@ -218,6 +223,7 @@ The full documentation, with search, is at
 The same pages live in this repository:
 
 - [Getting started](docs/getting-started.md): install, ingest, connect an agent
+- [Setup](docs/setup.md): the guided setup, step by step
 - [Concepts](docs/concepts.md): stores, sources, projects, memory levels, the plan
 - [How it works](docs/how-it-works.md): the pipeline from transcript to answer
 - [Connecting agents](docs/connecting-agents.md): Claude Code, Codex, any MCP client, shared stores
