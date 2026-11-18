@@ -82,13 +82,13 @@ uv run tess-memory setup
 
 1. **Sources.** It finds the Claude Code and Codex sessions already on your disk. Tick the
    ones to remember.
-2. **Model.** Sign in with your ChatGPT account, paste an Anthropic or OpenAI API key, or
+2. **Provider.** Sign in with your ChatGPT account, paste an Anthropic or OpenAI API key, or
    point it at any OpenAI-compatible endpoint, including a model on your own hardware.
    It is tested with a real request before you move on.
 3. **Embeddings.** Use a small model on this machine (downloaded once, then offline),
    Google, or any OpenAI-compatible embeddings service.
 4. **Connect agents.** One click registers the memory server with each agent.
-5. **First run.** It ingests a first batch of your past sessions while you watch, then
+5. **Ingest.** It ingests a first batch of your past sessions while you watch, then
    keeps ingesting in the background: the rest of your history, and every new session.
 
 Keys go into your system keychain, not into a file. The page is served on `127.0.0.1`

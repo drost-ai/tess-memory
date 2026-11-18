@@ -7,10 +7,10 @@
 
   const STEPS = [
     { id: 'sources', label: 'Sources' },
-    { id: 'model', label: 'Model' },
+    { id: 'model', label: 'Provider' },
     { id: 'embedding', label: 'Embeddings' },
     { id: 'agents', label: 'Connect agents' },
-    { id: 'run', label: 'First run' },
+    { id: 'run', label: 'Ingest' },
   ];
 
   const MESSAGES = {
@@ -206,8 +206,10 @@
     const picking = !connection || ui.changeModel;
     const head = [
       h('p', { class: 'eyebrow' }, 'Step 2 of 5'),
-      h('h1', null, 'Connect a ', h('mark', null, 'provider.')),
-      h('p', { class: 'lede' }, 'Tess Memory uses a model to distil your sessions into memories and to search them. Connect the account you want it to use.'),
+      picking ? h('h1', null, 'Connect a ', h('mark', null, 'provider.')) : h('h1', null, 'Choose the ', h('mark', null, 'models.')),
+      h('p', { class: 'lede' }, picking
+        ? 'Tess Memory uses a model to distil your sessions into memories and to search them. Connect the account you want it to use.'
+        : 'Pick the models Tess Memory should use. Each one is tested with a real request before you continue.'),
     ];
     return picking ? [...head, ...connectModel(connection)] : [...head, ...chooseModels(connection)];
   }
@@ -373,7 +375,7 @@
     return [
       h('p', { class: 'eyebrow' }, 'Step 3 of 5'),
       h('h1', null, 'Connect an ', h('mark', null, 'embedding model.')),
-      h('p', { class: 'lede' }, 'An embedding model turns text into numbers, so a search can match on meaning and not just words. You can change it later, but every memory then has to be embedded again.'),
+      h('p', { class: 'lede' }, 'An embedding model lets search match on meaning, not just words. You can change it later. Your memories are then embedded again.'),
       h('div', { class: 'section choices' },
         tab('local', 'On this machine', 'Private and free. A small model is downloaded once.'),
         tab('google', 'Google', 'Gemini embeddings, with your own API key.'),
@@ -391,6 +393,13 @@
     ];
   }
 
+  // 'embeddings-x:model-a:4d' or 'local:/path/to/model|q=..' -> the model's own name
+  function modelName(descriptor) {
+    if (descriptor.startsWith('local:')) return descriptor.slice(6).split('|')[0].replace(/\/+$/, '').split('/').pop();
+    const parts = descriptor.split(':');
+    return parts.length >= 3 ? parts.slice(1, -1).join(':').split('/').pop() : descriptor;
+  }
+
   // The store already holds memories embedded with another model. Offer to
   // embed them again; the settings change only once that has finished.
   function reembedPanel(waiting, moving) {
@@ -398,18 +407,17 @@
     const rows = waiting ? waiting.rows : moving.total;
     return h('div', { class: 'section panel' },
       h('h2', null, running ? 'Moving your memory to the new model' : 'This store was built with another embedding model'),
-      running ? null : h('p', { class: 'hint' }, 'Its ' + number(rows) + ' memories were embedded with ', h('span', { class: 'mono' }, waiting.current),
-        '. To use ' + waiting.label + ', each one is embedded again. Nothing is distilled again and your plan is not touched. '
-        + 'Search and ingestion keep working with the current model until every memory is done, then the store and its settings switch together.'
-        + (waiting.hosted ? ' This sends the text of your memories to the new embedding service and uses your account with it.' : '')),
+      running ? null : h('p', { class: 'hint' }, 'This store\'s ' + number(rows) + ' memories were embedded with ' + modelName(waiting.current)
+        + '. Switching to ' + waiting.label + ' embeds each one again. Nothing is distilled again, and your plan is not touched. Search and ingestion keep working until the switch.'
+        + (waiting.hosted ? ' The text of your memories is sent to the new embedding service.' : '')),
       running || !waiting ? null : h('p', { class: 'note' }, waiting.held === 'embedding'
-        ? 'Your other changes are saved and already in effect. Only the embedding model waits for this.'
-        : 'Your other changes are saved together with this one, when it finishes: the current settings could not be rewritten around the embedding model they use.'),
+        ? 'Your other changes are already saved. Only the embedding model waits.'
+        : 'Your other changes are saved when this finishes.'),
       running ? [h('progress', { id: 'reembed-bar', max: moving.total || 1, value: moving.done || 0 }),
                  h('div', { class: 'progress-line' },
                    h('span', { id: 'reembed-text' }, number(moving.done || 0) + ' of ' + number(moving.total || 0) + ' memories embedded'),
                    button('Stop', 'reembed-stop', () => act('reembed-stop', '/api/reembed/stop', {}), 'outline', { attrs: { class: 'button button-outline button-small' } })),
-                 h('p', { class: 'hint' }, 'Stopping is safe: nothing switches until every memory is done, and it continues from here next time.')] : null,
+                 h('p', { class: 'hint' }, 'Stopping is safe. Nothing switches until every memory is done, and it picks up from here.')] : null,
       moving.state === 'stopped' ? h('p', { class: 'note' }, 'Stopped at ' + number(moving.done || 0) + ' of ' + number(moving.total || 0) + '. Nothing was switched.') : null,
       moving.state === 'failed' ? h('p', { class: 'note bad', role: 'alert' }, 'Re-embedding stopped with an error, and nothing was switched. ' + (moving.detail || '')) : null,
       running ? null : h('div', { class: 'actions' },
@@ -445,7 +453,7 @@
     return [
       h('p', { class: 'eyebrow' }, 'Step 4 of 5'),
       h('h1', null, 'Give your agents ', h('mark', null, 'the memory.')),
-      h('p', { class: 'lede' }, 'Connect any agent on this machine, whether or not its own sessions are being ingested. Each agent you connect gets twelve tools: search what was done before, pick up a project where it was left, and keep a plan that outlasts the session. Connecting also adds a short set of instructions to the agent\'s own instruction file, so it reaches for them without being asked.'),
+      h('p', { class: 'lede' }, 'Connect the agents that should use this memory. Any agent can be connected, whether or not its own sessions are ingested. Connecting adds the memory tools and a short set of instructions, so the agent uses them without being asked.'),
       h('p', { class: 'section note ok' }, 'Settings saved to ', h('span', { class: 'mono' }, S.settings), '.',
         ui.written && ui.written.backup ? [' The earlier file was kept as ', h('span', { class: 'mono' }, ui.written.backup), '.'] : null),
       rows.length ? h('div', { class: 'section' }, h('h2', null, 'Agents on this machine'), h('div', { class: 'list' }, rows)) : null,
@@ -511,7 +519,7 @@
             h('span', { class: 'row-main' },
               h('span', { class: 'row-title' }, 'Keep ingesting in the background'),
               h('span', { class: 'row-sub' }, ' Recommended. A small service that starts when you log in.'))) : null,
-          keeping ? h('p', { class: 'section hint' }, 'Setup ingests up to 25 more sessions now, so you can see it work. The background service starts at the same time and ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
+          keeping ? h('p', { class: 'section hint' }, 'Setup ingests up to 25 sessions now, so you can watch it work. The background service does the rest of your history, up to ' + number(total) + ' session files, and keeps going from there. A long history takes hours and uses your model plan. You pay that once.')
             : h('div', { class: 'section' }, h('h2', null, 'How much to ingest now'), amounts),
           h('div', { class: 'actions' }, button('Start ingesting', 'ingest', begin)))
           : keeping ? null : h('div', { class: 'section' }, h('h2', null, 'Ingest more'), amounts,
@@ -552,8 +560,8 @@
     return [
       h('p', { class: 'eyebrow' }, 'Step 5 of 5'),
       h('h1', null, 'Ingest what you have ', h('mark', null, 'already done.')),
-      h('p', { class: 'lede' }, 'Tess Memory ingests your past sessions, distilling each one into memories, then keeps up as you work. Sessions that changed in the last fifteen minutes are left until they go quiet.'),
-      S.stored_sessions ? h('p', { class: 'section note ok' }, number(S.stored_sessions) + (S.stored_sessions === 1 ? ' session is' : ' sessions are') + ' in memory so far. Each batch adds more; nothing already ingested is done again.') : null,
+      h('p', { class: 'lede' }, 'Your past sessions are distilled into memories, and new ones are added as you work. A session is left alone until it has been quiet for fifteen minutes.'),
+      S.stored_sessions ? h('p', { class: 'section note ok' }, number(S.stored_sessions) + (S.stored_sessions === 1 ? ' session is' : ' sessions are') + ' in memory so far. Nothing already ingested is done again.') : null,
       body,
       h('div', { class: 'section' }, h('h2', null, 'Keeping it current'), keep),
       errorNote(),
