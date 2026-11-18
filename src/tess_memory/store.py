@@ -206,8 +206,16 @@ def vector_space(descriptor: str) -> str:
     A hosted embedder is recorded as ``<profile>:<model>:<dims>d``. The
     profile is only the name the settings give a provider, so renaming it, or
     reaching the same model through another profile, is still the same space.
-    A local embedder's descriptor is its model and prefixes, kept as it is."""
-    if descriptor.startswith("local:") or descriptor.count(":") < 2:
+
+    A local embedder is recorded as ``local:<model>`` with its prefixes, where
+    the model may be a folder on disk. Where that folder is does not matter:
+    a store moved to another folder, restored from a backup or copied to
+    another machine still holds the same model's vectors, so only the folder's
+    own name counts."""
+    if descriptor.startswith("local:"):
+        model, bar, prefixes = descriptor[len("local:"):].partition("|")
+        return "local:" + (model.rstrip("/").rsplit("/", 1)[-1] or model) + bar + prefixes
+    if descriptor.count(":") < 2:
         return descriptor
     rest, dims = descriptor.rsplit(":", 1)
     return f"{rest.split(':', 1)[1]}:{dims}"

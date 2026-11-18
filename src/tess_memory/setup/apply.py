@@ -34,7 +34,25 @@ def missing(draft: dict[str, Any]) -> list[str]:
     return gaps
 
 
-def render(home: Path, registry: Path, draft: dict[str, Any]) -> str:
+def embedding_table(values: dict[str, Any]) -> list[str]:
+    """The lines of an ``[embedding]`` table that is being kept as it is."""
+    lines = []
+    for key, value in values.items():
+        if isinstance(value, bool):
+            lines.append(f"{key} = {'true' if value else 'false'}")
+        elif isinstance(value, (int, float)):
+            lines.append(f"{key} = {value}")
+        elif isinstance(value, str):
+            lines.append(f"{key} = {_s(value)}")
+        else:
+            raise SetupError("embedding_not_kept")
+    return lines
+
+
+def render(home: Path, registry: Path, draft: dict[str, Any], *, keep_embedding: dict[str, Any] | None = None) -> str:
+    """The settings file for the choices made. ``keep_embedding`` writes that
+    ``[embedding]`` table instead of the chosen one: the store is still being
+    moved to the chosen model and keeps working with its own until then."""
     gaps = missing(draft)
     if gaps:
         raise SetupError("incomplete", ", ".join(gaps))
@@ -53,7 +71,9 @@ def render(home: Path, registry: Path, draft: dict[str, Any]) -> str:
               "workers = 4", "",
               "[search]", "agent = true", f"profile = {_s(model['profile'])}", f"model = {_s(model['search_model'])}", "",
               "[embedding]"]
-    if embedding["mode"] == "local":
+    if keep_embedding is not None:
+        lines += embedding_table(keep_embedding)
+    elif embedding["mode"] == "local":
         settings = embedding["settings"]
         lines += ['provider = "local"', f"local_model = {_s(settings['local_model'])}", f"dims = {int(settings['dims'])}",
                   f"query_prefix = {_s(settings['query_prefix'])}", f"passage_prefix = {_s(settings['passage_prefix'])}"]
@@ -65,10 +85,10 @@ def render(home: Path, registry: Path, draft: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def write(vault: Vault, registry: Path) -> dict[str, Any]:
+def write(vault: Vault, registry: Path, *, keep_embedding: dict[str, Any] | None = None) -> dict[str, Any]:
     """Write the settings file; returns its path and the copy of the one it replaced."""
     path = vault.home / SETTINGS
-    text = render(vault.home, registry, vault.draft)
+    text = render(vault.home, registry, vault.draft, keep_embedding=keep_embedding)
     backup = None
     if path.exists() and path.read_text(encoding="utf-8") != text:
         backup = path.with_name(f"{SETTINGS}.before-setup-{time.strftime('%Y%m%d-%H%M%S')}")

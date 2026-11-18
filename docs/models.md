@@ -114,7 +114,9 @@ batch_size = 64
 **One store, one vector space.** A store records which model produced its vectors and
 never mixes in another, because vectors from different models cannot be compared. The
 provider profile's name is not part of that: renaming a profile, or reaching the same model
-through another one, changes nothing.
+through another one, changes nothing. Nor is where a local model's files are: a store moved to
+another folder, restored from a backup or copied to another machine is still the same
+store.
 
 **Changing the embedding model.** You can, and you lose nothing. Point `[embedding]` at the
 new model and run:
@@ -131,7 +133,9 @@ is done. If it is interrupted before that, the store is exactly as it was.
 
 `tess-memory setup` does the same from its embeddings step: choose another model on a
 store that already holds memory and it offers to re-embed, shows progress, and switches
-the store and its settings together when it finishes, with no gap in between.
+the store and its settings together when it finishes, with no gap in between. Anything else
+you changed in the same pass (sources, provider, models) takes effect straight away; only
+the embedding model waits.
 
 Between changing the setting and finishing `reembed`, ingestion waits and search uses
 keywords, importance and recency without the meaning signal. To avoid that gap on a large

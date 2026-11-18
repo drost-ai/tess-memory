@@ -74,6 +74,39 @@ def pending(home: Path, registry: Path, draft: dict[str, Any]) -> dict[str, Any]
             "label": choice["name"] if choice["mode"] == "local" else choice["model"]}
 
 
+def current_embedding(home: Path, profiles: dict[str, Any]) -> dict[str, Any] | None:
+    """The ``[embedding]`` table the store is running on, when the rest of the
+    settings can be rewritten around it: it must still describe the model the
+    store was built with, and be reachable from setup's own provider file (a
+    local model, or a hosted one setup connected). Otherwise None, and the
+    whole settings change waits for the re-embed."""
+    import tomllib
+    from ..store import same_vector_space
+    try:
+        table = tomllib.loads((Path(home) / apply.SETTINGS).read_text(encoding="utf-8")).get("embedding")
+    except (OSError, ValueError):
+        return None
+    if not isinstance(table, dict) or not table:
+        return None
+    provider = table.get("provider", "local")
+    if provider == "local":
+        from ..embed import LocalEmbedder
+        model = str(table.get("local_model") or "")
+        if not model:
+            return None
+        descriptor = LocalEmbedder(model, query_prefix=table.get("query_prefix"), passage_prefix=table.get("passage_prefix")).descriptor
+    elif provider in profiles and isinstance(table.get("dims"), int):
+        descriptor = f"{provider}:{profiles[provider].get('defaultModel')}:{table['dims']}d"
+    else:
+        return None
+    stored, _ = _stored(home)
+    try:
+        apply.embedding_table(table)
+    except SetupError:
+        return None
+    return table if same_vector_space(stored, descriptor) else None
+
+
 class Reembedding:
     """The one re-embed that may be running, and what happens when it ends."""
 

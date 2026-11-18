@@ -62,7 +62,7 @@ def test_a_renamed_provider_profile_is_the_same_vector_space():
     assert same_vector_space("old-name:model-a:1024d", "embeddings:model-a:1024d")
     assert not same_vector_space("embeddings:model-a:1024d", "embeddings:model-a:512d")
     assert not same_vector_space("embeddings:model-a:1024d", "embeddings:model-b:1024d")
-    assert vector_space("local:BAAI/bge-small-en-v1.5|q=a|p=b") == "local:BAAI/bge-small-en-v1.5|q=a|p=b"
+    assert vector_space("local:BAAI/bge-small-en-v1.5|q=a|p=b") == "local:bge-small-en-v1.5|q=a|p=b"
     assert not same_vector_space(None, "embeddings:model-a:8d")
 
 
@@ -159,3 +159,16 @@ def test_the_database_itself_refuses_to_delete_the_plan(store):
         store.db.rollback()
     assert store.plan_get(item["id"])["status"] == "in_progress"
     assert store.db.execute("SELECT COUNT(*) FROM plan_events").fetchone()[0] >= 2
+
+
+def test_a_store_moved_to_another_folder_is_still_the_same_local_model(store):
+    here = "local:/Users/sam/.tess-memory/models/multilingual-e5-small|q=query: |p=passage: "
+    moved = "local:/Volumes/backup/memory/models/multilingual-e5-small/|q=query: |p=passage: "
+    assert same_vector_space(here, moved)
+    assert same_vector_space("local:BAAI/bge-small-en-v1.5", "local:/anywhere/models/bge-small-en-v1.5")
+    # Another model, or the same model used with other prefixes, is not the same space.
+    assert not same_vector_space(here, here.replace("multilingual-e5-small", "bge-small-en-v1.5"))
+    assert not same_vector_space(here, "local:/Users/sam/.tess-memory/models/multilingual-e5-small|q=|p=")
+    fill(store, Embedder(here, 4), ["kept across the move"])
+    store.assert_embedder(moved)  # does not raise: nothing to re-embed
+    assert reembed.reembed(store, Embedder(moved, 4))["state"] == "current"

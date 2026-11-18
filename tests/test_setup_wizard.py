@@ -567,3 +567,55 @@ def test_two_hosted_embedding_models_keep_separate_profiles_until_the_settings_s
     assert sorted(setup.vault.env().values()) == [KEY + "-a", KEY + "-b"]
     embeddings.prune(setup.vault, setup.providers)
     assert set(setup.providers.profiles) == {"embeddings-model-b"} and len(setup.vault.pending_forget) == 1
+
+
+def test_only_the_embedding_change_waits_for_the_reembed(machine, monkeypatch):
+    import time
+    import numpy as np
+    from tess_memory import embed
+
+    setup, client = session(machine, keychain=None)
+    _built_store(setup, descriptor="embeddings-model-a:model-a:4d")
+    # The store runs on settings setup wrote earlier: one source, hosted model-a.
+    setup.providers.put("embeddings-model-a", {"kind": "openai", "apiMode": "chat_completions", "baseUrl": "https://old.invalid/v1",
+                                               "defaultModel": "model-a", "auth": {"kind": "none"}})
+    setup.settings.write_text('[[data_stores]]\nname = "codex"\ntype = "codex"\npath = "/somewhere"\n\n'
+                              '[embedding]\nprovider = "embeddings-model-a"\ndims = 4\nquery_prefix = ""\nsend_dimensions = true\n')
+    _configure(setup, client)  # now: both sources, a provider, and hosted model-b
+
+    class New:
+        descriptor, batch_size = "embeddings-model-b:model-b:6d", 8
+
+        def embed_passages(self, texts):
+            return np.full((len(texts), 6), 0.5, dtype=np.float32)
+
+    monkeypatch.setattr(embed, "make_embedder", lambda cfg: New())
+    saved = client.post("/api/apply", json={}).json()
+    assert saved["reembed"]["pending"]["held"] == "embedding" and saved["applied"] is not None
+    interim = load_config(setup.settings)
+    # Everything else chosen is in effect; the embedding is still the store's own.
+    assert [d.name for d in interim.data_stores] == ["claude-code", "codex"] and interim.engine_profile == "anthropic"
+    assert (interim.embed_provider, interim.embed_dims) == ("embeddings-model-a", 4)
+    assert set(setup.providers.profiles) >= {"embeddings-model-a", "embeddings-model-b"}
+
+    client.post("/api/reembed/start", json={})
+    for _ in range(200):
+        state = client.get("/api/state").json()
+        if state["reembed"]["job"]["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert state["reembed"]["job"]["state"] == "switched", state["reembed"]["job"]
+    final = load_config(setup.settings)
+    assert (final.embed_provider, final.embed_dims) == ("embeddings-model-b", 6)
+    assert "embeddings-model-a" not in setup.providers.profiles  # dropped once nothing uses it
+
+
+def test_settings_that_cannot_be_rewritten_around_their_embedding_all_wait(machine):
+    setup, client = session(machine, keychain=None)
+    _built_store(setup)
+    # Hand-written: its embedding profile lives in a provider file setup does not manage.
+    setup.settings.write_text('[embedding]\nprovider = "a-profile-from-elsewhere"\ndims = 4\n')
+    _configure(setup, client)
+    held = client.post("/api/apply", json={}).json()
+    assert held["reembed"]["pending"]["held"] == "everything" and held["applied"] is None
+    assert setup.settings.read_text().startswith('[embedding]\nprovider = "a-profile-from-elsewhere"')

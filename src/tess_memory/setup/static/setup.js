@@ -402,6 +402,9 @@
         '. To use ' + waiting.label + ', each one is embedded again. Nothing is distilled again and your plan is not touched. '
         + 'Search and ingestion keep working with the current model until every memory is done, then the store and its settings switch together.'
         + (waiting.hosted ? ' This sends the text of your memories to the new embedding service and uses your account with it.' : '')),
+      running || !waiting ? null : h('p', { class: 'note' }, waiting.held === 'embedding'
+        ? 'Your other changes are saved and already in effect. Only the embedding model waits for this.'
+        : 'Your other changes are saved together with this one, when it finishes: the current settings could not be rewritten around the embedding model they use.'),
       running ? [h('progress', { id: 'reembed-bar', max: moving.total || 1, value: moving.done || 0 }),
                  h('div', { class: 'progress-line' },
                    h('span', { id: 'reembed-text' }, number(moving.done || 0) + ' of ' + number(moving.total || 0) + ' memories embedded'),
@@ -411,7 +414,8 @@
       moving.state === 'failed' ? h('p', { class: 'note bad', role: 'alert' }, 'Re-embedding stopped with an error, and nothing was switched. ' + (moving.detail || '')) : null,
       running ? null : h('div', { class: 'actions' },
         button(moving.state === 'stopped' || moving.state === 'failed' ? 'Continue re-embedding' : 'Re-embed and switch', 'reembed', () => act('reembed', '/api/reembed/start', {})),
-        button('Keep the current model', 'reembed-cancel', () => act('reembed-cancel', '/api/reembed/cancel', {}), 'quiet')));
+        button('Keep the current model', 'reembed-cancel', () => act('reembed-cancel', '/api/reembed/cancel', {}), 'quiet'),
+        S.applied ? button('Continue without switching yet', 'reembed-later', () => go('agents'), 'quiet') : null));
   }
 
   // ---- step 4: agents -----------------------------------------------------
@@ -546,7 +550,8 @@
       body,
       h('div', { class: 'section' }, h('h2', null, 'Keeping it current'), keep),
       errorNote(),
-      h('div', { class: 'actions' }, button('Finish setup', 'quit', () => act('quit', '/api/quit', {}, () => { ui.finished = true; }), 'primary', { disabled: idle })),
+      h('div', { class: 'actions' }, button('Finish setup', 'quit', () => act('quit', '/api/quit', {}, () => { ui.finished = true; }), 'primary', { disabled: idle || (S.reembed.job || {}).state === 'running' }),
+        (S.reembed.job || {}).state === 'running' ? h('span', { class: 'hint' }, 'Re-embedding is still running on the Embeddings step; setup stays open until it is done.') : null),
     ];
   }
 

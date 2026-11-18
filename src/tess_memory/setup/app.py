@@ -154,9 +154,16 @@ class Setup:
         registry = await self.providers.save()
         waiting = await asyncio.to_thread(reembedding.pending, self.home, registry, self.vault.draft)
         self.reembedding.offer(waiting)
-        if waiting:
+        if not waiting:
+            return await self._write(registry)
+        # Only the embedding model has to wait. Everything else chosen (sources,
+        # provider, models) is written now, around the embedding the store runs on.
+        kept = reembedding.current_embedding(self.home, self.providers.profiles)
+        if kept is None:
+            waiting["held"] = "everything"
             return {"reembed": waiting}
-        return await self._write(registry)
+        waiting["held"] = "embedding"
+        return {**apply.write(self.vault, registry, keep_embedding=kept), "reembed": waiting}
 
     async def _write(self, registry: Path) -> dict[str, Any]:
         result = apply.write(self.vault, registry)
