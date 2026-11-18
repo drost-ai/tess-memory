@@ -131,7 +131,7 @@ def test_keys_go_to_the_keychain_and_no_file_holds_them(machine):
     assert sorted(json.loads(value)["api_key"] for value in keychain.items.values()) == sorted([KEY, "g-" + KEY])
     cfg = load_config(setup.settings)
     assert (cfg.engine_profile, cfg.engine_model, cfg.search_model) == ("anthropic", "large", "small")
-    assert (cfg.embed_provider, cfg.embed_dims, cfg.embed_query_prefix, cfg.embed_send_dimensions) == ("embeddings", 768, "", True)
+    assert (cfg.embed_provider, cfg.embed_dims, cfg.embed_query_prefix, cfg.embed_send_dimensions) == ("embeddings-gemini-embedding-001", 768, "", True)
     assert [(d.name, d.type) for d in cfg.data_stores] == [("claude-code", "claude-code"), ("codex", "codex")]
 
 
@@ -443,3 +443,127 @@ def test_every_agent_can_be_connected_whatever_sources_were_chosen(machine):
     assert [s["name"] for s in state["sources"] if s["enabled"]] == ["codex"]
     assert [(t["type"], t["display_path"]) for t in state["agents"]["targets"]] == [
         ("claude-code", "~/.claude"), ("claude-code", "~/.claude-second"), ("codex", "~/.codex")]
+
+
+def _built_store(setup, descriptor="embeddings:model-a:4d"):
+    """A store that already holds memories and a plan, embedded with ``descriptor``."""
+    import numpy as np
+    from tess_memory import plan
+    from tess_memory.store import MemoryRow, MemoryStore
+
+    class Old:
+        batch_size = 8
+
+        def embed_passages(self, texts):
+            return np.ones((len(texts), 4), dtype=np.float32)
+
+    Old.descriptor = descriptor
+    setup.home.mkdir(parents=True, exist_ok=True)
+    store = MemoryStore(setup.home / "memory.db")
+    store.assert_embedder(descriptor)
+    store.add_memories([MemoryRow(level="memory", kind="decision", content=f"decision {i}", project="p",
+                                  vector=np.ones(4, dtype=np.float32)) for i in range(5)])
+    store.commit()
+    item = plan.add_item(store, Old(), project="p", kind="epic", title="An authored plan")
+    store.close()
+    return item["id"]
+
+
+def _configure(setup, client, *, model="model-b", dims=6):
+    choose_sources(client)
+    client.post("/api/model/key", json={"kind": "anthropic", "api_key": KEY})
+    client.post("/api/model/choose", json={"distill_model": "large", "search_model": "small"})
+    setup.providers.put(embeddings.profile_name(model), {"kind": "openai", "apiMode": "chat_completions", "baseUrl": "https://embed.invalid/v1",
+                                                         "defaultModel": model, "auth": {"kind": "none"}})
+    setup.vault.draft["embedding"] = {"mode": "hosted", "preset": "compatible", "label": "OpenAI-compatible endpoint",
+                                      "base_url": "https://embed.invalid/v1", "model": model, "dims": dims,
+                                      "send_dimensions": True, "auth": {}, "profile": embeddings.profile_name(model)}
+    setup.vault.save()
+
+
+def test_changing_the_embedding_model_of_a_built_store_reembeds_before_any_setting_changes(machine, monkeypatch):
+    import sqlite3
+    import time
+    import numpy as np
+    from tess_memory import embed
+
+    setup, client = session(machine, keychain=None)
+    plan_id = _built_store(setup)
+    setup.settings.write_text("# the settings the store is running on\n")
+    _configure(setup, client)
+
+    class New:
+        descriptor, batch_size, seen = "embeddings-model-b:model-b:6d", 2, []
+
+        def embed_passages(self, texts):
+            New.seen += list(texts)
+            return np.full((len(texts), 6), 0.5, dtype=np.float32)
+
+    monkeypatch.setattr(embed, "make_embedder", lambda cfg: New())
+    offered = client.post("/api/apply", json={}).json()
+    assert offered["result"]["reembed"]["rows"] == 6 and offered["reembed"]["pending"]["current"] == "embeddings:model-a:4d"
+    assert offered["reembed"]["pending"]["label"] == "model-b" and offered["applied"] is None
+    assert setup.settings.read_text() == "# the settings the store is running on\n"  # nothing changed yet
+
+    assert client.post("/api/reembed/start", json={}).status_code == 200
+    for _ in range(200):
+        state = client.get("/api/state").json()
+        if state["reembed"]["job"]["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert state["reembed"]["job"]["state"] == "switched", state["reembed"]["job"]
+    assert state["reembed"]["pending"] is None and state["applied"] is not None
+
+    database = sqlite3.connect(setup.home / "memory.db")
+    assert database.execute("SELECT value FROM meta WHERE key='embedder'").fetchone()[0] == New.descriptor
+    assert {row[0] for row in database.execute("SELECT length(vector)/4 FROM embeddings")} == {6}
+    assert database.execute("SELECT title FROM plan_items WHERE id=?", (plan_id,)).fetchone()[0] == "An authored plan"
+    assert database.execute("SELECT COUNT(*) FROM memories").fetchone()[0] == 6
+    database.close()
+    cfg = load_config(setup.settings)
+    assert (cfg.embed_provider, cfg.embed_dims) == ("embeddings-model-b", 6)
+    assert not (setup.home / "settings.next.toml").exists()
+    assert len(list(setup.home.glob("settings.toml.before-setup-*"))) == 1
+    assert len(New.seen) == 6
+
+
+def test_a_reembed_can_be_declined_and_the_store_and_settings_stay_as_they_were(machine, monkeypatch):
+    import sqlite3
+
+    setup, client = session(machine, keychain=None)
+    _built_store(setup)
+    setup.settings.write_text("# running settings\n")
+    _configure(setup, client)
+    assert client.post("/api/apply", json={}).json()["reembed"]["pending"] is not None
+    assert client.post("/api/agents/register", json={"id": "x"}).json()["error"] == "settings_not_written"
+    declined = client.post("/api/reembed/cancel", json={}).json()
+    assert declined["reembed"] == {"pending": None, "job": {"state": "idle"}}
+    assert setup.settings.read_text() == "# running settings\n" and not (setup.home / "settings.next.toml").exists()
+    database = sqlite3.connect(setup.home / "memory.db")
+    assert database.execute("SELECT value FROM meta WHERE key='embedder'").fetchone()[0] == "embeddings:model-a:4d"
+    database.close()
+    assert client.post("/api/reembed/start", json={}).json()["error"] == "nothing_to_reembed"
+
+
+def test_the_same_model_under_another_profile_name_needs_no_reembed(machine):
+    setup, client = session(machine, keychain=None)
+    _built_store(setup, descriptor="a-name-from-before:model-b:6d")
+    _configure(setup, client)
+    written = client.post("/api/apply", json={}).json()
+    assert written["reembed"]["pending"] is None and written["result"]["settings"] == str(setup.settings)
+
+
+def test_two_hosted_embedding_models_keep_separate_profiles_until_the_settings_switch(machine):
+    import asyncio
+
+    setup, _ = session(machine, keychain=None)
+    first = asyncio.run(embeddings.connect_hosted(setup.vault, setup.providers, preset="compatible", base_url="https://one.invalid/v1",
+                                                  model="model-a", api_key=KEY + "-a", transport=fake_embedding))
+    second = asyncio.run(embeddings.connect_hosted(setup.vault, setup.providers, preset="compatible", base_url="https://two.invalid/v1",
+                                                   model="model-b", api_key=KEY + "-b", transport=fake_embedding))
+    assert (first["profile"], second["profile"]) == ("embeddings-model-a", "embeddings-model-b")
+    # The first model's profile and key are still there: a store on it keeps working meanwhile.
+    assert set(setup.providers.profiles) == {"embeddings-model-a", "embeddings-model-b"}
+    assert sorted(setup.vault.env().values()) == [KEY + "-a", KEY + "-b"]
+    embeddings.prune(setup.vault, setup.providers)
+    assert set(setup.providers.profiles) == {"embeddings-model-b"} and len(setup.vault.pending_forget) == 1

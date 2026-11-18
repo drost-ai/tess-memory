@@ -23,7 +23,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import agents, apply, detect, embeddings, guidance, keepcurrent, models
+from . import agents, apply, detect, embeddings, guidance, keepcurrent, models, reembedding
 from .jobs import FirstIngest
 from .providers import ProviderFile, SetupError
 from .vault import Vault
@@ -59,6 +59,7 @@ class Setup:
         self.ingest = FirstIngest(self.settings)
         self.ingest.after = self._keep_current
         self.scheduler_error: dict[str, str] | None = None
+        self.reembedding = reembedding.Reembedding(self.vault)
         self.token = secrets.token_urlsafe(32)
         self.on_quit: Any = None
 
@@ -111,6 +112,7 @@ class Setup:
             "ingest": self.ingest.status,
             "scheduler": {**keepcurrent.status(self.home), "wanted": bool(draft.get("keep_current", True)),
                           "error": self.scheduler_error},
+            "reembed": {"pending": self.reembedding.info, "job": self.reembedding.job},
             "missing": apply.missing({**draft, "sources": sources if draft.get("sources") is not None else []}),
         }
 
@@ -142,9 +144,32 @@ class Setup:
         self.vault.save()
 
     async def apply(self) -> dict[str, Any]:
+        """Write the settings, unless the store must first be moved to another
+        embedding model: then nothing is written and the re-embed is offered."""
         if self.vault.draft.get("sources") is None:
             raise SetupError("incomplete", "sources")
-        return apply.write(self.vault, await self.providers.save())
+        gaps = apply.missing(self.vault.draft)
+        if gaps:
+            raise SetupError("incomplete", ", ".join(gaps))
+        registry = await self.providers.save()
+        waiting = await asyncio.to_thread(reembedding.pending, self.home, registry, self.vault.draft)
+        self.reembedding.offer(waiting)
+        if waiting:
+            return {"reembed": waiting}
+        return await self._write(registry)
+
+    async def _write(self, registry: Path) -> dict[str, Any]:
+        result = apply.write(self.vault, registry)
+        embeddings.prune(self.vault, self.providers)
+        await self.providers.save()
+        while self.vault.pending_forget:
+            await self.vault.forget(self.vault.pending_forget.pop())
+        return result
+
+    async def start_reembed(self) -> None:
+        registry = await self.providers.path()
+        # Runs on the re-embed thread, once the store has switched.
+        self.reembedding.start(registry, after=lambda: asyncio.run(self._write(registry)))
 
 
 def create_app(setup: Setup, *, port: int) -> Starlette:
@@ -228,6 +253,15 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
     async def apply_settings(_body):
         return await setup.apply()
 
+    async def reembed_start(_body):
+        await setup.start_reembed()
+
+    async def reembed_stop(_body):
+        setup.reembedding.stop()
+
+    async def reembed_cancel(_body):
+        setup.reembedding.cancel()
+
     async def register(body):
         if not setup.vault.meta.get("applied"):
             raise SetupError("settings_not_written")
@@ -278,6 +312,8 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
         post("/api/embedding/local/download", local_download), post("/api/embedding/local/cancel", local_cancel),
         post("/api/embedding/local/use", local_use), post("/api/embedding/hosted", hosted),
         post("/api/apply", apply_settings), post("/api/agents/register", register),
+        post("/api/reembed/start", reembed_start), post("/api/reembed/stop", reembed_stop),
+        post("/api/reembed/cancel", reembed_cancel),
         post("/api/ingest/start", ingest_start), post("/api/ingest/stop", ingest_stop),
         post("/api/scheduler/install", scheduler_install), post("/api/scheduler/remove", scheduler_remove),
         post("/api/quit", quit_setup),

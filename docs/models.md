@@ -129,6 +129,10 @@ again, and the plan is not touched. The new vectors are staged beside the old on
 can be stopped and continued, and one transaction switches the store over when every row
 is done. If it is interrupted before that, the store is exactly as it was.
 
+`tess-memory setup` does the same from its embeddings step: choose another model on a
+store that already holds memory and it offers to re-embed, shows progress, and switches
+the store and its settings together when it finishes, with no gap in between.
+
 Between changing the setting and finishing `reembed`, ingestion waits and search uses
 keywords, importance and recency without the meaning signal. To avoid that gap on a large
 store, leave your settings as they are and give `reembed` the new ones in a copy

@@ -58,7 +58,7 @@ def render(home: Path, registry: Path, draft: dict[str, Any]) -> str:
         lines += ['provider = "local"', f"local_model = {_s(settings['local_model'])}", f"dims = {int(settings['dims'])}",
                   f"query_prefix = {_s(settings['query_prefix'])}", f"passage_prefix = {_s(settings['passage_prefix'])}"]
     else:
-        lines += ['provider = "embeddings"', f"dims = {int(embedding['dims'])}", 'query_prefix = ""',
+        lines += [f"provider = {_s(embedding.get('profile', 'embeddings'))}", f"dims = {int(embedding['dims'])}", 'query_prefix = ""',
                   f"send_dimensions = {'true' if embedding['send_dimensions'] else 'false'}", "batch_size = 64"]
     lines += ["", "[ingest]", "quiet_seconds = 900        # leave a session alone until it has been still this long",
               "incremental = true         # read only the new, finished part of a session", ""]

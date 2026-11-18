@@ -45,6 +45,8 @@ class Vault:
         self._backend = backend  # a test seam: a keyring-shaped object
         self._store: Any = None
         self._mode: str | None = None
+        # Keys to remove once the settings that used them have been replaced.
+        self.pending_forget: list[dict[str, Any]] = []
         self.meta = self._load()
 
     # -- setup.json -----------------------------------------------------

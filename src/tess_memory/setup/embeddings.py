@@ -16,6 +16,28 @@ from .providers import GOOGLE_OPENAI_BASE, ProviderFile, SetupError, clean_base_
 from .vault import Vault
 
 PROFILE = "embeddings"
+
+
+def profile_name(model: str) -> str:
+    """One profile per hosted model. A store that is still being moved from
+    one hosted model to another needs both for a while: the old one keeps
+    search and ingestion working until the new vectors are in."""
+    import re
+    return (PROFILE + "-" + re.sub(r"[^a-z0-9]+", "-", model.lower()).strip("-"))[:60].rstrip("-")
+
+
+def prune(vault: Vault, providers: ProviderFile) -> None:
+    """Forget hosted embedding profiles, and their keys, that the settings no
+    longer use. Called once the settings that name the current one are written."""
+    choice = vault.draft.get("embedding") or {}
+    keep = choice.get("profile", PROFILE) if choice.get("mode") == "hosted" else None
+    kept_auth = choice.get("auth") if choice.get("mode") == "hosted" else None
+    stale = [name for name in providers.profiles if (name == PROFILE or name.startswith(PROFILE + "-")) and name != keep]
+    for name in stale:
+        auth = {key: value for key, value in providers.profiles[name].get("auth", {}).items() if key in ("credentialRef", "envVar")}
+        providers.drop(name)
+        if auth and auth != kept_auth:
+            vault.pending_forget.append(auth)
 ENV_NAME = "TESS_MEMORY_EMBEDDING_API_KEY"
 PRESETS = {
     "google": {"label": "Google", "base_url": GOOGLE_OPENAI_BASE, "model": "gemini-embedding-001"},
@@ -124,14 +146,17 @@ async def connect_hosted(vault: Vault, providers: ProviderFile, *, preset: Any, 
         send_dimensions = status == 200 and len(payload["data"][0]["embedding"]) == dims
     except Exception:  # noqa: BLE001 (it simply does not take the field)
         send_dimensions = False
-    auth = await vault.keep_api_key(key, env_name=ENV_NAME) if key else {}
+    profile = profile_name(name)
+    auth = await vault.keep_api_key(key, env_name=ENV_NAME + "_" + profile[len(PROFILE) + 1:].upper().replace("-", "_")) if key else {}
     previous = vault.draft.get("embedding") or {}
-    if previous.get("auth") and previous["auth"] != auth:
+    # A key is forgotten here only when this same profile is being given a new
+    # one. Another model's profile and key stay until the settings stop using it.
+    if previous.get("profile", PROFILE) == profile and previous.get("auth") and previous["auth"] != auth:
         await vault.forget(previous["auth"])
-    providers.put(PROFILE, profile_record("embeddings", auth, model=name, base_url=url))
+    providers.put(profile, profile_record("embeddings", auth, model=name, base_url=url))
     await providers.save()
     choice = {"mode": "hosted", "preset": preset, "label": PRESETS[preset]["label"], "base_url": url, "model": name,
-              "dims": dims, "send_dimensions": send_dimensions, "auth": auth}
+              "dims": dims, "send_dimensions": send_dimensions, "auth": auth, "profile": profile}
     vault.draft["embedding"] = choice
     vault.save()
     return choice

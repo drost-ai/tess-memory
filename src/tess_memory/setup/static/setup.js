@@ -52,6 +52,8 @@
     scheduler_install_failed: 'The background service could not be installed.',
     scheduler_remove_failed: 'The background service could not be turned off.',
     scheduler_unsupported: 'A background service cannot be installed on this system.',
+    reembed_running: 'Re-embedding is already running.',
+    nothing_to_reembed: 'There is nothing to re-embed.',
   };
 
   const say = (error) => {
@@ -363,6 +365,8 @@
         h('p', { class: 'hint' }, 'The text of your sessions is sent to this service to be embedded. ' + keyHint()),
         h('div', null, h('button', { type: 'submit', class: 'button button-primary' + (ui.busy === 'hosted' ? ' busy' : ''), disabled: Boolean(ui.busy) }, 'Connect and test')));
     }
+    const waiting = S.reembed.pending;
+    const moving = S.reembed.job || {};
     const summary = !choice ? null : choice.mode === 'local'
       ? 'Using ' + choice.name + ' on this machine.'
       : 'Using ' + choice.model + ' from ' + choice.label + ' (' + choice.dims + ' dimensions).';
@@ -378,10 +382,36 @@
       summary ? h('p', { class: 'section note ok' }, summary) : null,
       S.existing_settings ? h('p', { class: 'section note' }, 'A settings file already exists at ', h('span', { class: 'mono' }, S.settings), '. Saving replaces it and keeps the current one beside it as a dated copy.') : null,
       errorNote(),
-      h('div', { class: 'actions' },
-        button('Save settings and continue', 'apply', () => act('apply', '/api/apply', {}, (result) => { ui.written = result; ui.step = 'agents'; }),
-          'primary', { disabled: !choice })),
+      waiting || moving.state === 'running' ? reembedPanel(waiting, moving)
+        : h('div', { class: 'actions' },
+            button('Save settings and continue', 'apply', () => act('apply', '/api/apply', {}, (result) => {
+              if (result.reembed) return;          // the store must be moved to the new model first
+              ui.written = result; ui.step = 'agents';
+            }), 'primary', { disabled: !choice })),
     ];
+  }
+
+  // The store already holds memories embedded with another model. Offer to
+  // embed them again; the settings change only once that has finished.
+  function reembedPanel(waiting, moving) {
+    const running = moving.state === 'running';
+    const rows = waiting ? waiting.rows : moving.total;
+    return h('div', { class: 'section panel' },
+      h('h2', null, running ? 'Moving your memory to the new model' : 'This store was built with another embedding model'),
+      running ? null : h('p', { class: 'hint' }, 'Its ' + number(rows) + ' memories were embedded with ', h('span', { class: 'mono' }, waiting.current),
+        '. To use ' + waiting.label + ', each one is embedded again. Nothing is distilled again and your plan is not touched. '
+        + 'Search and ingestion keep working with the current model until every memory is done, then the store and its settings switch together.'
+        + (waiting.hosted ? ' This sends the text of your memories to the new embedding service and uses your account with it.' : '')),
+      running ? [h('progress', { id: 'reembed-bar', max: moving.total || 1, value: moving.done || 0 }),
+                 h('div', { class: 'progress-line' },
+                   h('span', { id: 'reembed-text' }, number(moving.done || 0) + ' of ' + number(moving.total || 0) + ' memories embedded'),
+                   button('Stop', 'reembed-stop', () => act('reembed-stop', '/api/reembed/stop', {}), 'outline', { attrs: { class: 'button button-outline button-small' } })),
+                 h('p', { class: 'hint' }, 'Stopping is safe: nothing switches until every memory is done, and it continues from here next time.')] : null,
+      moving.state === 'stopped' ? h('p', { class: 'note' }, 'Stopped at ' + number(moving.done || 0) + ' of ' + number(moving.total || 0) + '. Nothing was switched.') : null,
+      moving.state === 'failed' ? h('p', { class: 'note bad', role: 'alert' }, 'Re-embedding stopped with an error, and nothing was switched. ' + (moving.detail || '')) : null,
+      running ? null : h('div', { class: 'actions' },
+        button(moving.state === 'stopped' || moving.state === 'failed' ? 'Continue re-embedding' : 'Re-embed and switch', 'reembed', () => act('reembed', '/api/reembed/start', {})),
+        button('Keep the current model', 'reembed-cancel', () => act('reembed-cancel', '/api/reembed/cancel', {}), 'quiet')));
   }
 
   // ---- step 4: agents -----------------------------------------------------
@@ -563,9 +593,11 @@
   // nothing the person is typing is lost.
   const phase = (state) => JSON.stringify([state.model.chatgpt.attempt.state, (state.embedding.job || {}).state, (state.ingest || {}).state,
                                            Boolean(state.model.connection), Boolean(state.embedding.choice),
-                                           state.scheduler.ours, state.scheduler.running, state.scheduler.state, Boolean(state.scheduler.error)]);
+                                           state.scheduler.ours, state.scheduler.running, state.scheduler.state, Boolean(state.scheduler.error),
+                                           (state.reembed.job || {}).state, Boolean(state.reembed.pending), Boolean(state.applied)]);
   const inFlight = (state) => state.model.chatgpt.attempt.state === 'waiting'
     || ['downloading', 'verifying'].includes((state.embedding.job || {}).state) || (state.ingest || {}).state === 'running'
+    || (state.reembed.job || {}).state === 'running'
     || (ui.step === 'run' && state.scheduler.supported && (state.scheduler.ours || (state.scheduler.wanted && (state.ingest || {}).state === 'finished' && !state.scheduler.installed && !state.scheduler.error)));
 
   async function poll() {
@@ -577,6 +609,7 @@
     S = next;
     if (changed) {
       if (S.model.connection && ui.step === 'model') ui.changeModel = false;
+      if ((S.reembed.job || {}).state === 'switched' && ui.step === 'embedding') { ui.written = null; ui.step = 'agents'; }
       return render();
     }
     const job = S.embedding.job || {};
@@ -584,6 +617,12 @@
     if (bar) {
       bar.max = job.total || 1; bar.value = job.done || 0;
       document.getElementById('download-text').textContent = megabytes(job.done || 0) + ' of ' + megabytes(job.total || 0);
+    }
+    const moving = S.reembed.job || {};
+    const moveBar = document.getElementById('reembed-bar');
+    if (moveBar) {
+      moveBar.max = moving.total || 1; moveBar.value = moving.done || 0;
+      document.getElementById('reembed-text').textContent = number(moving.done || 0) + ' of ' + number(moving.total || 0) + ' memories embedded';
     }
     const ingest = S.ingest || {};
     const ingestBar = document.getElementById('ingest-bar');
