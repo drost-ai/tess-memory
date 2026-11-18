@@ -653,3 +653,41 @@ def test_unticking_the_box_is_the_only_thing_that_leaves_the_service_off(machine
     setup.vault.meta["applied"] = {"settings": str(setup.settings)}
     state = client.post("/api/ingest/start", json={"limit": 25, "keep_current": False}).json()
     assert installs == [] and state["scheduler"]["wanted"] is False
+
+
+def test_the_ingestion_setup_starts_outlives_setup(tmp_path):
+    """Finishing or closing setup must not end the ingestion it started: the
+    child writes to files in the store folder, in a session of its own."""
+    import os
+    import signal
+    import sys
+    import time
+    from tess_memory.setup.jobs import FirstIngest
+
+    script = ("import json,sys,time,os\n"
+              "print('[ingest] db=somewhere', file=sys.stderr, flush=True)\n"
+              "for i in (1, 2, 3):\n"
+              "    time.sleep(0.15)\n"
+              "    print(f'[ingest] ({i}/3) distilled: project / a session', file=sys.stderr, flush=True)\n"
+              "print(json.dumps({'distilled': 3, 'errors': 0, 'session': os.getsid(0) == os.getpid()}))\n")
+    job = FirstIngest(tmp_path / "store" / "settings.toml")
+    job.command = [sys.executable, "-c", script]
+    done = []
+    job.after = lambda: done.append(True)
+    job.start(25)
+    process = job._process
+    assert process.stdout is None and process.stderr is None      # no pipe to break when setup exits
+    assert os.getsid(process.pid) != os.getsid(0)                 # not in setup's session
+    for _ in range(100):
+        if job.status["state"] != "running":
+            break
+        time.sleep(0.05)
+    assert (job.status["state"], job.status["done"], job.status["total"]) == ("finished", 3, 3)
+    assert job.status["stats"] == {"distilled": 3, "errors": 0, "session": True} and done == [True]
+    assert job.status["lines"][-1] == "[ingest] (3/3) distilled: project / a session"
+    assert "(3/3)" in (tmp_path / "store" / "setup-ingest.log").read_text()
+
+    job.command = [sys.executable, "-c", "import time\ntime.sleep(30)"]
+    job.start(None)
+    job.stop()
+    assert job._process.wait(timeout=5) == -signal.SIGTERM and job.status["state"] == "stopped"
