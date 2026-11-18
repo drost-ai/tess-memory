@@ -64,9 +64,12 @@ class Setup:
         self.on_quit: Any = None
 
     def _keep_current(self) -> None:
-        """Once the first batch is in, hand the rest to the scheduler, so the
-        history is read whether or not this page stays open."""
-        if not self.vault.draft.get("keep_current"):
+        """Turn the background service on, unless the person said not to. It
+        is installed the moment ingestion starts, not when the first batch
+        ends, so it is on whether or not this page stays open and whatever
+        becomes of that batch. While the batch holds the store the service
+        simply waits its turn, then carries on with the rest of the history."""
+        if not self.vault.draft.get("keep_current", True):  # on unless the person turned it off
             return
         current = keepcurrent.status(self.home)
         if not current["supported"] or current["installed"]:
@@ -281,6 +284,7 @@ def create_app(setup: Setup, *, port: int) -> Starlette:
             setup.vault.draft["keep_current"] = bool(body["keep_current"])
             setup.vault.save()
         setup.ingest.start(body.get("limit"))
+        await asyncio.to_thread(setup._keep_current)
 
     async def ingest_stop(_body):
         setup.ingest.stop()

@@ -619,3 +619,37 @@ def test_settings_that_cannot_be_rewritten_around_their_embedding_all_wait(machi
     held = client.post("/api/apply", json={}).json()
     assert held["reembed"]["pending"]["held"] == "everything" and held["applied"] is None
     assert setup.settings.read_text().startswith('[embedding]\nprovider = "a-profile-from-elsewhere"')
+
+
+def test_the_background_service_is_on_by_default_from_the_moment_ingestion_starts(machine, monkeypatch):
+    from tess_memory.setup import keepcurrent
+    from tess_memory.setup.jobs import FirstIngest
+
+    setup, client = session(machine, keychain=None)
+    installs = []
+    monkeypatch.setattr(keepcurrent, "status", lambda home: {"supported": True, "kind": "launchd", "installed": bool(installs), "ours": bool(installs),
+                                                             "running": bool(installs), "command": "", "timezone": "UTC"})
+    monkeypatch.setattr(keepcurrent, "install", lambda home, settings: installs.append(settings))
+    monkeypatch.setattr(FirstIngest, "start", lambda self, limit: self.status.update(state="running"))
+    setup.vault.meta["applied"] = {"settings": str(setup.settings)}
+    assert client.get("/api/state").json()["scheduler"]["wanted"] is True
+    # The page sends what its ticked-by-default box says; even without that field the default is on.
+    started = client.post("/api/ingest/start", json={"limit": 25}).json()
+    assert installs == [setup.settings] and started["scheduler"]["ours"] is True
+    setup.ingest.after()  # the batch ending does not install it a second time
+    assert len(installs) == 1
+
+
+def test_unticking_the_box_is_the_only_thing_that_leaves_the_service_off(machine, monkeypatch):
+    from tess_memory.setup import keepcurrent
+    from tess_memory.setup.jobs import FirstIngest
+
+    setup, client = session(machine, keychain=None)
+    installs = []
+    monkeypatch.setattr(keepcurrent, "status", lambda home: {"supported": True, "kind": "launchd", "installed": False, "ours": False,
+                                                             "running": False, "command": "", "timezone": "UTC"})
+    monkeypatch.setattr(keepcurrent, "install", lambda home, settings: installs.append(settings))
+    monkeypatch.setattr(FirstIngest, "start", lambda self, limit: self.status.update(state="running"))
+    setup.vault.meta["applied"] = {"settings": str(setup.settings)}
+    state = client.post("/api/ingest/start", json={"limit": 25, "keep_current": False}).json()
+    assert installs == [] and state["scheduler"]["wanted"] is False

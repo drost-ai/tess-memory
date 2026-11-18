@@ -492,7 +492,7 @@
           h('span', { id: 'ingest-text' }, number(ingest.done) + (ingest.total ? ' of ' + number(ingest.total) : '') + ' sessions ingested'),
           button('Stop ingesting', 'ingest-stop', () => act('ingest-stop', '/api/ingest/stop', {}), 'outline', { attrs: { class: 'button button-outline button-small' } })),
         h('pre', { class: 'block log', id: 'ingest-log' }, (ingest.lines || []).join('\n')),
-        h('p', { class: 'hint' }, keeping ? 'When this first batch is in, the background service takes over and ingests the rest.' : 'You can leave this running. What is finished is kept if it stops.'));
+        h('p', { class: 'hint' }, keeping ? 'The background service is on and takes over when this first batch is in. You can close this page.' : 'You can leave this running. What is finished is kept if it stops.'));
     } else {
       const stats = ingest.stats;
       body = [
@@ -511,7 +511,7 @@
             h('span', { class: 'row-main' },
               h('span', { class: 'row-title' }, 'Keep ingesting in the background'),
               h('span', { class: 'row-sub' }, ' Recommended. A small service that starts when you log in.'))) : null,
-          keeping ? h('p', { class: 'section hint' }, 'Setup ingests 25 sessions now, so you can see it work. The background service then ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
+          keeping ? h('p', { class: 'section hint' }, 'Setup ingests 25 sessions now, so you can see it work. The background service starts at the same time and ingests the rest of your history, up to ' + number(total) + ' session files, and keeps going as you work. A long history takes hours and uses your model plan; that is the cost of giving your agents a memory, and it is paid once.')
             : h('div', { class: 'section' }, h('h2', null, 'How much to ingest now'), amounts),
           h('div', { class: 'actions' }, button('Start ingesting', 'ingest', begin)))
           : keeping ? null : h('div', { class: 'section' }, h('h2', null, 'Ingest more'), amounts,
@@ -537,11 +537,17 @@
       keep = [h('p', { class: 'note ok' }, line), rules,
               h('div', { class: 'actions' }, button('Turn it off', 'scheduler-off', () => act('scheduler-off', '/api/scheduler/remove', {}, () => { ui.keep = false; }), 'quiet'))];
     } else {
+      // Not installed yet. It is on by default: before ingestion starts it is
+      // about to be turned on, and it is only "off" if the person unticked it
+      // or installing it failed.
+      const on = idle ? ui.keep : scheduler.wanted;
+      const starting = on && !idle && !scheduler.error;
       keep = [scheduler.error ? h('p', { class: 'note bad', role: 'alert' }, say(scheduler.error)) : null,
-              h('p', { class: 'hint' }, idle ? (ui.keep ? 'It is turned on when the first batch has been ingested.' : 'Off. New sessions are only ingested when you run ingestion yourself.')
-                                              : 'Off. New sessions are only ingested when you run ingestion yourself.'),
-              idle && !ui.keep ? null : rules,
-              idle ? null : h('div', { class: 'actions' }, button('Turn it on', 'scheduler', () => act('scheduler', '/api/scheduler/install', {}, () => { ui.keep = true; }), 'outline'))];
+              on && idle ? h('p', { class: 'note ok' }, 'On. It starts when you start ingesting, and keeps going after you close this page.') : null,
+              starting ? h('p', { class: 'note ok' }, 'On. Starting the background service…') : null,
+              !on ? h('p', { class: 'note' }, 'Off, because you unticked it. New sessions are only ingested when you run ingestion yourself.') : null,
+              on || !idle ? rules : null,
+              !idle && (!on || scheduler.error) ? h('div', { class: 'actions' }, button(scheduler.error ? 'Try again' : 'Turn it on', 'scheduler', () => act('scheduler', '/api/scheduler/install', {}, () => { ui.keep = true; }), 'outline')) : null];
     }
     return [
       h('p', { class: 'eyebrow' }, 'Step 5 of 5'),
@@ -603,7 +609,7 @@
   const inFlight = (state) => state.model.chatgpt.attempt.state === 'waiting'
     || ['downloading', 'verifying'].includes((state.embedding.job || {}).state) || (state.ingest || {}).state === 'running'
     || (state.reembed.job || {}).state === 'running'
-    || (ui.step === 'run' && state.scheduler.supported && (state.scheduler.ours || (state.scheduler.wanted && (state.ingest || {}).state === 'finished' && !state.scheduler.installed && !state.scheduler.error)));
+    || (ui.step === 'run' && state.scheduler.supported && (state.scheduler.ours || (state.scheduler.wanted && (state.ingest || {}).state !== 'idle' && !state.scheduler.installed && !state.scheduler.error)));
 
   async function poll() {
     if (!S || ui.busy || ui.finished || !inFlight(S)) return;
