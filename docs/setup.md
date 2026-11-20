@@ -28,7 +28,7 @@ Tess Memory uses a model to distil sessions into memories and to search them. Co
 of:
 
 - **A ChatGPT account.** Sign in and use your ChatGPT plan. There is no key to manage.
-- **An API key.** Anthropic or OpenAI, billed to your API account.
+- **An API key.** Anthropic, OpenAI or Google Gemini, billed to your API account.
 - **Your own endpoint.** Any OpenAI-compatible service, including a model on your own
   hardware.
 

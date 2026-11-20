@@ -135,6 +135,24 @@ def test_keys_go_to_the_keychain_and_no_file_holds_them(machine):
     assert [(d.name, d.type) for d in cfg.data_stores] == [("claude-code", "claude-code"), ("codex", "codex")]
 
 
+def test_a_google_gemini_key_becomes_a_google_profile_tess_core_accepts(machine):
+    keychain = FakeKeychain()
+    setup, client = session(machine, keychain=keychain)
+    choose_sources(client)
+    connection = client.post("/api/model/key", json={"kind": "google", "api_key": KEY}).json()["model"]["connection"]
+    assert (connection["kind"], connection["profile"]) == ("google", "google")
+    assert client.post("/api/model/choose", json={"distill_model": "large", "search_model": "small"}).json()["model"]["connection"]["verified"]
+    from tess_core.config import ProviderRegistry
+    registry = ProviderRegistry(setup.home / "providers.yaml")
+    record = registry.profiles["google"]
+    assert (record["kind"], record["defaultModel"], record["auth"]["kind"]) == ("google", "large", "google_api_key")
+    # The key reaches the engine in Google's own field, still as a keychain reference.
+    resolved = registry.resolve_auth("google")
+    assert set(resolved) == {"googleApiKey", "customHeaders"} and KEY not in json.dumps(resolved)
+    assert KEY not in (setup.home / "providers.yaml").read_text()
+    assert client.post("/api/model/key", json={"kind": "mistral", "api_key": KEY}).json()["error"] == "unknown_kind"
+
+
 def test_without_a_keychain_keys_live_in_one_private_file(machine):
     setup, client = session(machine, keychain=None)
     choose_sources(client)

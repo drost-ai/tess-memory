@@ -86,9 +86,9 @@ uv run tess-memory setup
 
 1. **Sources.** It finds the Claude Code and Codex sessions already on your disk. Tick the
    ones to remember.
-2. **Provider.** Sign in with your ChatGPT account, paste an Anthropic or OpenAI API key, or
-   point it at any OpenAI-compatible endpoint, including a model on your own hardware.
-   It is tested with a real request before you move on.
+2. **Provider.** Sign in with your ChatGPT account, paste an Anthropic, OpenAI or Google
+   Gemini API key, or point it at any OpenAI-compatible endpoint, including a model on your
+   own hardware. It is tested with a real request before you move on.
 3. **Embeddings.** Use a small model on this machine (downloaded once, then offline),
    Google, or any OpenAI-compatible embeddings service.
 4. **Connect agents.** One click registers the memory server with each agent.
@@ -245,8 +245,8 @@ The same pages live in this repository:
 - Python 3.12 or 3.13, and [uv](https://docs.astral.sh/uv/)
 - macOS or Linux
 - For distilled memories: a model from any provider supported by
-  [Tess Core](https://github.com/drost-ai/tess-core) (Anthropic, OpenAI, any
-  OpenAI-compatible endpoint, or a local model)
+  [Tess Core](https://github.com/drost-ai/tess-core) (Anthropic, OpenAI, Google
+  Gemini, any OpenAI-compatible endpoint, or a local model)
 - For embeddings: a hosted embedding model, or the built-in local one
 
 ## Status

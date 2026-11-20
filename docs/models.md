@@ -14,8 +14,8 @@ None of them is required to start. With local embeddings, `ingest --no-llm` and
 ## Declaring providers
 
 Models are reached through [Tess Core](https://github.com/drost-ai/tess-core), so any
-provider it supports works: Anthropic, OpenAI, any OpenAI-compatible endpoint, or a model
-on your own hardware.
+provider it supports works: Anthropic, OpenAI, Google Gemini, any OpenAI-compatible
+endpoint, or a model on your own hardware.
 
 `tess-memory setup` does this for you: it connects a ChatGPT account, an API key or an
 endpoint, lists the models it offers, tests the ones you pick and writes the provider
@@ -39,6 +39,11 @@ providerProfiles:
     baseUrl: https://api.example.com/v1
     defaultModel: <an inexpensive model>
     auth: { kind: custom_bearer, envVar: EXAMPLE_API_KEY }
+
+  gemini:
+    kind: google
+    defaultModel: <a Gemini model>
+    auth: { kind: google_api_key, envVar: GEMINI_API_KEY }
 
   local:
     kind: openai

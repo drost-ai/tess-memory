@@ -1,8 +1,8 @@
 """Connecting the model that distils sessions and runs the retrieval agent.
 
 Three ways in: a ChatGPT account (OpenAI's sign-in for open-source apps, run
-by Tess Core on a loopback address), an API key, or any OpenAI-compatible
-endpoint. A connection is checked by listing the provider's models, which
+by Tess Core on a loopback address), an API key (Anthropic, OpenAI or Google
+Gemini), or any OpenAI-compatible endpoint. A connection is checked by listing the provider's models, which
 costs nothing; the chosen models are then proved with one short real request
 each, because a model that lists is not always one the account may call.
 """
@@ -32,7 +32,7 @@ def new_host_id() -> str:
 async def connect_with_key(vault: Vault, providers: ProviderFile, kind: str, *, api_key: Any = None, base_url: Any = None) -> dict[str, Any]:
     """Keep the key, reach the provider with it, and record the connection.
     A key that does not work is not kept."""
-    if kind not in ("anthropic", "openai", "compatible"):
+    if kind not in ("anthropic", "openai", "google", "compatible"):
         raise SetupError("unknown_kind")
     url = clean_base_url(base_url) if kind == "compatible" else None
     auth: dict[str, Any] = {}

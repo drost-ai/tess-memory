@@ -21,6 +21,7 @@ KINDS = {
     "chatgpt": {"profile": "chatgpt", "label": "ChatGPT account"},
     "anthropic": {"profile": "anthropic", "label": "Anthropic API key", "env": "ANTHROPIC_API_KEY"},
     "openai": {"profile": "openai", "label": "OpenAI API key", "env": "OPENAI_API_KEY"},
+    "google": {"profile": "google", "label": "Google Gemini API key", "env": "GEMINI_API_KEY"},
     "compatible": {"profile": "endpoint", "label": "OpenAI-compatible endpoint", "env": "TESS_MEMORY_MODEL_API_KEY"},
 }
 
@@ -59,6 +60,8 @@ def profile_record(kind: str, auth: dict[str, Any], *, model: str = PLACEHOLDER_
         return {"kind": "anthropic", "defaultModel": model, "auth": {"kind": "anthropic_api_key", **auth}}
     if kind == "openai":
         return {"kind": "openai", "defaultModel": model, "auth": {"kind": "openai_api_key", **auth}}
+    if kind == "google":
+        return {"kind": "google", "defaultModel": model, "auth": {"kind": "google_api_key", **auth}}
     if kind in ("compatible", "embeddings"):
         if not auth:
             auth_record = {"kind": "none"}

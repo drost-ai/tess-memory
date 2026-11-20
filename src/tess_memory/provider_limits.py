@@ -63,6 +63,8 @@ def provider_key(cfg, profile_name: str) -> str:
         return 'deepseek'
     if kind.startswith('anthropic') or profile_name.startswith('anthropic'):
         return 'anthropic'
+    if kind == 'google':
+        return 'google'
     return host or profile_name
 
 

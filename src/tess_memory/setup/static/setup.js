@@ -245,7 +245,7 @@
           })));
       }
     } else if (ui.modelTab === 'key') {
-      const provider = h('select', { id: 'key-provider' }, h('option', { value: 'anthropic' }, 'Anthropic'), h('option', { value: 'openai' }, 'OpenAI'));
+      const provider = h('select', { id: 'key-provider' }, h('option', { value: 'anthropic' }, 'Anthropic'), h('option', { value: 'openai' }, 'OpenAI'), h('option', { value: 'google' }, 'Google Gemini'));
       const key = h('input', { type: 'password', class: 'mono', id: 'key-value', autocomplete: 'off', spellcheck: 'false', placeholder: 'Paste your API key' });
       panel = h('form', { class: 'panel', onsubmit: (event) => { event.preventDefault(); act('key', '/api/model/key', { kind: provider.value, api_key: key.value }, () => { ui.changeModel = false; }); } },
         h('div', { class: 'fields-2' },
@@ -265,7 +265,7 @@
     return [
       h('div', { class: 'section choices' },
         tab('chatgpt', 'ChatGPT account', 'Sign in and use your ChatGPT plan. No key to manage.'),
-        tab('key', 'API key', 'An Anthropic or OpenAI key, billed to your API account.'),
+        tab('key', 'API key', 'An Anthropic, OpenAI or Google Gemini key, billed to your API account.'),
         tab('endpoint', 'Your own endpoint', 'Any OpenAI-compatible service, or a local model.')),
       panel,
       errorNote(),
