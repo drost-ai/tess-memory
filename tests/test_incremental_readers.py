@@ -155,6 +155,75 @@ class IncrementalReaderTests(unittest.TestCase):
         self.assertNotEqual(first.unit_keys(), third.unit_keys())
         self.assertFalse(third.pending_tail)
 
+    def _engine_session(self, commit, count):
+        """A session head as the engine writes it: the body commit it published."""
+        path = self.home / "one.json"
+        path.write_text(json.dumps({"id": "one", "cwd": "/work/p", "schemaVersion": 2, "messageCount": count,
+                                    "bodyRef": {"path": "one.messages.jsonl", "commitId": commit}}))
+        return path
+
+    def _engine_body(self, *entries):
+        """Body records as the engine writes them; a string is a commit id."""
+        body, index, lines = self.home / "one.messages.jsonl", 0, []
+        for entry in entries:
+            if isinstance(entry, str):
+                lines.append({"type": "commit", "session_id": "one", "commit_id": entry, "message_count": index})
+            elif isinstance(entry, int):
+                index = entry
+                lines.append({"type": "truncate", "session_id": "one", "message_count": entry})
+            else:
+                lines.append({"type": "message", "session_id": "one", "message_index": index,
+                              "message": {"role": entry[0], "content": entry[1]}})
+                index += 1
+        body.write_text("".join(json.dumps(line) + "\n" for line in lines))
+
+    def _texts(self, parsed):
+        return [turn.text for turn in parsed.transcript.turns]
+
+    def test_a_body_commit_the_session_head_never_published_is_not_read(self):
+        reader = self.reader("tess-core")
+        first = [("user", "first request"), ("assistant", "first answer")]
+        # The engine wrote a second exchange and its commit to the body, then
+        # stopped before publishing it in the head: it reads back two messages.
+        path = self._engine_session("c1", 2)
+        self._engine_body(*first, "c1", ("user", "lost request"), ("assistant", "lost answer"), "c2")
+        interrupted = reader.read(self.ds, path, "p")
+        self.assertEqual(self._texts(interrupted), ["first request", "first answer"])
+        self.assertTrue(interrupted.pending_tail)
+        # Its next save removes what was never published and commits anew.
+        self._engine_body(*first, "c1", ("user", "retried request"), ("assistant", "retried answer"), "c3")
+        path = self._engine_session("c3", 4)
+        retried = CompletedSourceReader(self.cfg).read(self.ds, path, "p")
+        self.assertEqual(self._texts(retried), ["first request", "first answer", "retried request", "retried answer"])
+        self.assertFalse(retried.pending_tail)
+
+    def test_a_body_commit_is_read_once_the_head_publishes_it_without_the_body_changing(self):
+        reader = self.reader("tess-core")
+        path = self._engine_session("c1", 2)
+        self._engine_body(("user", "first request"), ("assistant", "first answer"), "c1",
+                          ("user", "second request"), ("assistant", "second answer"), "c2")
+        self.assertEqual(len(self._texts(reader.read(self.ds, path, "p"))), 2)
+        path = self._engine_session("c2", 4)   # the head catches up; the body is as it was
+        published = reader.read(self.ds, path, "p")
+        self.assertEqual(self._texts(published)[2:], ["second request", "second answer"])
+        self.assertFalse(published.pending_tail)
+
+    def test_an_unpublished_commit_that_rewrote_history_leaves_the_published_history_readable(self):
+        reader = self.reader("tess-core")
+        path = self._engine_session("c1", 2)
+        self._engine_body(("user", "request"), ("assistant", "published answer"), "c1",
+                          1, ("assistant", "rewritten answer"), "c2")
+        parsed = reader.read(self.ds, path, "p")
+        self.assertEqual(self._texts(parsed), ["request", "published answer"])
+
+    def test_a_head_and_a_body_that_name_unrelated_commits_are_read_again_later(self):
+        from tess_memory.source_journal import SourceChanged
+        reader = self.reader("tess-core")
+        path = self._engine_session("elsewhere", 2)
+        self._engine_body(("user", "request"), ("assistant", "answer"), "c1", ("user", "more"), ("assistant", "more"), "c2")
+        with self.assertRaises(SourceChanged):
+            reader.read(self.ds, path, "p")
+
     def test_inline_snapshot_strips_images_and_uses_fixed_project(self):
         reader = self.reader("tess-core")
         self.ds.project = "assistant"

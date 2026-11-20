@@ -10,7 +10,7 @@ from pathlib import Path
 from .engine_sessions import _append_message_turns, _session_cwd
 from .codex import CodexCatalog, ParseReport, _strip_images
 from .config import Config, DataStore
-from .source_journal import SourceJournal, SourceReadError, SourceRevision
+from .source_journal import SourceChanged, SourceJournal, SourceReadError, SourceRevision
 from .transcript import SessionTranscript, _is_harness_text, _text_from_content
 
 READER_VERSION = 1
@@ -90,6 +90,36 @@ def source_signature(path: Path, ds: DataStore, cfg: Config, *, catalog=None) ->
     return content_key([READER_VERSION, ds.type, ds.project, members, parent_policy])
 
 
+def _published(state: dict, meta: dict) -> tuple[dict, bool]:
+    """The messages of the body commit the session head names, and whether
+    the body holds a later commit that the head does not name.
+
+    The engine appends messages and a commit marker to the body, then
+    publishes that commit's id in the session head. If it stops in between,
+    the commit was never published: the engine reads the session back as of
+    the head's commit and removes the rest at its next save. Reading the
+    body's last commit here would ingest history the engine discards."""
+    head = meta.get("bodyCommitId")
+    if not head or state["commit_id"] is None:
+        return state["committed"], False  # a body or a head from before commits carried ids
+    if state["commit_id"] == head:
+        messages, unpublished = state["committed"], False
+    else:
+        previous = state["previous"]
+        if not previous or previous["id"] != head:
+            # The head moved between reading it and reading the body, or the
+            # two do not belong together: read again later, guess nothing.
+            raise SourceChanged("session head and body name different commits")
+        messages = previous["messages"]
+        if messages is None:
+            messages = {k: v for k, v in state["committed"].items() if int(k) < previous["count"]}
+        unpublished = True
+    count = meta.get("messageCount")
+    if count is not None and count < len(messages):
+        messages = {k: v for k, v in messages.items() if int(k) < count}
+    return messages, unpublished
+
+
 class CompletedSourceReader:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -141,12 +171,14 @@ class CompletedSourceReader:
     @staticmethod
     def _initial():
         return {"records": [], "messages": {}, "next_index": 0, "committed": None,
-                "has_commit": False, "uncommitted": False}
+                "has_commit": False, "uncommitted": False,
+                "commit_id": None, "previous": None, "touched": None}
 
     def _generic(self, ds, path, project, parent):
         policy = f"messages-v{READER_VERSION}:origin-v2:{ds.type}"
         revisions = []
         meta = {}
+        unpublished = False  # the body holds a commit the session head does not name yet
         if ds.type == "tess-core":
             # Persist only fields relevant to identity, attribution and body
             # selection; runtime/provider metadata is not model input.
@@ -156,8 +188,15 @@ class CompletedSourceReader:
                 if not isinstance(md, dict):
                     raise SourceReadError("session metadata must be an object")
                 result["metadata"] = {k: md[k] for k in ("parentSessionId", "originalCwd", "workspaceRoot", "gitBranch") if k in md}
+                # Which body commit the engine published, and how many messages it holds.
+                ref = value.get("bodyRef")
+                if isinstance(ref, dict) and isinstance(ref.get("commitId"), str) and ref["commitId"]:
+                    result["bodyCommitId"] = ref["commitId"]
+                    count = value.get("messageCount")
+                    if isinstance(count, int) and not isinstance(count, bool) and count >= 0:
+                        result["messageCount"] = count
                 return _strip_images(result, ParseReport())
-            meta, revision = self.journal.read_snapshot(path, policy + ":meta", metadata)
+            meta, revision = self.journal.read_snapshot(path, policy + ":meta:head", metadata)
             revisions.append(revision)
             full = path.parent / path.stem / "full-transcript-with-tools.jsonl"
             sidecar = path.with_name(path.stem + ".messages.jsonl")
@@ -184,6 +223,7 @@ class CompletedSourceReader:
                 state["messages"] = {k: v for k, v in state["messages"].items() if int(k) < count}
                 state["next_index"] = count
                 state["uncommitted"] = True
+                state["touched"] = count if state["touched"] is None else min(state["touched"], count)
             elif kind == "message":
                 message = record.get("message") if flavor == "sidecar" else record
                 if not isinstance(message, dict):
@@ -200,23 +240,42 @@ class CompletedSourceReader:
                                                 "origin": message.get("origin", record.get("origin"))}
                 state["next_index"] = index + 1
                 state["uncommitted"] = True
+                state["touched"] = index if state["touched"] is None else min(state["touched"], index)
             elif kind == "commit" and flavor == "sidecar":
                 count = record.get("message_count")
                 if count is not None and (not isinstance(count, int) or isinstance(count, bool)
                                           or set(map(int, state["messages"])) != set(range(count))):
                     raise SourceReadError("sidecar commit does not match message indices")
+                if state["has_commit"]:
+                    # The commit before this one stays selectable: the engine
+                    # writes a commit to the body before it publishes it in the
+                    # session head, and discards it if that never happens. Only
+                    # its length is kept unless this commit rewrote part of it.
+                    length = len(state["committed"])
+                    rewrote = state["touched"] is not None and state["touched"] < length
+                    state["previous"] = {"id": state["commit_id"], "count": length,
+                                         "messages": state["committed"] if rewrote else None}
+                commit_id = record.get("commit_id")
+                state["commit_id"] = commit_id if isinstance(commit_id, str) and commit_id else None
                 state["committed"] = dict(state["messages"])
                 state["has_commit"] = True
                 state["uncommitted"] = False
+                state["touched"] = None
 
         if body is not None:
-            state, revision = self.journal.read_jsonl(body, policy + ":" + flavor, initial=self._initial,
+            # "sidecar:commits": reader state that knows each commit's id (an
+            # earlier cache entry does not, and is simply not used again).
+            state, revision = self.journal.read_jsonl(body, policy + ":" + ("sidecar:commits" if flavor == "sidecar" else flavor),
+                                                      initial=self._initial,
                                                       consume=consume, max_record_bytes=self.cfg.codex.max_record_bytes)
             revisions.append(revision)
             if flavor == "claude":
                 records = state["records"]
             else:
-                messages = state["committed"] if state["has_commit"] and not self.cfg.recovery_ingestion else state["messages"]
+                if flavor == "sidecar" and state["has_commit"] and not self.cfg.recovery_ingestion:
+                    messages, unpublished = _published(state, meta)
+                else:
+                    messages = state["committed"] if state["has_commit"] and not self.cfg.recovery_ingestion else state["messages"]
                 records = [messages[k] for k in sorted(messages, key=int)]
         else:
             state = self._initial()
@@ -281,7 +340,7 @@ class CompletedSourceReader:
             if role == "assistant" and text and not has_tools and reason not in ("tool_use", "max_tokens", "length"):
                 close("turn_complete" if reason in ("end_turn", "stop", "stop_sequence") else "assistant_message")
         eligible = ends[-1] if ends else 0
-        pending = (eligible < len(st.turns) or any(r.partial_record for r in revisions)
+        pending = (eligible < len(st.turns) or any(r.partial_record for r in revisions) or unpublished
                    or bool(flavor == "sidecar" and state["has_commit"] and state["uncommitted"]))
         notes = []
         if self.cfg.recovery_ingestion:
