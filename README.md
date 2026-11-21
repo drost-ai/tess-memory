@@ -229,6 +229,7 @@ The same pages live in this repository:
 - [Connecting agents](docs/connecting-agents.md): Claude Code, Codex, any MCP client, shared stores
 - [Searching memory](docs/searching.md): the tools, search modes, writing good queries
 - [The plan board](docs/plan-board.md): planning and executing long projects
+- [Image records](docs/images.md): finding the images an agent was sent
 - [Sources](docs/sources.md): Claude Code, Codex, Tess Core and plain transcripts
 - [Personal memory](docs/personal-memory.md): memory for a personal AI
 - [Teams and visibility](docs/teams.md): several people, one store

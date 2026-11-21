@@ -107,6 +107,8 @@ def hit_freshness(store, row, cfg=None):
         return rollup_freshness(store, 'digest', (row['ts'] or '')[:10])
     if row['level'] == 'plan':
         return {'status': 'authored_plan', 'updated_at': row['ts']}
+    if row['level'] == 'image':
+        return {'status': 'recorded_image', 'updated_at': row['ts']}
     return {'status': 'unknown'}
 
 

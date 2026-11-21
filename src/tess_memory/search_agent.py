@@ -36,6 +36,10 @@ activity chunks (exact commands/errors/code), rolling project profiles, and
 weekly digests. It also holds authored plan items (level 'plan': vision/
 epics/slices/tasks/notes with stable ids and live status) — the user's
 intended plan, written by agents, not derived from history.
+It may also hold image records (level 'image'): images people sent, each as
+a detailed description of what is visible, with the image's id, the path of
+its file and the session it was sent in. Descriptions never name people or
+places; who and where come from the session.
 
 Each round, reply with ONLY a JSON object — one of:
   {"action": "search", "queries": ["...", "..."]}

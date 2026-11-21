@@ -201,6 +201,32 @@ def cmd_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_images(args: argparse.Namespace) -> int:
+    """For a host that keeps images: apply its operations, one JSON object a
+    line on stdin, and print one JSON result a line. Nothing is read but stdin."""
+    from . import images
+    from .embed import make_embedder
+    from .store import MemoryStore
+
+    operations = []
+    for number, line in enumerate(sys.stdin, 1):
+        if not line.strip():
+            continue
+        try:
+            operations.append(json.loads(line))
+        except ValueError:
+            print(json.dumps({"ref": None, "ok": False, "error": f"line {number} is not JSON"}))
+            return 2
+    CONFIG.ensure_dirs()
+    store = MemoryStore(CONFIG.db_path)
+    try:
+        for result in images.apply(store, make_embedder(CONFIG), operations):
+            print(json.dumps(result, ensure_ascii=False), flush=True)
+    finally:
+        store.close()
+    return 0
+
+
 def cmd_reconcile_attribution(args: argparse.Namespace) -> int:
     """Repair stored project metadata without constructing models."""
     from .attribution import reconcile_project_attribution
@@ -520,6 +546,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--to", help="a settings file for this store with the new [embedding]; default: the active settings")
     p.add_argument("--yes", action="store_true", help="do it; without this only what would happen is shown")
     p.set_defaults(fn=cmd_reembed)
+
+    p = sub.add_parser("images", help="For a host that keeps images: record or remove their descriptions (JSON lines on stdin)")
+    p.add_argument("action", choices=["apply"], help="apply the operations on stdin: {\"op\": \"record\", \"ref\": ..., \"description\": ...} or {\"op\": \"remove\", \"ref\": ...}")
+    p.set_defaults(fn=cmd_images)
 
     p = sub.add_parser("ingest", help="Ingest new/changed session transcripts")
     p.add_argument("--limit", type=int, default=None, help="max sessions to process")

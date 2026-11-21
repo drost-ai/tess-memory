@@ -23,7 +23,7 @@ re-exploring.
 
 ### `search_memory`
 
-Search past-session memory and authored plans.
+Search past-session memory, authored plans and the images people sent.
 
 Use mode='static' for routine/direct recall (one hybrid lookup, no
 retrieval LLM), or mode='agentic' for multi-step historical research.
@@ -39,11 +39,16 @@ answer) — so state the FULL information need in one call instead of
 firing keyword fragments. Results carry session ids — drill down with
 get_session. If something is missing, refine the request and call again.
 
+To find an image ("the photo of the red dress on the rooftop"), search
+with level='image': describe what would be visible, since descriptions
+never name people or places. A result gives the image's id and the path
+of its file; open the path with a file-reading tool to look at it.
+
 | Argument | Type | Default | Meaning |
 |---|---|---|---|
 | `query` | `str` | required | A SELF-CONTAINED, context-rich query — NOT the user's literal words. You have the conversation context; the search does not. Rewrite the ask into a standalone query naming the project, technologies, file names, and any error text verbatim (error strings retrieve extremely well). Bad: 'the bug from before'. Good: 'fix for FTS5 trigger corruption during incremental ingest in tess-memory sqlite store'. |
 | `project` | `str \| None` | `None` | Logical project key to scope the search (get keys from list_projects), or an absolute cwd path for a cwd-derived project. Omit to search across all projects. |
-| `level` | `str \| None` | `None` | Timescale filter: 'chunk' = raw activity (exact commands, error output, code snippets); 'memory' = distilled atomic facts; 'session' = whole-session summaries; 'digest' = weekly summaries; 'project' = rolling project profiles; 'plan' = authored plan items (vision/epics/slices/tasks/notes). Omit to search all levels. |
+| `level` | `str \| None` | `None` | Timescale filter: 'chunk' = raw activity (exact commands, error output, code snippets); 'memory' = distilled atomic facts; 'session' = whole-session summaries; 'digest' = weekly summaries; 'project' = rolling project profiles; 'plan' = authored plan items (vision/epics/slices/tasks/notes); 'image' = images people sent, each by the detailed description written for it, with the image's id, the path of its file and the session it was sent in. Omit to search all levels. |
 | `kind` | `str \| None` | `None` | Memory-kind filter (applies to level='memory'): decision \| fact \| preference \| solution \| problem \| task_state. Use 'solution' for past fixes, 'preference' for how the user likes things done. |
 | `after` | `str \| None` | `None` | ISO date lower bound, e.g. '2026-07-01'. |
 | `before` | `str \| None` | `None` | ISO date upper bound, e.g. '2026-07-31'. |

@@ -74,6 +74,10 @@ Planning plane contract:
   reuse its exact project key. Absolute cwd paths are accepted for legacy
   cwd-derived projects. Plan items are searchable (search_memory level='plan');
   the open board rides along in get_project_context, full tree via plan_board.
+- Images people sent to an agent whose host keeps them are searchable too
+  (search_memory level='image'), each by the detailed description written for
+  it; a result gives the image's id and the path of its file, and get_session
+  lists the images sent in a session.
 
 Workflow: list_projects to discover slugs; get_project_context for orientation;
 search_memory for specifics (write SELF-CONTAINED queries — you have the
@@ -187,7 +191,9 @@ def search_memory(
         "output, code snippets); 'memory' = distilled atomic facts; "
         "'session' = whole-session summaries; 'digest' = weekly summaries; "
         "'project' = rolling project profiles; 'plan' = authored plan items "
-        "(vision/epics/slices/tasks/notes). Omit to search all levels."
+        "(vision/epics/slices/tasks/notes); 'image' = images people sent, each "
+        "by the detailed description written for it, with the image's id, the "
+        "path of its file and the session it was sent in. Omit to search all levels."
     ))] = None,
     kind: Annotated[str | None, Field(description=(
         "Memory-kind filter (applies to level='memory'): decision | fact | "
@@ -209,7 +215,7 @@ def search_memory(
         "'agentic' enables multi-step search; 'auto' follows [search] agent."
     ))] = "auto",
 ) -> str:
-    """Search past-session memory and authored plans.
+    """Search past-session memory, authored plans and the images people sent.
 
     Use mode='static' for routine/direct recall (one hybrid lookup, no
     retrieval LLM), or mode='agentic' for multi-step historical research.
@@ -224,6 +230,11 @@ def search_memory(
     answer) — so state the FULL information need in one call instead of
     firing keyword fragments. Results carry session ids — drill down with
     get_session. If something is missing, refine the request and call again.
+
+    To find an image ("the photo of the red dress on the rooftop"), search
+    with level='image': describe what would be visible, since descriptions
+    never name people or places. A result gives the image's id and the path
+    of its file; open the path with a file-reading tool to look at it.
     """
     project = to_slug(project) if project else None
     if mode not in {"auto", "static", "agentic"}:
@@ -356,13 +367,21 @@ def get_session(
     if "parent_session" in s.keys() and s["parent_session"]:
         label = "Parent history" if session_id.startswith("codex:") else "Subagent task within session"
         parent = f"\n{label} {s['parent_session']}."
+    images = store.images_for_session(session_id)
+    image_lines = ""
+    if images:
+        # The pictures that belong to this conversation: enough to pick one and open it.
+        image_lines = f"\n\n## Images sent in this session ({len(images)})\n" + "\n".join(
+            f"- image {i['ref']}" + (f" | {i['name']}" if i['name'] else "") + (f" | {i['path']}" if i['path'] else "")
+            + f"\n  {' '.join(i['description'].split())[:280]}" for i in images
+        )
     return (
         f"# {s['title']}\n"
         f"Project: {s['project']} | {(s['started_at'] or '')[:16]} → {(s['ended_at'] or '')[:16]}"
         f" | branch: {s['git_branch'] or '-'}{parent}\n{freshness}\n\n"
         f"## Summary\n{s['summary']}\n\n"
         f"## Outcome\n{s['outcome']}\n\n"
-        f"## Memories\n{mem_lines}"
+        f"## Memories\n{mem_lines}{image_lines}"
     )
 
 

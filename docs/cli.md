@@ -16,6 +16,7 @@ Inside the checkout, run it as `uv run tess-memory ...`.
 | `ingest` | Read new and changed sessions into memory |
 | `search "<query>"` | Search memory |
 | `plan <project-or-path>` | Print a project's plan board |
+| `images apply` | For a host: record or remove image descriptions (JSON lines on stdin) |
 | `status` | What is stored, pending and failing |
 | `serve` | Run the MCP server on stdio |
 
@@ -58,6 +59,16 @@ tess-memory search "..." --static     # plain search, no retrieval agent
 tess-memory plan .         # the project for the current directory
 tess-memory plan . --all   # include complete and dropped items
 ```
+
+### `images`
+
+For a host that keeps the images people send an agent (see [Image records](images.md)):
+
+```bash
+tess-memory images apply < operations.jsonl
+```
+
+Reads one JSON operation a line (`record` or `remove`) and prints one JSON result a line.
 
 ### `serve`
 

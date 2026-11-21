@@ -91,7 +91,8 @@ CREATE TABLE IF NOT EXISTS memories(
     importance REAL DEFAULT 0.3,
     ts TEXT,
     tags TEXT DEFAULT '[]',
-    plan_id INTEGER            -- links a level='plan' mirror row to plan_items.id
+    plan_id INTEGER,           -- links a level='plan' mirror row to plan_items.id
+    image_ref TEXT             -- links a level='image' mirror row to image_records.ref
 );
 CREATE INDEX IF NOT EXISTS idx_memories_session ON memories(session_id);
 CREATE INDEX IF NOT EXISTS idx_memories_level ON memories(level);
@@ -130,6 +131,24 @@ CREATE INDEX IF NOT EXISTS idx_plan_project ON plan_items(project);
 CREATE TRIGGER IF NOT EXISTS plan_items_are_kept BEFORE DELETE ON plan_items BEGIN
     SELECT RAISE(ABORT, 'plan items are never deleted');
 END;
+-- Images an agent's host keeps, each with the description written for it.
+-- Recorded by the host, not derived from a transcript: one row per image,
+-- mirrored into the retrieval index (level='image') like a plan item.
+CREATE TABLE IF NOT EXISTS image_records(
+    ref TEXT PRIMARY KEY,                 -- the host's id for the image
+    project TEXT,
+    session_id TEXT,                      -- the session the image was sent in, when known
+    path TEXT,                            -- where the host keeps the image file
+    name TEXT,                            -- the file name it was sent with
+    description TEXT NOT NULL,
+    sent_at TEXT,
+    taken_at TEXT,
+    facts TEXT NOT NULL DEFAULT '{}',     -- JSON: what else the host read out of the image
+    owner_user TEXT,
+    created_at TEXT,
+    updated_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_image_records_session ON image_records(session_id);
 CREATE TABLE IF NOT EXISTS plan_events(
     id INTEGER PRIMARY KEY,
     item_id INTEGER NOT NULL REFERENCES plan_items(id),
@@ -237,6 +256,7 @@ class MemoryRow:
     tags: list[str] = field(default_factory=list)
     vector: np.ndarray | None = None
     plan_id: int | None = None  # set on level='plan' mirror rows
+    image_ref: str | None = None  # set on level='image' mirror rows
     owner_user: str | None = None   # None = the instance default owner
     visibility: str | None = None   # None = the policy default for level/kind
 
@@ -322,6 +342,9 @@ class MemoryStore:
         # Created here, not in SCHEMA: on pre-plan databases the column only
         # exists after the ALTER above.
         self.db.execute("CREATE INDEX IF NOT EXISTS idx_memories_plan ON memories(plan_id)")
+        if "image_ref" not in mcols:
+            self.db.execute("ALTER TABLE memories ADD COLUMN image_ref TEXT")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_memories_image ON memories(image_ref)")
         pcols = {r["name"] for r in self.db.execute("PRAGMA table_info(plan_items)")}
         if "status_at" not in pcols:
             self.db.execute("ALTER TABLE plan_items ADD COLUMN status_at TEXT")
@@ -628,9 +651,9 @@ class MemoryStore:
         for r in rows:
             cur = self.db.execute(
                 "INSERT INTO memories(session_id, project, level, kind, content, "
-                "importance, ts, tags, plan_id, owner_user, visibility) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+                "importance, ts, tags, plan_id, image_ref, owner_user, visibility) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (r.session_id, r.project, r.level, r.kind, r.content,
-                 r.importance, r.ts, json.dumps(r.tags), r.plan_id, r.owner_user, r.visibility),
+                 r.importance, r.ts, json.dumps(r.tags), r.plan_id, r.image_ref, r.owner_user, r.visibility),
             )
             mid = cur.lastrowid
             ids.append(mid)
@@ -803,6 +826,55 @@ class MemoryStore:
             current = self.get_meta("embedder")
             if current is not None and not same_vector_space(current, descriptor):
                 raise ValueError("plan embedding model differs from the memory store")
+            if current is None:
+                self.set_meta("embedder", descriptor)
+            self.db.execute("INSERT OR REPLACE INTO embeddings(memory_id, vector) VALUES(?,?)",
+                            (row["id"], vector.astype(np.float32).tobytes()))
+            self._emb_cache = None
+            return True
+
+    # ---------------- image records ----------------
+
+    def image_upsert(self, *, ref: str, project: str | None, session_id: str | None, path: str | None, name: str | None,
+                     description: str, sent_at: str | None, taken_at: str | None, facts: dict, now: str) -> None:
+        self.db.execute(
+            "INSERT INTO image_records(ref, project, session_id, path, name, description, sent_at, taken_at, facts, owner_user, created_at, updated_at)"
+            " VALUES(?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(ref) DO UPDATE SET project=excluded.project, session_id=excluded.session_id,"
+            " path=excluded.path, name=excluded.name, description=excluded.description, sent_at=excluded.sent_at,"
+            " taken_at=excluded.taken_at, facts=excluded.facts, updated_at=excluded.updated_at",
+            (ref, project, session_id, path, name, description, sent_at, taken_at, json.dumps(facts, ensure_ascii=False, sort_keys=True),
+             self.writer(), now, now),
+        )
+
+    def image_get(self, ref: str) -> sqlite3.Row | None:
+        return self.db.execute("SELECT * FROM image_records WHERE ref=?", (ref,)).fetchone()
+
+    def images_for_session(self, session_id: str) -> list[sqlite3.Row]:
+        return self.db.execute("SELECT * FROM image_records WHERE session_id=? ORDER BY sent_at, ref", (session_id,)).fetchall()
+
+    def image_delete(self, ref: str) -> bool:
+        """Remove an image record and its retrieval-index row."""
+        self._delete_memory_ids([r["id"] for r in self.db.execute("SELECT id FROM memories WHERE image_ref=?", (ref,))])
+        return self.db.execute("DELETE FROM image_records WHERE ref=?", (ref,)).rowcount > 0
+
+    def replace_image_mirror(self, ref: str, row: MemoryRow) -> None:
+        """Keep exactly one retrieval-index row (level='image') per image record."""
+        self._delete_memory_ids([r["id"] for r in self.db.execute("SELECT id FROM memories WHERE image_ref=?", (ref,))])
+        row.image_ref = ref
+        if row.owner_user is None:
+            row.owner_user = self.writer()
+        self.add_memories([row])
+
+    def attach_image_embedding(self, ref: str, expected: MemoryRow, vector: np.ndarray, descriptor: str) -> bool:
+        """Attach an embedding only if the indexed text is still the one that
+        was embedded: a concurrent replacement must not get the old vector."""
+        with self.write_transaction():
+            row = self.db.execute("SELECT id, content FROM memories WHERE image_ref=? AND level='image'", (ref,)).fetchone()
+            if row is None or row["content"] != expected.content:
+                return False
+            current = self.get_meta("embedder")
+            if current is not None and not same_vector_space(current, descriptor):
+                raise ValueError("image embedding model differs from the memory store")
             if current is None:
                 self.set_meta("embedder", descriptor)
             self.db.execute("INSERT OR REPLACE INTO embeddings(memory_id, vector) VALUES(?,?)",

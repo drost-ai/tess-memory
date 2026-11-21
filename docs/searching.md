@@ -21,7 +21,7 @@ lookup and no model.
 search_memory(
   query   = "fix for duplicate webhook deliveries in the billing service retry queue",
   project = "-work-billing",     # optional
-  level   = "memory",            # optional: chunk | memory | session | digest | project | plan
+  level   = "memory",            # optional: chunk | memory | session | digest | project | plan | image
   kind    = "decision",          # optional, for level=memory
   mode    = "static",            # static | agentic | auto
 )
@@ -99,3 +99,18 @@ score = 0.55 × meaning + 0.20 × keywords + 0.15 × importance + 0.10 × recenc
 
 with a 30-day half-life on recency and at most three results per session. All of these are
 settings under `[retrieval]`; see [Configuration](configuration.md).
+
+## Finding images
+
+An agent whose host keeps the images people send it (Tess Agent does) records a detailed
+description of each one here. See [Image records](images.md). They are found by the same
+search:
+
+```
+search_memory(query="a woman in a red dress on a rooftop at night", level="image")
+```
+
+Describe what would be visible. Descriptions never name people or places, so "who" and
+"where" come from the conversation the image was sent in: a result names that session, and
+`get_session` lists every image sent in it. A result also gives the image's id and the path
+of its file, which an agent with a file-reading tool can open to look at the image.
