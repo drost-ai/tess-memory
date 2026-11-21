@@ -208,6 +208,25 @@ def cmd_images(args: argparse.Namespace) -> int:
     from .embed import make_embedder
     from .store import MemoryStore
 
+    if args.action == "search":
+        # For the host's own image browser: which images match, best first.
+        # One hybrid lookup, no model but the embedding of the query.
+        from . import retrieval
+
+        if not (args.query or "").strip():
+            print("images search needs a query", file=sys.stderr)
+            return 2
+        CONFIG.ensure_dirs()
+        store = MemoryStore(CONFIG.db_path)
+        try:
+            hits = retrieval.search(store, make_embedder(CONFIG), args.query, project=args.project, levels=("image",),
+                                    limit=max(1, min(args.limit, 500)), expand_chunks=False)
+            for hit in hits:
+                print(json.dumps({"ref": hit.get("image_ref"), "score": hit["score"]}), flush=True)
+        finally:
+            store.close()
+        return 0
+
     operations = []
     for number, line in enumerate(sys.stdin, 1):
         if not line.strip():
@@ -548,7 +567,11 @@ def main(argv: list[str] | None = None) -> int:
     p.set_defaults(fn=cmd_reembed)
 
     p = sub.add_parser("images", help="For a host that keeps images: record or remove their descriptions (JSON lines on stdin)")
-    p.add_argument("action", choices=["apply"], help="apply the operations on stdin: {\"op\": \"record\", \"ref\": ..., \"description\": ...} or {\"op\": \"remove\", \"ref\": ...}")
+    p.add_argument("action", choices=["apply", "search"], help="apply: the operations on stdin, {\"op\": \"record\", \"ref\": ..., \"description\": ...} or {\"op\": \"remove\", \"ref\": ...}. "
+                   "search: print the images that match a query, best first, one {\"ref\", \"score\"} a line")
+    p.add_argument("query", nargs="?", help="search: what to look for")
+    p.add_argument("--limit", type=int, default=50, help="search: the most images to print (default 50)")
+    p.add_argument("--project", help="search: only images filed under this project")
     p.set_defaults(fn=cmd_images)
 
     p = sub.add_parser("ingest", help="Ingest new/changed session transcripts")

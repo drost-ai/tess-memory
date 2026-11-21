@@ -134,7 +134,10 @@ def _search_snapshot(store, query, qv, filters, limit, candidates, expand_chunks
     # Light diversity: cap results from the same session.
     out, per_session = [], {}
     for score, r in scored:
-        sid = r["session_id"] or f"_{r['level']}_{r['project']}"
+        # An image is its own source: the cap is on many hits from one
+        # session, and must not hold a search for images to a few of them.
+        image_ref = r["image_ref"] if "image_ref" in r.keys() else None
+        sid = f"_image_{image_ref}" if image_ref else r["session_id"] or f"_{r['level']}_{r['project']}"
         if per_session.get(sid, 0) >= CONFIG.per_session_cap:
             continue
         per_session[sid] = per_session.get(sid, 0) + 1
@@ -160,6 +163,7 @@ def _search_snapshot(store, query, qv, filters, limit, candidates, expand_chunks
                 "session_id": r["session_id"],
                 "session_title": r["session_title"] if "session_title" in r.keys() else None,
                 "freshness": hit_freshness(store, r, CONFIG),
+                **({"image_ref": image_ref} if image_ref else {}),
             }
         )
         if len(out) >= limit:

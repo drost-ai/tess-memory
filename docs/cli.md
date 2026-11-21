@@ -17,6 +17,7 @@ Inside the checkout, run it as `uv run tess-memory ...`.
 | `search "<query>"` | Search memory |
 | `plan <project-or-path>` | Print a project's plan board |
 | `images apply` | For a host: record or remove image descriptions (JSON lines on stdin) |
+| `images search <query>` | For a host: the images that match, best first, one JSON object a line |
 | `status` | What is stored, pending and failing |
 | `serve` | Run the MCP server on stdio |
 

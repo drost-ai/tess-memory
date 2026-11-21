@@ -47,6 +47,16 @@ and `get_image`.
 
 ## Finding images
 
+A host that shows its own image browser asks which images match, best first:
+
+```bash
+tess-memory images search "a woman in a red dress on a rooftop" --limit 60
+```
+
+It prints one `{"ref": ..., "score": ...}` a line. This is one lookup by words and meaning,
+with no model call but the embedding of the query.
+
+
 Each record is in the search index at level `image`. See
 [Searching memory](searching.md#finding-images). `get_session` lists the images sent in a
 session, so a memory of a conversation leads to its pictures.

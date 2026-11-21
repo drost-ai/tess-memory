@@ -81,6 +81,26 @@ class ImageRecordTests(unittest.TestCase):
         self.assertTrue(any(hit["level"] == "image" for hit in retrieval.search(self.store, self.embedder, "red dress rooftop")))
         self.assertEqual([row["ref"] for row in self.store.images_for_session("s-trip")], ["img-rooftop"])
 
+    def test_a_search_for_images_is_not_held_to_a_few_and_a_host_can_ask_which_match(self):
+        from tess_memory import cli
+
+        for index in range(9):  # more than the cap on hits from one session
+            self.record(ref=f"img-roof-{index}", description=f"{ROOFTOP} Frame {index}.", project="assistant")
+        self.record(ref="img-yacht", description=YACHT, project="assistant")
+        hits = retrieval.search(self.store, self.embedder, "rooftop terrace at night", levels=("image",), limit=20)
+        self.assertEqual({hit["image_ref"] for hit in hits}, {f"img-roof-{index}" for index in range(9)} | {"img-yacht"})
+        self.assertEqual(hits[-1]["image_ref"], "img-yacht")  # the one it is not about comes last
+
+        self.store.close()
+        out = io.StringIO()
+        with mock.patch.object(cli, "CONFIG", mock.Mock(db_path=self.path)), mock.patch("tess_memory.embed.make_embedder", return_value=self.embedder), \
+                contextlib.redirect_stdout(out):
+            self.assertEqual(cli.main(["images", "search", "people on a boat", "--limit", "3"]), 0)
+            self.assertEqual(cli.main(["images", "search", "  "]), 2)
+        printed = [json.loads(line) for line in out.getvalue().splitlines()]
+        self.assertEqual((len(printed), printed[0]["ref"], set(printed[0])), (3, "img-yacht", {"ref", "score"}))
+        self.store = MemoryStore(self.path)
+
     def test_recording_the_same_image_again_replaces_it_and_removing_it_forgets_it(self):
         self.record(project="assistant")
         again = self.record(description="A corrected description: the same terrace at dusk, not night.", project="assistant")
