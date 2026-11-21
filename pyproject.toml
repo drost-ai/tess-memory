@@ -27,7 +27,7 @@ packages = ["src/tess_memory"]
 # The engine is pinned to an exact commit. To work on both at once, install a
 # local checkout over the pin after syncing: uv pip install -e ../../agents/tess-core
 [tool.uv.sources]
-tess-core = { git = "https://github.com/drost-ai/tess-core.git", rev = "4cce054c58ea173e21786c4fedcb3f8ee8d040f7" }
+tess-core = { git = "https://github.com/drost-ai/tess-core.git", rev = "0fd590626d0c1acf1cee48b03f45fdb5eda3ebf9" }
 
 [dependency-groups]
 dev = ["pytest>=8", "pytest-xdist>=3.6", "pyyaml>=6"]
