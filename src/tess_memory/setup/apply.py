@@ -192,19 +192,22 @@ def write(vault: Vault, registry: Path, *, keep_embedding: dict[str, Any] | None
     """Write the settings file; returns its path and the copy of the one it replaced."""
     path = vault.home / SETTINGS
     text = render(vault.home, registry, vault.draft, keep_embedding=keep_embedding, settings=path)
-    backup = None
-    if path.exists() and path.read_text(encoding="utf-8") != text:
-        backup = path.with_name(f"{SETTINGS}.before-setup-{time.strftime('%Y%m%d-%H%M%S')}")
-        backup.write_bytes(path.read_bytes())
-        backup.chmod(0o600)
     from ..config import load_config
     trial = path.with_name(SETTINGS + ".new")
     write_private(trial, text)
     try:
         load_config(trial)  # the file must be one the rest of Tess Memory accepts
-    except Exception:
+    except (ValueError, TypeError) as error:
         trial.unlink(missing_ok=True)  # the settings in use stay as they were
+        raise SetupError("invalid_settings", str(error)[:240]) from None
+    except Exception:
+        trial.unlink(missing_ok=True)
         raise
+    backup = None
+    if path.exists() and path.read_bytes() != text.encode("utf-8"):
+        backup = path.with_name(f"{SETTINGS}.before-setup-{time.strftime('%Y%m%d-%H%M%S')}")
+        backup.write_bytes(path.read_bytes())
+        backup.chmod(0o600)
     trial.replace(path)
     vault.meta["applied"] = {"settings": str(path), "at": time.time()}
     vault.save()

@@ -54,11 +54,12 @@
     scheduler_unsupported: 'A background service cannot be installed on this system.',
     reembed_running: 'Re-embedding is already running.',
     nothing_to_reembed: 'There is nothing to re-embed.',
+    invalid_settings: 'The settings could not be saved:',
   };
 
   const say = (error) => {
     const text = MESSAGES[error.code] || 'Something went wrong (' + error.code + ').';
-    return error.detail && !MESSAGES[error.code] ? text + ' ' + error.detail : text;
+    return error.detail && (!MESSAGES[error.code] || error.code === 'invalid_settings') ? text + ' ' + error.detail : text;
   };
 
   let token = '';
@@ -420,9 +421,10 @@
                    button('Stop', 'reembed-stop', () => act('reembed-stop', '/api/reembed/stop', {}), 'outline', { attrs: { class: 'button button-outline button-small' } })),
                  h('p', { class: 'hint' }, 'Stopping is safe. Nothing switches until every memory is done, and it picks up from here.')] : null,
       moving.state === 'stopped' ? h('p', { class: 'note' }, 'Stopped at ' + number(moving.done || 0) + ' of ' + number(moving.total || 0) + '. Nothing was switched.') : null,
-      moving.state === 'failed' ? h('p', { class: 'note bad', role: 'alert' }, 'Re-embedding stopped with an error, and nothing was switched. ' + (moving.detail || '')) : null,
+      moving.state === 'failed' && !moving.switched ? h('p', { class: 'note bad', role: 'alert' }, 'Re-embedding stopped with an error, and nothing was switched. ' + (moving.detail || '')) : null,
+      moving.state === 'failed' && moving.switched ? h('p', { class: 'note bad', role: 'alert' }, 'Every memory was re-embedded and the store has switched to the new model, but its settings could not be written, so the store cannot be used until they are. ' + (moving.detail || '')) : null,
       running ? null : h('div', { class: 'actions' },
-        button(moving.state === 'stopped' || moving.state === 'failed' ? 'Continue re-embedding' : 'Re-embed and switch', 'reembed', () => act('reembed', '/api/reembed/start', {})),
+        button(moving.state === 'failed' && moving.switched ? 'Write the settings' : moving.state === 'stopped' || moving.state === 'failed' ? 'Continue re-embedding' : 'Re-embed and switch', 'reembed', () => act('reembed', '/api/reembed/start', {})),
         button('Keep the current model', 'reembed-cancel', () => act('reembed-cancel', '/api/reembed/cancel', {}), 'quiet'),
         S.applied ? button('Continue without switching yet', 'reembed-later', () => go('agents'), 'quiet') : null));
   }

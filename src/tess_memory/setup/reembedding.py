@@ -61,8 +61,15 @@ def _target(home: Path, registry: Path, draft: dict[str, Any]):
     """The configuration the chosen settings describe, and its embedder's name."""
     from ..config import load_config
     path = Path(home) / NEXT
-    write_private(path, apply.render(Path(home), registry, draft))
-    cfg = load_config(path)
+    write_private(path, apply.render(Path(home), registry, draft, settings=Path(home) / apply.SETTINGS))
+    try:
+        cfg = load_config(path)
+    except (ValueError, TypeError) as error:
+        path.unlink(missing_ok=True)
+        raise SetupError("invalid_settings", str(error)[:240]) from None
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
     if cfg.embed_provider == "local":
         from ..embed import LocalEmbedder
         descriptor = LocalEmbedder(cfg.embed_model, query_prefix=cfg.embed_query_prefix,
@@ -163,6 +170,9 @@ class Reembedding:
         self.job = {"state": "running", "done": 0, "total": self.info["rows"]}
         home, draft = self.vault.home, self.vault.draft
 
+        def shown(error: Exception) -> str:
+            return error.detail if isinstance(error, SetupError) and error.detail else f"{type(error).__name__}: {str(error)[:240]}"
+
         def run() -> None:
             from .. import reembed
             from ..embed import make_embedder
@@ -176,12 +186,19 @@ class Reembedding:
                 if result["state"] == "stopped":
                     self.job.update(state="stopped")
                     return
-                after()
+                try:
+                    after()
+                except Exception as error:  # noqa: BLE001
+                    # The store is on the new model and its settings are not.
+                    # Say so: starting again finds nothing left to embed and
+                    # only writes the settings.
+                    self.job.update(state="failed", switched=True, detail=shown(error))
+                    return
                 (home / NEXT).unlink(missing_ok=True)
                 self.info = None
                 self.job.update(state="switched")
             except Exception as error:  # noqa: BLE001 (shown to the person, shortened)
-                self.job.update(state="failed", detail=f"{type(error).__name__}: {str(error)[:240]}")
+                self.job.update(state="failed", detail=shown(error))
             finally:
                 if store is not None:
                     store.close()

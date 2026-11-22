@@ -524,12 +524,24 @@ def test_changing_the_embedding_model_of_a_built_store_reembeds_before_any_setti
     assert offered["reembed"]["pending"]["label"] == "model-b" and offered["applied"] is None
     assert setup.settings.read_text() == "# the settings the store is running on\n"  # nothing changed yet
 
-    assert client.post("/api/reembed/start", json={}).status_code == 200
-    for _ in range(200):
-        state = client.get("/api/state").json()
-        if state["reembed"]["job"]["state"] != "running":
-            break
-        time.sleep(0.05)
+    def finished():
+        assert client.post("/api/reembed/start", json={}).status_code == 200
+        for _ in range(200):
+            state = client.get("/api/state").json()
+            if state["reembed"]["job"]["state"] != "running":
+                break
+            time.sleep(0.05)
+        return state
+
+    # The settings cannot be written once the store has switched: that is said, not "nothing was switched".
+    written = apply.write
+    monkeypatch.setattr(apply, "write", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+    state = finished()
+    assert state["reembed"]["job"] == {"state": "failed", "switched": True, "detail": "OSError: disk full", "done": 6, "total": 6}
+    assert state["applied"] is None and setup.settings.read_text() == "# the settings the store is running on\n"
+    # Starting again embeds nothing more and writes the settings.
+    monkeypatch.setattr(apply, "write", written)
+    state = finished()
     assert state["reembed"]["job"]["state"] == "switched", state["reembed"]["job"]
     assert state["reembed"]["pending"] is None and state["applied"] is not None
 
@@ -633,11 +645,18 @@ def test_settings_that_cannot_be_rewritten_around_their_embedding_all_wait(machi
     setup, client = session(machine, keychain=None)
     _built_store(setup)
     # Hand-written: its embedding profile lives in a provider file setup does not manage.
-    setup.settings.write_text('[embedding]\nprovider = "a-profile-from-elsewhere"\ndims = 4\n')
+    # A bad carried-over value is caught before offering a re-embed that could not finish.
+    setup.settings.write_text('[embedding]\nprovider = "a-profile-from-elsewhere"\ndims = 4\n\n[codex]\nbatch_size = "many"\n')
     _configure(setup, client)
+    refused = client.post("/api/apply", json={})
+    assert refused.status_code == 422 and refused.json() == {"error": "invalid_settings", "detail": "[codex] batch_size must be a positive integer"}
+    assert client.get("/api/state").json()["reembed"]["pending"] is None and not (setup.home / "settings.next.toml").exists()
+
+    setup.settings.write_text('[embedding]\nprovider = "a-profile-from-elsewhere"\ndims = 4\n\n[planning]\ndefault_project = "assistant"\n')
     held = client.post("/api/apply", json={}).json()
     assert held["reembed"]["pending"]["held"] == "everything" and held["applied"] is None
     assert setup.settings.read_text().startswith('[embedding]\nprovider = "a-profile-from-elsewhere"')
+    assert tomllib.loads((setup.home / "settings.next.toml").read_text())["planning"] == {"default_project": "assistant"}
 
 
 def test_the_background_service_is_on_by_default_from_the_moment_ingestion_starts(machine, monkeypatch):
@@ -838,8 +857,10 @@ since = 2026-01-05
     client.post("/api/apply", json={})
     assert tomllib.loads(setup.settings.read_text()) == {**after, "retrieval": {"half_life_days": 45.5}}
     # A file whose own settings Tess Memory would refuse is not replaced by one that is refused too.
+    backups = sorted(setup.home.glob("settings.toml.before-setup-*"))
     broken = setup.settings.read_text().replace("half_life_days = 45.5", 'half_life_days = 45.5\n\n[codex]\nbatch_size = "many"')
     setup.settings.write_text(broken)
-    with pytest.raises((ValueError, TypeError)):
-        client.post("/api/apply", json={})
+    refused = client.post("/api/apply", json={})
+    assert refused.status_code == 422 and refused.json() == {"error": "invalid_settings", "detail": "[codex] batch_size must be a positive integer"}
     assert setup.settings.read_text() == broken and not setup.settings.with_name("settings.toml.new").exists()
+    assert sorted(setup.home.glob("settings.toml.before-setup-*")) == backups
