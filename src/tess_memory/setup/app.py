@@ -92,7 +92,27 @@ class Setup:
         saved = self.vault.draft.get("sources")
         if saved is not None:
             return saved
-        return [{**item, "enabled": True} for item in detect.detect_sources(self.user_home)]
+        found = detect.detect_sources(self.user_home)
+        listed = apply.existing_sources(self.settings)
+        if not listed:
+            return [{**item, "enabled": True} for item in found]
+        # A store that already has settings starts from what they say: its
+        # sources ticked, under their own names, and the rest of what is on
+        # this machine offered but not ticked.
+        sources, seen = [], set()
+        for item in found:
+            key = (item["type"], apply.same_folder(item["path"], self.settings))
+            seen.add(key)
+            sources.append({**item, "enabled": key in listed, **({"name": str(listed[key]["name"])} if listed.get(key, {}).get("name") else {})})
+        for key, entry in listed.items():
+            if key in seen:
+                continue
+            try:
+                source = detect.describe_folder(*key)
+            except ValueError:
+                continue  # its folder is gone
+            sources.append({**source, "enabled": True, **({"name": str(entry["name"])} if entry.get("name") else {})})
+        return sources
 
     async def state(self) -> dict[str, Any]:
         draft = self.vault.draft
@@ -126,6 +146,7 @@ class Setup:
         if not isinstance(items, list) or len(items) > 64:
             raise SetupError("invalid_sources")
         known = {(item["type"], item["path"]): item for item in detect.detect_sources(self.user_home)}
+        listed = apply.existing_sources(self.settings)
         chosen, names = [], set()
         for item in items:
             if not isinstance(item, dict):
@@ -135,6 +156,9 @@ class Setup:
                 source = dict(known[key]) if key in known else detect.describe_folder(*key)
             except (ValueError, TypeError) as error:
                 raise SetupError(str(error) if str(error) in ("unknown_source_type", "folder_not_found") else "invalid_sources") from None
+            before = listed.get((source["type"], apply.same_folder(source["path"], self.settings)))
+            if before and before.get("name"):
+                source["name"] = str(before["name"])  # the name the store already knows it by
             base, n = source["name"], 2
             while source["name"] in names:
                 source["name"], n = f"{base}-{n}", n + 1

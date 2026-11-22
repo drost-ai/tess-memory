@@ -101,6 +101,16 @@ Run `tess-memory setup` again to change anything. It remembers your choices and 
 where you left off.
 
 - A settings file it replaces is kept beside the new one as a dated copy.
+- A store you configured by hand can be run through setup too. Setup starts from the
+  sources your settings file lists, with their names, and offers the other agents on the
+  machine unticked. When it saves, it decides the sources, the model, the search model and
+  the embedding model. Everything else in your file is carried into the new one: each
+  kept source's own options (`project`, `exclude`, `skip_copies_of`, `user`, `team`), the
+  keys of `[ingest]` and `[storage]`, the tuning in `[llm]` and `[search]`, and every
+  section setup has no page for. Keys that name the earlier provider, such as a fallback
+  profile, are not carried, and neither are comments; the dated copy has both.
+- A new settings file is checked before it replaces the old one. If Tess Memory would
+  refuse it, the old file stays in place.
 - Nothing already ingested is done again. Changing the provider, the models or any other
   setting never re-distils a session. See
   [what never redoes your memory](ingestion.md#what-never-redoes-your-memory).

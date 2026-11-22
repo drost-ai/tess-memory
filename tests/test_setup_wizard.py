@@ -754,3 +754,92 @@ def test_antigravity_is_found_and_connected_through_agy(machine, monkeypatch):
     (user / ".gemini/config/mcp_config.json").write_text(json.dumps({"mcpServers": {"tess-memory": {
         **agents.server_entry(settings), "disabled": False}}}))
     assert next(item for item in agents.targets(homes, settings) if item["type"] == "antigravity")["current"] is True
+
+
+def test_setup_on_a_store_with_settings_starts_from_them_and_keeps_what_it_does_not_decide(machine):
+    setup, client = session(machine, keychain=None)
+    _, user = machine
+    (user / "exports").mkdir()
+    (user / "exports/one.jsonl").write_text("{}\n")
+    setup.home.mkdir(parents=True)
+    setup.settings.write_text(f'''# written by hand
+provenance_ledger = "/ledgers/main.jsonl"
+
+[[data_stores]]
+name = "work"
+type = "claude-code"
+path = "{user}/.claude/projects"
+exclude = ["-private-tmp-*", "*scratch*"]
+user = "sam"
+
+[[data_stores]]
+name = "old-agent"
+type = "transcript"
+path = "{user}/exports"
+project = "assistant"
+skip_copies_of = ["/elsewhere/sessions"]
+
+[storage]
+data_dir = "/somewhere/else"
+shared = true
+
+[llm]
+profile = "mine"
+fallback_profile = "other"
+workers = 9
+
+[search]
+agent = false
+max_rounds = 5
+
+[ingest]
+quiet_seconds = 60
+adopt_published_policies = ["abababababababababababababababababababababababababababababababab"]
+
+[planning]
+default_project = "assistant"
+lock_writes_to_default = true
+
+[visibility.teams]
+"core team" = ["sam", "kit"]
+
+[[users]]
+name = "sam"
+since = 2026-01-05
+''')
+    before = tomllib.loads(setup.settings.read_text())
+    state = client.get("/api/state").json()
+    assert state["existing_settings"] is True
+    # Its two sources are ticked under their own names; Codex is on this machine but was not a source.
+    assert [(s["name"], s["type"], s["enabled"]) for s in state["sources"]] == [
+        ("work", "claude-code", True), ("codex", "codex", False), ("old-agent", "transcript", True)]
+    reply = client.post("/api/sources", json={"sources": [{"type": s["type"], "path": s["path"], "enabled": True} for s in state["sources"]]})
+    assert [s["name"] for s in reply.json()["sources"]] == ["work", "codex", "old-agent"]
+    client.post("/api/model/key", json={"kind": "anthropic", "api_key": KEY})
+    client.post("/api/model/choose", json={"distill_model": "large", "search_model": "small"})
+    setup.vault.draft["embedding"] = {"mode": "local", "name": "bge-small-en-v1.5",
+                                      "settings": {"local_model": "./models/bge-small-en-v1.5", "dims": 384, "query_prefix": "q: ", "passage_prefix": ""}}
+    written = client.post("/api/apply", json={}).json()["result"]
+    assert Path(written["backup"]).read_text().startswith("# written by hand")
+    after = tomllib.loads(setup.settings.read_text())
+    work, codex, old = after["data_stores"]
+    assert work == {**before["data_stores"][0], "path": str(user / ".claude/projects")}
+    assert codex == {"name": "codex", "type": "codex", "path": str(user / ".codex")}
+    assert old == before["data_stores"][1]
+    for kept in ("provenance_ledger", "planning", "visibility", "users"):
+        assert after[kept] == before[kept]
+    assert after["storage"] == {"data_dir": str(setup.home), "shared": True}
+    assert after["ingest"] == {"quiet_seconds": 60, "incremental": True, "adopt_published_policies": ["abababababababababababababababababababababababababababababababab"]}
+    # The model is setup's to decide; how hard to work it is not.
+    assert "fallback_profile" not in after["llm"] and (after["llm"]["model"], after["llm"]["workers"]) == ("large", 9)
+    assert after["search"] == {"max_rounds": 5, "agent": True, "profile": after["llm"]["profile"], "model": "small"}
+    # Running setup again over its own file, edited by hand since, keeps the edit too.
+    setup.settings.write_text(setup.settings.read_text() + '\n[retrieval]\nhalf_life_days = 45.5\n')
+    client.post("/api/apply", json={})
+    assert tomllib.loads(setup.settings.read_text()) == {**after, "retrieval": {"half_life_days": 45.5}}
+    # A file whose own settings Tess Memory would refuse is not replaced by one that is refused too.
+    broken = setup.settings.read_text().replace("half_life_days = 45.5", 'half_life_days = 45.5\n\n[codex]\nbatch_size = "many"')
+    setup.settings.write_text(broken)
+    with pytest.raises((ValueError, TypeError)):
+        client.post("/api/apply", json={})
+    assert setup.settings.read_text() == broken and not setup.settings.with_name("settings.toml.new").exists()

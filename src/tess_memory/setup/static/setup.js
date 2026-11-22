@@ -383,7 +383,7 @@
         tab('endpoint', 'Your own endpoint', 'Any OpenAI-compatible embeddings service.')),
       panel,
       summary ? h('p', { class: 'section note ok' }, summary) : null,
-      S.existing_settings ? h('p', { class: 'section note' }, 'A settings file already exists at ', h('span', { class: 'mono' }, S.settings), '. Saving replaces it and keeps the current one beside it as a dated copy.') : null,
+      S.existing_settings ? h('p', { class: 'section note' }, 'A settings file already exists at ', h('span', { class: 'mono' }, S.settings), '. Saving rewrites it with the sources, model and embedding chosen here. Its other settings are carried over, and the current file is kept beside it as a dated copy.') : null,
       errorNote(),
       waiting || moving.state === 'running' ? reembedPanel(waiting, moving)
         : h('div', { class: 'actions' },
