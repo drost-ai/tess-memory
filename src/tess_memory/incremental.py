@@ -10,6 +10,7 @@ import time
 
 import numpy as np
 
+from .antigravity import conversation_id
 from .attribution import source_adapter
 from .checkpoints import DistillationCheckpoints
 from .distill import CallBudgetExceeded, DistillationPool, SESSION_SYSTEM, REDUCE_PROMPT
@@ -150,7 +151,8 @@ def ingest_incremental(cfg, store, embedder, llm, fallback_llm=None, *, limit=No
         sources, _ = source_adapter(ds, codex_catalog=reader.catalog)
         for path, source_project, parent in sources:
             if session_ids is not None:
-                sid = (reader.catalog.sources[path.resolve()].session_id if ds.type == 'codex' else path.stem)
+                sid = (reader.catalog.sources[path.resolve()].session_id if ds.type == 'codex'
+                       else conversation_id(path) if ds.type == 'antigravity' else path.stem)
                 if sid not in {s.removeprefix('codex:') for s in session_ids}:
                     continue
             try:

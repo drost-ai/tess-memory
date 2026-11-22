@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 import tomllib
 from pathlib import Path
 
@@ -709,3 +710,47 @@ def test_the_ingestion_setup_starts_outlives_setup(tmp_path):
     job.start(None)
     job.stop()
     assert job._process.wait(timeout=5) == -signal.SIGTERM and job.status["state"] == "stopped"
+
+
+def test_antigravity_is_found_and_connected_through_agy(machine, monkeypatch):
+    from tess_memory.setup import guidance
+    _, user = machine
+    settings = user / "store/settings.toml"
+    logs = user / ".gemini/antigravity-cli/brain/11111111-0000-4000-8000-000000000001/.system_generated/logs"
+    logs.mkdir(parents=True)
+    (logs / "transcript_full.jsonl").write_text("{}\n")
+    (logs / "transcript.jsonl").write_text("{}\n")  # the same conversation, shortened: not a second one
+    (user / ".gemini/antigravity-backup").mkdir()  # an application folder with no conversations
+    found = {s["name"]: s for s in detect.detect_sources(user)}
+    assert (found["antigravity-cli"]["sessions"], found["antigravity-cli"]["label"]) == (1, "Antigravity")
+    assert (found["antigravity-cli"]["display_path"], found["antigravity-cli"]["display_home"]) == ("~/.gemini/antigravity-cli", "~/.gemini")
+    assert "antigravity-backup" not in found
+    by_hand = detect.describe_folder("antigravity", str(user / ".gemini/antigravity-cli"))
+    assert (by_hand["sessions"], by_hand["home"]) == (1, str(user / ".gemini"))
+    assert "type = \"antigravity\"" in apply.render(user / "store", user / "store/providers.json", {
+        "sources": [{**found["antigravity-cli"], "enabled": True}], "model": {"profile": "p", "distill_model": "m", "search_model": "m", "verified": True},
+        "embedding": {"mode": "hosted", "dims": 4, "send_dimensions": False}})
+
+    (user / ".gemini/config").mkdir()
+    (user / ".gemini/config/mcp_config.json").write_text(json.dumps({"mcpServers": {"colab": {"command": "uvx"}}}))
+    (user / ".gemini/GEMINI.md").write_text("")
+    monkeypatch.setattr(agents.shutil, "which", lambda name: "/usr/bin/" + name)
+    homes = detect.agent_homes(user)
+    assert [(item["type"], item["display_home"]) for item in homes][-1] == ("antigravity", "~/.gemini")
+    target = next(item for item in agents.targets(homes, settings) if item["type"] == "antigravity")
+    assert (target["registered"], target["guidance"], target["guidance_file"], target["cli"]) == (False, False, "GEMINI.md", True)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        return subprocess.CompletedProcess(command, 0, "", "")
+
+    connected = agents.register(target["id"], homes, settings, run=run)
+    assert calls == [["agy", "mcp", "add", "--env", f"TESS_MEMORY_SETTINGS={settings}", "tess-memory", "--",
+                      sys.executable, "-m", "tess_memory.cli", "serve"]]
+    assert connected["guidance_outcome"] == "added"
+    assert (user / ".gemini/GEMINI.md").read_text() == guidance.text("antigravity")
+    assert "for shared Antigravity memory and durable" in guidance.text("antigravity")
+    (user / ".gemini/config/mcp_config.json").write_text(json.dumps({"mcpServers": {"tess-memory": {
+        **agents.server_entry(settings), "disabled": False}}}))
+    assert next(item for item in agents.targets(homes, settings) if item["type"] == "antigravity")["current"] is True

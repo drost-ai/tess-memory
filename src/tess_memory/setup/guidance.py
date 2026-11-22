@@ -2,7 +2,8 @@
 
 Registering the server gives an agent the tools; this gives it the habit. The
 text in ``guidance.md`` goes into the agent's own instruction file for every
-project: ``CLAUDE.md`` in a Claude Code home, ``AGENTS.md`` in a Codex home.
+project: ``CLAUDE.md`` in a Claude Code home, ``AGENTS.md`` in a Codex home,
+``GEMINI.md`` in Antigravity's.
 It is added once, at the end, and a file that already carries it is left
 exactly as it is. A file that is changed is first copied beside itself.
 """
@@ -12,8 +13,8 @@ import time
 from pathlib import Path
 
 HEADING = "Memory and planning (tess-memory MCP)"
-FILES = {"claude-code": "CLAUDE.md", "codex": "AGENTS.md"}
-AGENT_NAMES = {"claude-code": "Claude", "codex": "Codex"}
+FILES = {"claude-code": "CLAUDE.md", "codex": "AGENTS.md", "antigravity": "GEMINI.md"}
+AGENT_NAMES = {"claude-code": "Claude", "codex": "Codex", "antigravity": "Antigravity"}
 
 
 def text(kind: str) -> str:

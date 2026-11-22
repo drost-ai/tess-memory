@@ -2,7 +2,7 @@
 
 Whether an agent already has the server is read from its own configuration
 file. Adding it goes through the agent's own command (``claude mcp``,
-``codex mcp``), so its configuration is only ever changed by the agent
+``codex mcp``, ``agy mcp``), so its configuration is only ever changed by the agent
 itself, and only when the person asks. Connecting also adds the usage
 instructions to the agent's instruction file (see ``guidance``): the tools
 alone do not make an agent use them.
@@ -22,6 +22,7 @@ from . import guidance
 from .providers import SetupError
 
 SERVER = "tess-memory"
+COMMANDS = {"claude-code": "claude", "codex": "codex", "antigravity": "agy"}
 
 
 def server_entry(settings: Path) -> dict[str, Any]:
@@ -61,6 +62,8 @@ def _registered(kind: str, home: Path) -> tuple[str, dict[str, Any]] | None:
     try:
         if kind == "claude-code":
             servers = json.loads(_claude_config(home).read_text(encoding="utf-8")).get("mcpServers") or {}
+        elif kind == "antigravity":
+            servers = json.loads((home / "config" / "mcp_config.json").read_text(encoding="utf-8")).get("mcpServers") or {}
         else:
             servers = tomllib.loads((home / "config.toml").read_text(encoding="utf-8")).get("mcp_servers") or {}
         if isinstance(servers.get(SERVER), dict):
@@ -76,13 +79,13 @@ def targets(sources: list[dict[str, Any]], settings: Path) -> list[dict[str, Any
     found, seen = [], set()
     for source in sources:
         kind, home = source.get("type"), source.get("home")
-        if kind not in ("claude-code", "codex") or not home or home in seen:
+        if kind not in COMMANDS or not home or home in seen:
             continue
         seen.add(home)
         name, entry = _registered(kind, Path(home)) or (None, None)
         found.append({"id": f"{kind}:{home}", "type": kind, "home": home, "label": source.get("label"),
                       "display_path": source.get("display_home") or home,
-                      "cli": shutil.which("claude" if kind == "claude-code" else "codex") is not None,
+                      "cli": shutil.which(COMMANDS[kind]) is not None,
                       "registered": entry is not None, "registered_as": name,
                       "current": name == SERVER and _settings_of(entry) == str(settings),
                       "guidance": guidance.present(kind, Path(home)),
@@ -108,6 +111,11 @@ def register(target_id: str, sources: list[dict[str, Any]], settings: Path, *, r
             environment["CLAUDE_CONFIG_DIR"] = str(home)
         remove = ["claude", "mcp", "remove", "--scope", "user", target["registered_as"] or SERVER]
         add = ["claude", "mcp", "add-json", "--scope", "user", SERVER, json.dumps({"type": "stdio", **entry})]
+    elif target["type"] == "antigravity":
+        # agy has one home, ~/.gemini, and takes its flags before the server's name.
+        remove = ["agy", "mcp", "remove", target["registered_as"] or SERVER]
+        add = ["agy", "mcp", "add", *[item for key, value in entry["env"].items() for item in ("--env", f"{key}={value}")],
+               SERVER, "--", entry["command"], *entry["args"]]
     else:
         environment["CODEX_HOME"] = str(home)
         remove = ["codex", "mcp", "remove", target["registered_as"] or SERVER]

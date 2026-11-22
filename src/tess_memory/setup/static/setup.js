@@ -163,6 +163,7 @@
     const kind = h('select', { id: 'folder-kind', 'aria-label': 'Kind of folder' },
       h('option', { value: 'claude-code' }, 'Claude Code projects folder'),
       h('option', { value: 'codex' }, 'Codex home folder'),
+      h('option', { value: 'antigravity' }, 'Antigravity data folder'),
       h('option', { value: 'tess-core' }, 'Tess Core sessions folder'),
       h('option', { value: 'transcript' }, 'Folder of transcript files'));
     const path = h('input', { type: 'text', class: 'mono', id: 'folder-path', placeholder: '/full/path/to/folder', autocomplete: 'off', spellcheck: 'false' });
@@ -174,7 +175,7 @@
       h('p', { class: 'lede' }, 'Everything your agents have already done is sitting in these folders. Pick what should become memory. Nothing in them is changed. Tess Memory will then keep adding new sessions from these folders.'),
       h('div', { class: 'section' },
         rows.length ? h('div', { class: 'list' }, rows)
-                    : h('p', { class: 'note' }, 'No Claude Code or Codex sessions were found in your home folder. Add a folder below.')),
+                    : h('p', { class: 'note' }, 'No Claude Code, Codex or Antigravity sessions were found in your home folder. Add a folder below.')),
       h('details', { class: 'section' },
         h('summary', { class: 'hint' }, 'Add another folder'),
         h('div', { class: 'panel' },

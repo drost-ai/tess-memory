@@ -33,7 +33,7 @@ tess-memory setup --port 4600
 
 Serves a setup page on `127.0.0.1` until you finish or press Ctrl+C. It chooses sources,
 connects and tests a model and an embedding model, writes `settings.toml` and a provider
-file into the store's folder, registers the MCP server with Claude Code and Codex, and
+file into the store's folder, registers the MCP server with Claude Code, Codex and Antigravity, and
 runs a first ingestion. It is the one command that does not read `TESS_MEMORY_SETTINGS`.
 
 ### `ingest`

@@ -17,8 +17,8 @@ link printed in your terminal, so nothing else on the machine or the network can
 
 ### 1. Sources
 
-Setup finds the Claude Code and Codex homes on your disk and shows how many session files
-each holds. Tick the ones that should become memory. Their files are only read, never
+Setup finds the Claude Code, Codex and Antigravity folders on your disk and shows how many
+session files each holds. Tick the ones that should become memory. Their files are only read, never
 changed. You can add any other folder by hand: a Tess Core agent's sessions, or a folder
 of plain transcripts.
 
@@ -47,15 +47,16 @@ You can change this later. See [changing the embedding model](#changing-the-embe
 
 ### 4. Connect agents
 
-Every Claude Code and Codex home on the machine is listed, whether or not you chose it as
-a source. Which sessions are ingested and which agents can use the memory are separate
+Every Claude Code, Codex and Antigravity home on the machine is listed, whether or not you
+chose it as a source. Which sessions are ingested and which agents can use the memory are separate
 choices.
 
 Connecting an agent does two things:
 
 - registers the memory server with it, through the agent's own command;
 - adds a "Memory and planning" section to its instruction file (`CLAUDE.md` for Claude
-  Code, `AGENTS.md` for Codex), so the agent uses its memory without being asked.
+  Code, `AGENTS.md` for Codex, `GEMINI.md` for Antigravity), so the agent uses its memory
+  without being asked.
 
 A file that already has that section is left exactly as it is, and a file that is changed
 is first copied beside itself. For any other MCP client, the page shows the configuration

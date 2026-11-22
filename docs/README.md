@@ -17,11 +17,11 @@ maintain themselves. These pages explain how to use it and how it works.
 
 | | |
 |---|---|
-| [Connecting agents](connecting-agents.md) | Claude Code, Codex, any MCP client, and sharing one store |
+| [Connecting agents](connecting-agents.md) | Claude Code, Codex, Antigravity, any MCP client, and sharing one store |
 | [Searching memory](searching.md) | The tools, the search modes, and how to ask |
 | [The plan board](plan-board.md) | Planning and executing long projects |
 | [Image records](images.md) | Descriptions of the images an agent was sent, found by the same search |
-| [Sources](sources.md) | Claude Code, Codex, Tess Core and plain transcripts |
+| [Sources](sources.md) | Claude Code, Codex, Antigravity, Tess Core and plain transcripts |
 | [Personal memory](personal-memory.md) | Memory for a personal AI |
 | [Teams and visibility](teams.md) | Several people, one store |
 

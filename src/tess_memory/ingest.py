@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from .antigravity import conversation_id, parse_conversation
 from .attribution import source_adapter
 from .config import Config
 from .distill import (
@@ -306,7 +307,8 @@ def _ingest(
             path, project, parent_session=parent, min_chars=cfg.min_session_chars
         )
         if st is None:
-            store.mark_file(str(path), st_info.st_mtime, st_info.st_size, path.stem, "skipped")
+            skipped = conversation_id(path) if parse is parse_conversation else path.stem
+            store.mark_file(str(path), st_info.st_mtime, st_info.st_size, skipped, "skipped")
             stats.skipped_trivial += 1
             continue
         parsed.append((st, st_info))

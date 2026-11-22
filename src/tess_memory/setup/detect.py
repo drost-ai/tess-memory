@@ -9,8 +9,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-SOURCE_TYPES = ("claude-code", "codex", "tess-core", "transcript")
-LABELS = {"claude-code": "Claude Code", "codex": "Codex", "tess-core": "Tess Core agent", "transcript": "Transcript folder"}
+SOURCE_TYPES = ("claude-code", "codex", "antigravity", "tess-core", "transcript")
+LABELS = {"claude-code": "Claude Code", "codex": "Codex", "antigravity": "Antigravity", "tess-core": "Tess Core agent",
+          "transcript": "Transcript folder"}
+# Antigravity keeps its settings in ~/.gemini and each application's
+# conversations in a folder of its own inside it.
+ANTIGRAVITY_HOME = ".gemini"
 
 
 def _slug(text: str) -> str:
@@ -70,11 +74,28 @@ def codex(home: Path) -> list[dict[str, Any]]:
     return found
 
 
+def _antigravity_conversations(directory: Path) -> tuple[int, float]:
+    # brain/<conversation>/.system_generated/logs/transcript_full.jsonl
+    return _count(directory / "brain", lambda name: name == "transcript_full.jsonl", depth=3)
+
+
+def antigravity(home: Path) -> list[dict[str, Any]]:
+    found = []
+    for directory in sorted((home / ANTIGRAVITY_HOME).glob("antigravity*")):
+        if not directory.is_dir():
+            continue
+        sessions, newest = _antigravity_conversations(directory)
+        if sessions:
+            found.append({"type": "antigravity", "name": _slug(directory.name), "path": str(directory),
+                          "home": str(home / ANTIGRAVITY_HOME), "sessions": sessions, "newest": newest})
+    return found
+
+
 def detect_sources(home: Path | None = None) -> list[dict[str, Any]]:
     """Every agent home found under the user's home directory, largest first
     within each kind. The default home of each agent comes first."""
     home = Path(home or Path.home())
-    found = claude_code(home) + codex(home)
+    found = claude_code(home) + codex(home) + antigravity(home)
     for item in found:
         item["label"] = LABELS[item["type"]]
         item["display_path"] = _tilde(item["path"], home)
@@ -83,13 +104,14 @@ def detect_sources(home: Path | None = None) -> list[dict[str, Any]]:
 
 
 def agent_homes(home: Path | None = None) -> list[dict[str, Any]]:
-    """Every Claude Code and Codex home on this machine, whether or not it has
+    """Every Claude Code, Codex and Antigravity home on this machine, whether or not it has
     sessions yet and whether or not it was chosen as a source: any of them
     may be given the memory."""
     home = Path(home or Path.home())
     found = []
     for kind, pattern, marks in (("claude-code", ".claude*", ("projects", "settings.json", ".claude.json", "CLAUDE.md")),
-                                 ("codex", ".codex*", ("config.toml", "auth.json", "sessions", "AGENTS.md"))):
+                                 ("codex", ".codex*", ("config.toml", "auth.json", "sessions", "AGENTS.md")),
+                                 ("antigravity", ANTIGRAVITY_HOME, ("antigravity-cli", "antigravity-ide", "antigravity"))):
         for directory in sorted(home.glob(pattern)):
             if directory.is_dir() and any((directory / mark).exists() for mark in marks):
                 found.append({"type": kind, "home": str(directory), "label": LABELS[kind], "display_home": _tilde(str(directory), home)})
@@ -117,8 +139,15 @@ def describe_folder(kind: str, path: str) -> dict[str, Any]:
         for folder in ("sessions", "archived_sessions"):
             count, latest = _count(directory / folder, lambda name: name.startswith("rollout-"), depth=4)
             sessions, newest = sessions + count, max(newest, latest)
+    elif kind == "antigravity":
+        sessions, newest = _antigravity_conversations(directory)
     else:
         sessions, newest = _count(directory, lambda name: name.endswith((".json", ".jsonl")), depth=2)
-    return {"type": kind, "name": _slug(directory.name.lstrip(".")), "path": str(directory), "home": str(directory),
+    home = str(directory)
+    if kind == "antigravity":
+        # The folder holds one application's conversations; the agent's home
+        # is ~/.gemini around it. A copy kept elsewhere is not an agent's home.
+        home = str(directory.parent) if directory.parent.name == ANTIGRAVITY_HOME else None
+    return {"type": kind, "name": _slug(directory.name.lstrip(".")), "path": str(directory), "home": home,
             "sessions": sessions, "newest": newest, "label": LABELS[kind], "display_path": _tilde(str(directory), Path.home()),
             "display_home": _tilde(str(directory), Path.home())}

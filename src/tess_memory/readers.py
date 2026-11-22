@@ -7,6 +7,7 @@ import hashlib
 import json
 from pathlib import Path
 
+from . import antigravity
 from .engine_sessions import _append_message_turns, _session_cwd
 from .codex import CodexCatalog, ParseReport, _strip_images
 from .config import Config, DataStore
@@ -132,7 +133,64 @@ class CompletedSourceReader:
             raise SourceReadError("source resolves outside the configured root")
         if ds.type == "codex":
             return self._codex(ds, path, project)
+        if ds.type == "antigravity":
+            return self._antigravity(ds, path, project, parent)
         return self._generic(ds, path, project, parent)
+
+    def _antigravity(self, ds, path, project, parent):
+        """An Antigravity conversation log, up to the agent's last answer.
+
+        A unit ends where the agent answers without calling a tool, or where
+        the person speaks again before it did. Steps after the last such point
+        are a turn still running and wait for the next read."""
+        def consume(state, step, position, start, end):
+            index = step.get("step_index")
+            # A step written again under its index replaces the earlier one.
+            state["steps"][str(index if isinstance(index, int) and not isinstance(index, bool) else position)] = {
+                key: step[key] for key in ("type", "status", "created_at", "content", "tool_calls", "media") if key in step}
+
+        state, revision = self.journal.read_jsonl(path, f"antigravity-v{READER_VERSION}", initial=lambda: {"steps": {}},
+                                                  consume=consume, max_record_bytes=self.cfg.codex.max_record_bytes)
+        st = antigravity.new_transcript(path, project, parent)
+        ends, kinds = [], []
+        def close(kind):
+            if st.turns and (not ends or len(st.turns) > ends[-1]):
+                ends.append(len(st.turns))
+                kinds.append(kind)
+        for index in sorted(state["steps"], key=int):
+            step = state["steps"][index]
+            turns = antigravity.step_turns(step)
+            if (turns and turns[0].role == "user"
+                    and any(t.role != "user" for t in st.turns[(ends[-1] if ends else 0):])):
+                close("interrupted_by_next_user")
+            for turn in turns:
+                turn.message_index = int(index)
+                turn.message_id = f"{st.session_id}:{index}"
+                turn.human_evidence = turn.role == "user"
+            st.turns.extend(turns)
+            if antigravity.closes_turn(step):
+                close("assistant_message")
+        eligible = ends[-1] if ends else 0
+        pending = eligible < len(st.turns) or revision.partial_record
+        notes = []
+        if self.cfg.recovery_ingestion:
+            if eligible < len(st.turns):
+                ends.append(len(st.turns))
+                kinds.append("incomplete_snapshot")
+                eligible = len(st.turns)
+            if pending:
+                notes.append("Incomplete persisted history; no task completion is implied.")
+            if revision.partial_record:
+                notes.append("An incomplete final record remains in the original source for later recovery.")
+            if st.turns and not st.n_user:
+                notes.append("No user request is recoverable; preserve available evidence without inventing one.")
+        st.turns = st.turns[:eligible]
+        times = [t.ts for t in st.turns if t.ts]
+        st.started_at, st.ended_at = (min(times), max(times)) if times else (None, None)
+        if not st.turns or (not st.n_user and not self.cfg.recovery_ingestion):
+            st = None
+        return ParsedSource(st, ends, kinds, [revision], pending, source_signature(path, ds, self.cfg),
+                            revision.parsed_records, notes)
 
     def _codex(self, ds, path, project):
         catalog = self.catalog

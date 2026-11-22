@@ -10,9 +10,9 @@ so any agent that speaks MCP can use it. Connecting an agent has two halves:
 An agent can have either half without the other. An agent with only the tools can use
 memory other agents produced, and can keep a plan.
 
-[`tess-memory setup`](setup.md) does both for Claude Code and Codex from its page, and also
-adds the usage instructions to each agent's instruction file. The rest of this page is for
-doing it by hand, and for other MCP clients.
+[`tess-memory setup`](setup.md) does both for Claude Code, Codex and Antigravity from its
+page, and also adds the usage instructions to each agent's instruction file. The rest of
+this page is for doing it by hand, and for other MCP clients.
 
 One store can hold several agents' sessions at once. Claude Code and Codex in the same
 store is the usual way to give them one shared memory, and the scheduler keeps such a store
@@ -56,6 +56,28 @@ command = "uv"
 args = ["run", "--directory", "/path/to/tess-memory", "tess-memory", "serve"]
 env = { TESS_MEMORY_SETTINGS = "/home/you/.tess-memory/settings.toml" }
 ```
+
+## Antigravity
+
+Source, one for each Antigravity data folder that holds conversations (`antigravity-cli`
+is the `agy` command's):
+
+```toml
+[[data_stores]]
+name = "antigravity-cli"
+type = "antigravity"
+path = "~/.gemini/antigravity-cli"
+```
+
+Server. Flags go before the server's name:
+
+```sh
+agy mcp add --env TESS_MEMORY_SETTINGS=$HOME/.tess-memory/settings.toml tess-memory \
+  -- uv run --directory /path/to/tess-memory tess-memory serve
+```
+
+This writes the server to `~/.gemini/config/mcp_config.json`, Antigravity's configuration
+for every session.
 
 ## Any other MCP client
 
@@ -146,8 +168,9 @@ You do not need them to use Codex in a shared store.
 MCP servers describe their tools, but agents follow their instruction files more reliably.
 
 `tess-memory setup` does this when it connects an agent: it adds a "Memory and planning"
-section to the agent's instruction file for every project, `CLAUDE.md` in a Claude Code
-home and `AGENTS.md` in a Codex home. The section is added once at the end of the file. A
+section to the agent's instruction file for every project: `CLAUDE.md` in a Claude Code
+home, `AGENTS.md` in a Codex home and `~/.gemini/GEMINI.md` for Antigravity. The section is
+added once at the end of the file. A
 file that already has it is left exactly as it is, and a file that is changed is first
 copied beside itself. The full text is in
 [`src/tess_memory/setup/guidance.md`](../src/tess_memory/setup/guidance.md), and setup

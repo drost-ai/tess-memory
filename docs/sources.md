@@ -15,7 +15,7 @@ path = "~/.claude/projects"  # where it is
 | Key | Meaning |
 |---|---|
 | `name` | A label, shown in status output |
-| `type` | `claude-code`, `codex`, `tess-core` or `transcript` |
+| `type` | `claude-code`, `codex`, `antigravity`, `tess-core` or `transcript` |
 | `path` | The folder to read |
 | `project` | Bind every session from this source to one project, instead of naming projects after working directories |
 | `exclude` | Glob patterns of project names to skip |
@@ -74,6 +74,42 @@ tess-memory inspect-codex ~/.codex --limit 5
 ```
 
 Sessions are identified as `codex:<native-session-id>`.
+
+## Antigravity
+
+```toml
+[[data_stores]]
+name = "antigravity-cli"
+type = "antigravity"
+path = "~/.gemini/antigravity-cli"
+```
+
+Reads the conversations of Google Antigravity. Each Antigravity application keeps its own
+data folder under `~/.gemini`: `antigravity-cli` is the `agy` command's, and the IDE and the
+desktop app have folders of their own beside it. Add one source for each folder that holds
+conversations; [`tess-memory setup`](setup.md) lists the ones that do.
+
+A conversation is the log Antigravity writes at
+`brain/<conversation>/.system_generated/logs/transcript_full.jsonl`. The project is the
+conversation's workspace folder, which Antigravity records in `conversation_summaries.db`
+beside the conversations. A conversation with no recorded workspace is read only when the
+source sets `project`.
+
+What is kept and what is left out:
+
+- Your prompts, without the time and settings notes Antigravity attaches to them. An
+  attached image leaves a marker with the path of its file.
+- The agent's replies, its tool calls and each tool's result.
+- Messages from other agents: a sub-agent's report arrives in the conversation that
+  started it and is kept there. The sub-agent's own conversation is skipped.
+- Not kept: the agent's private reasoning, and the steps Antigravity writes for itself
+  (reminders, compaction summaries, stream errors).
+
+A turn becomes memory once the agent has answered it. While the agent is still working, the
+earlier turns of the conversation are already there and the running one waits.
+
+Sessions are identified by Antigravity's conversation id, the one `agy --conversation`
+takes.
 
 ## Tess Core
 

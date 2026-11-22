@@ -56,11 +56,16 @@ def source_adapter(ds: DataStore, *, codex_catalog=None) -> tuple[list[Discovere
 
         catalog = codex_catalog or CodexCatalog([ds])
         return catalog.discover(ds), catalog.parse
+    if ds.type == "antigravity":
+        from . import antigravity
+
+        return (antigravity.discover_conversations(ds.path, ds.exclude, ds.project, ds.skip_copies_of),
+                antigravity.parse_conversation)
     if ds.type == "agent" + "-core":
         raise ValueError(f"data_store '{ds.name}': type 'agent" + "-core' is now 'tess-core'; update the store's settings")
     raise ValueError(
         f"data_store '{ds.name}': unknown type '{ds.type}' "
-        "(implemented: 'claude-code', 'tess-core', 'transcript', 'codex')"
+        "(implemented: 'claude-code', 'codex', 'antigravity', 'tess-core', 'transcript')"
     )
 
 

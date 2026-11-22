@@ -62,7 +62,12 @@ def activity_state(path: Path, source_type: str) -> str:
         if not isinstance(payload, dict):
             continue
         kind = payload.get("type")
-        if record.get("type") == "event_msg" and isinstance(kind, str):
+        if source_type == "antigravity":
+            if kind == "USER_INPUT":
+                state = "active"
+            elif kind == "PLANNER_RESPONSE":
+                state = "complete" if payload.get("content") and not payload.get("tool_calls") else "active"
+        elif record.get("type") == "event_msg" and isinstance(kind, str):
             if kind == "task_complete":
                 state = "complete"
             elif kind == "turn_aborted":

@@ -15,7 +15,7 @@ with. Shared across every agent you use, served over MCP, stored on your own mac
 
 [Quickstart](#quickstart) · [What you get](#what-you-get) · [How it works](#how-it-works) · [Built to be trusted](#built-to-be-trusted) · [Documentation](https://continuityresearch.ai/tess-memory/docs)
 
-Works with Claude Code, Codex and any MCP client · Local SQLite · Python 3.12+ · Apache-2.0
+Works with Claude Code, Codex, Antigravity and any MCP client · Local SQLite · Python 3.12+ · Apache-2.0
 
 </div>
 
@@ -45,7 +45,7 @@ No re-reading. No re-explaining. The agent already knows.
 
 ### 1. Continuity between agents
 
-Point Claude Code, Codex and any other MCP-capable agent at the same store and they share
+Point Claude Code, Codex, Antigravity and any other MCP-capable agent at the same store and they share
 one memory. What you debugged in one tool this morning is known to the other this afternoon.
 Switch agents, switch models, switch machines: the context comes with you instead of staying
 locked inside one vendor's chat history.
@@ -84,7 +84,7 @@ uv run tess-memory setup
   <img src="docs/assets/setup.jpg" alt="Tess Memory setup: choosing which agents' sessions go into memory" width="820">
 </p>
 
-1. **Sources.** It finds the Claude Code and Codex sessions already on your disk. Tick the
+1. **Sources.** It finds the Claude Code, Codex and Antigravity sessions already on your disk. Tick the
    ones to remember.
 2. **Provider.** Sign in with your ChatGPT account, paste an Anthropic, OpenAI or Google
    Gemini API key, or point it at any OpenAI-compatible endpoint, including a model on your
@@ -127,8 +127,8 @@ Twelve tools, served over MCP:
 ## How it works
 
 ```
- Claude Code      Codex       Tess Core agents      any transcript
-      └─────────────┴──────┬────────┴────────────────────┘
+ Claude Code    Codex    Antigravity    Tess Core agents    any transcript
+      └───────────┴────────┬──┴────────────────┴──────────────────┘
                            ▼
                  read      only new or changed sessions, verified by content
                            ▼
@@ -226,11 +226,11 @@ The same pages live in this repository:
 - [Setup](docs/setup.md): the guided setup, step by step
 - [Concepts](docs/concepts.md): stores, sources, projects, memory levels, the plan
 - [How it works](docs/how-it-works.md): the pipeline from transcript to answer
-- [Connecting agents](docs/connecting-agents.md): Claude Code, Codex, any MCP client, shared stores
+- [Connecting agents](docs/connecting-agents.md): Claude Code, Codex, Antigravity, any MCP client, shared stores
 - [Searching memory](docs/searching.md): the tools, search modes, writing good queries
 - [The plan board](docs/plan-board.md): planning and executing long projects
 - [Image records](docs/images.md): finding the images an agent was sent
-- [Sources](docs/sources.md): Claude Code, Codex, Tess Core and plain transcripts
+- [Sources](docs/sources.md): Claude Code, Codex, Antigravity, Tess Core and plain transcripts
 - [Personal memory](docs/personal-memory.md): memory for a personal AI
 - [Teams and visibility](docs/teams.md): several people, one store
 - [Models and embeddings](docs/models.md): choosing providers, running offline
