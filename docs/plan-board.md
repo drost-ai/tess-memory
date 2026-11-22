@@ -30,6 +30,12 @@ sees exactly what is done, what is in progress, what is blocked and what is next
 Items nest as a tree: vision, then epic, slice and task, by convention. Notes attach
 anywhere. Each item has a title, a body, a priority from 1 to 5, tags and a stable id.
 
+A note is a record, not work. One filed under an item is shown on the board while that
+item is, and leaves with it when the work is finished, whatever status the note was left
+in; it never keeps a finished item on the board. A note at the top of the board stays
+until you complete or drop it. Nothing is deleted or changed: `include_done=true` and
+search show every note.
+
 ## Lifecycle
 
 ```

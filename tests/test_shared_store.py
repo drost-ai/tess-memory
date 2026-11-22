@@ -112,6 +112,35 @@ class SharedStoreTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "not both"):
             plan.update_item(self.a, Embedder(), item["id"], body="Replaced.", append="Added.")
 
+    def test_a_note_follows_the_work_it_is_filed_under(self):
+        def add(kind, title, parent=None):
+            return plan.add_item(self.a, Embedder(), project="repo", kind=kind, title=title, parent_id=parent)["id"]
+        def done(item):
+            plan.update_item(self.a, Embedder(), item, status="complete")
+        epic = add("epic", "Release")
+        shipped, open_slice = add("slice", "Wizard", epic), add("slice", "Website", epic)
+        record, reminder, standalone = add("note", "Ran it on a second Mac", shipped), add("note", "Check auth first", open_slice), add("note", "Ideas")
+        done(shipped)
+        board = plan.render_board(self.a, "repo")
+        # The record went with the finished slice; the note under open work and the one at the top stay.
+        self.assertEqual([line.strip().split("]")[1].strip() for line in board.splitlines()[1:-1]],
+                         ["Release", "Website", "Check auth first", "Ideas"])
+        self.assertEqual(board.splitlines()[0], "repo — 4 planned, 1 complete")
+        self.assertEqual(board.splitlines()[-1], "(1 complete/dropped, 1 note under finished work hidden — plan_board include_done=true)")
+        done(open_slice), done(epic)
+        board = plan.render_board(self.a, "repo")
+        self.assertEqual(board.splitlines(), ["repo — 1 planned, 3 complete", f"#{standalone} [note | planned | p3] Ideas",
+                                              "(3 complete/dropped, 2 notes under finished work hidden — plan_board include_done=true)"])
+        # Nothing stored changed: the notes are as they were left, and shown when everything is.
+        everything = plan.render_board(self.a, "repo", include_done=True)
+        self.assertIn(f"#{record} [note | planned | p3] Ran it on a second Mac", everything)
+        self.assertEqual(everything.splitlines()[0], "repo — 3 planned, 3 complete")
+        # A task filed under a note is still work, and keeps that note on the board.
+        task = add("task", "Try the idea", record)
+        self.assertIn("Ran it on a second Mac", plan.render_board(self.a, "repo"))
+        done(task)
+        self.assertNotIn("Ran it on a second Mac", plan.render_board(self.a, "repo"))
+
     def test_write_failure_rolls_back_plan_and_history_without_leaving_a_lock(self):
         with mock.patch.object(self.a, "plan_log", side_effect=RuntimeError("test failure")):
             with self.assertRaisesRegex(RuntimeError, "test failure"):

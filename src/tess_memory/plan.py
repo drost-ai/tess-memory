@@ -337,19 +337,30 @@ def render_board(
             i["priority"], i["id"],
         ))
 
-    show_cache: dict[int, bool] = {}
+    by_id = {i["id"]: i for i in items}
+    shelter_cache: dict[int, bool] = {}
+
+    def shelters(i) -> bool:
+        """Whether open work is here or below. A note is not work, but work
+        filed under one is."""
+        cached = shelter_cache.get(i["id"])
+        if cached is None:
+            cached = (i["kind"] != "note" and i["status"] in OPEN_STATUSES) or any(
+                shelters(c) for c in children[i["id"]])
+            shelter_cache[i["id"]] = cached
+        return cached
 
     def show(i) -> bool:
-        # A retired item stays visible while it still shelters open work.
-        if include_done:
+        # A retired item stays visible while it still shelters open work. A
+        # note never keeps its parent on the board, and one filed under an
+        # item is shown only while that item is. A note at the top of the
+        # board stays until it is itself completed or dropped.
+        if include_done or shelters(i):
             return True
-        cached = show_cache.get(i["id"])
-        if cached is None:
-            cached = i["status"] in OPEN_STATUSES or any(
-                show(c) for c in children[i["id"]]
-            )
-            show_cache[i["id"]] = cached
-        return cached
+        if i["kind"] != "note" or i["status"] not in OPEN_STATUSES:
+            return False
+        parent = by_id.get(i["parent_id"])
+        return parent is None or show(parent)
 
     lines: list[str] = []
 
@@ -362,17 +373,23 @@ def render_board(
 
     walk(None, 0)
 
-    counts = Counter(i["status"] for i in items)
-    summary = ", ".join(f"{counts[s]} {s}" for s in PLAN_STATUSES if counts[s])
+    # Notes that went off the board with the finished work they were filed
+    # under are not open work, whatever status they were left in.
+    filed = [i for i in items if i["kind"] == "note" and i["status"] in OPEN_STATUSES and not show(i)]
+    filed_ids = {i["id"] for i in filed}
+    counts = Counter(i["status"] for i in items if i["id"] not in filed_ids)
+    summary = ", ".join(f"{counts[s]} {s}" for s in PLAN_STATUSES if counts[s]) or "no open work"
     out = [f"{project} — {summary}"]
     if max_items is not None and len(lines) > max_items:
         out.extend(lines[:max_items])
         out.append(f"… {len(lines) - max_items} more — plan_board shows the full tree")
     else:
         out.extend(lines)
-    hidden = len(items) - len(lines)
-    if hidden:
-        out.append(f"({hidden} complete/dropped hidden — plan_board include_done=true)")
+    hidden = len(items) - len(lines) - len(filed)
+    if hidden or filed:
+        parts = ([f"{hidden} complete/dropped"] if hidden else []) + (
+            [f"{len(filed)} {'note' if len(filed) == 1 else 'notes'} under finished work"] if filed else [])
+        out.append(f"({', '.join(parts)} hidden — plan_board include_done=true)")
     return "\n".join(out)
 
 
