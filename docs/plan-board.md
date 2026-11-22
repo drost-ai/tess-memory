@@ -56,10 +56,12 @@ plan_add(project="-work-billing", kind="task", parent_id=41,
          body="Write to both ledgers behind a flag. Done when...")   → #42
 ```
 
-**`plan_update`** changes status, title, body, priority, parent or tags.
+**`plan_update`** changes status, title, body, priority, parent or tags. `append` adds a
+paragraph to the end of the body without replacing it.
 
 ```
 plan_update(item_id=42, status="in_progress")
+plan_update(item_id=42, status="complete", append="Shipped in 3f2a91c; both ledgers agree.")
 ```
 
 **`plan_board`** shows the project's open work as a tree. Pass `include_done=true` to see
@@ -80,8 +82,11 @@ These are the habits that separate a board that helps from one that misleads.
   finishes the parent.
 - **Check before adding.** Call `plan_board` first, to find the right parent and avoid
   duplicates.
-- **Read before replacing.** `plan_update` replaces a body; it does not append. Read the
-  item with `plan_get` and keep what still matters.
+- **Append, or read before replacing.** `plan_update(append=...)` adds a paragraph to the
+  end of the body and keeps what is there, so a result or a blocker can be recorded without
+  reading the item first, and two agents adding to one item both keep their text.
+  `plan_update(body=...)` replaces the whole body: read the item with `plan_get` first and
+  keep what still matters.
 
 Put these in your agent's instruction file and it will follow them.
 

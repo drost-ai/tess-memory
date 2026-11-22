@@ -97,6 +97,21 @@ class SharedStoreTests(unittest.TestCase):
         self.assertIn("New title", row["content"])
         np.testing.assert_array_equal(np.frombuffer(row["vector"], dtype=np.float32), [0, 1])
 
+    def test_two_writers_appending_to_one_item_both_keep_their_text(self):
+        item = plan.add_item(self.a, Embedder(), project="repo", kind="task", title="Ship it", body="Goal: ship.")
+        # Each connection read the item before the other wrote, as two agents would.
+        self.a.plan_get(item["id"]), self.b.plan_get(item["id"])
+        plan.update_item(self.a, Embedder(), item["id"], append="Claude: tests pass.")
+        updated, changes = plan.update_item(self.b, Embedder(), item["id"], append="  Codex: deployed.\n", status="complete")
+        self.assertEqual(updated["body"], "Goal: ship.\n\nClaude: tests pass.\n\nCodex: deployed.")
+        self.assertEqual(changes, ["status planned -> complete", "body appended"])
+        self.assertIn("Codex: deployed.", self.a.db.execute("SELECT content FROM memories WHERE plan_id=?", (item["id"],)).fetchone()[0])
+        empty = plan.add_item(self.a, Embedder(), project="repo", kind="note", title="Scratch")
+        self.assertEqual(plan.update_item(self.a, Embedder(), empty["id"], append="First line.")[0]["body"], "First line.")
+        self.assertEqual(plan.update_item(self.a, Embedder(), empty["id"], append="   ")[1], [])
+        with self.assertRaisesRegex(ValueError, "not both"):
+            plan.update_item(self.a, Embedder(), item["id"], body="Replaced.", append="Added.")
+
     def test_write_failure_rolls_back_plan_and_history_without_leaving_a_lock(self):
         with mock.patch.object(self.a, "plan_log", side_effect=RuntimeError("test failure")):
             with self.assertRaisesRegex(RuntimeError, "test failure"):

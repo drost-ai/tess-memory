@@ -226,12 +226,19 @@ def update_item(
     priority=None,
     parent_id=_UNSET,
     tags: list[str] | None = None,
+    append: str | None = None,
 ):
-    """Commit the edit and keyword index before requesting its embedding."""
+    """Commit the edit and keyword index before requesting its embedding.
+
+    ``append`` adds a paragraph to the end of the body as it stands inside the
+    write transaction, so two writers adding to one item both keep their text;
+    ``body`` replaces it and is for a writer that has just read the item."""
+    if body is not None and append is not None:
+        raise ValueError("pass body to replace the text or append to add to it, not both")
     with store.write_transaction():
         item, changes = _update_item_fields(
             store, item_id, status=status, title=title, body=body,
-            priority=priority, parent_id=parent_id, tags=tags,
+            priority=priority, parent_id=parent_id, tags=tags, append=append,
         )
         if not changes:
             return item, changes
@@ -242,7 +249,7 @@ def update_item(
 
 def _update_item_fields(
     store: MemoryStore, item_id: int, *, status: str | None, title: str | None,
-    body: str | None, priority, parent_id, tags: list[str] | None,
+    body: str | None, priority, parent_id, tags: list[str] | None, append: str | None = None,
 ):
     """Read, validate and edit under the caller's cross-process transaction."""
     item = store.plan_get(int(item_id))
@@ -266,6 +273,9 @@ def _update_item_fields(
     if body is not None and body.strip() != (item["body"] or ""):
         fields["body"] = body.strip()
         changes.append("body edited")
+    if append is not None and append.strip():
+        fields["body"] = "\n\n".join(part for part in ((item["body"] or "").strip(), append.strip()) if part)
+        changes.append("body appended")
     if priority is not None:
         p = _validate_priority(priority)
         if p != item["priority"]:

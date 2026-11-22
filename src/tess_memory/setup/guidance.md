@@ -38,8 +38,10 @@ memory server and store; do not switch to another runtime's store to fill gaps.
 - Make each plan item's title and body self-contained: state the objective,
   relevant context and decisions, and completion criteria or concrete next step.
   Reuse and update existing items rather than creating duplicate plans.
-- Before replacing an existing plan item's body, read it with `plan_get` and
-  preserve still-relevant context: `plan_update` replaces the entire body.
+- To add a result, a blocker or a next step to a plan item, pass `append` to
+  `plan_update`: it adds to the end of the body and keeps what is there. Before
+  replacing a body with `body`, read it with `plan_get` and preserve
+  still-relevant context: `body` replaces the entire text.
   For status-only changes, pass only the fields being changed. Confirm the tool
   reports success before saying a plan was saved or updated.
 - Maintain status with `plan_update` at the moment it changes: `in_progress`

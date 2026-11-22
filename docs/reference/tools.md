@@ -130,7 +130,7 @@ Update a plan item: move status, edit, reprioritize, or re-parent.
 
 Maintain status LIVE, at the moment it changes: in_progress when you
 begin an item, complete when the work is done AND verified, blocked or
-dropped when reality changes (put the reason in the body). Roll status up
+dropped when reality changes (put the reason in the body, with append). Roll status up
 the tree too: a parent epic/slice goes in_progress with its first started
 child and complete with its last finished one. Do not batch updates for
 session end — a stale board misleads every future session. Every
@@ -141,7 +141,8 @@ transition is timestamped and recorded in the item's history.
 | `item_id` | `int` | required | Plan item id (see plan_board). |
 | `status` | `str \| None` | `None` | New status: planned \| in_progress \| blocked \| complete \| dropped. Items are never deleted — 'complete' finishes, 'dropped' retires. Every change is timestamped in the item's history. Omit to keep. |
 | `title` | `str \| None` | `None` | New title. Omit to keep. |
-| `body` | `str \| None` | `None` | Replacement body text (full replacement, not appended). Omit to keep. |
+| `body` | `str \| None` | `None` | Replacement body text (full replacement, not appended). Read the item with plan_get first and keep what still matters. Omit to keep. |
+| `append` | `str \| None` | `None` | Text added to the end of the body as a new paragraph; what is there stays. Use it to record a result, a blocker or a next step without reading the item first. Not together with body. |
 | `priority` | `int \| None` | `None` | New priority 1-5. Omit to keep. |
 | `parent_id` | `int \| None` | `None` | New parent id; 0 makes the item top-level. Omit to keep. |
 | `tags` | `list[str] \| None` | `None` | Replacement tag list. Omit to keep. |

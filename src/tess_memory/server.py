@@ -574,7 +574,13 @@ def plan_update(
     ))] = None,
     title: Annotated[str | None, Field(description="New title. Omit to keep.")] = None,
     body: Annotated[str | None, Field(description=(
-        "Replacement body text (full replacement, not appended). Omit to keep."
+        "Replacement body text (full replacement, not appended). Read the item "
+        "with plan_get first and keep what still matters. Omit to keep."
+    ))] = None,
+    append: Annotated[str | None, Field(description=(
+        "Text added to the end of the body as a new paragraph; what is there "
+        "stays. Use it to record a result, a blocker or a next step without "
+        "reading the item first. Not together with body."
     ))] = None,
     priority: Annotated[int | None, Field(description=(
         "New priority 1-5. Omit to keep."
@@ -590,7 +596,7 @@ def plan_update(
 
     Maintain status LIVE, at the moment it changes: in_progress when you
     begin an item, complete when the work is done AND verified, blocked or
-    dropped when reality changes (put the reason in the body). Roll status up
+    dropped when reality changes (put the reason in the body, with append). Roll status up
     the tree too: a parent epic/slice goes in_progress with its first started
     child and complete with its last finished one. Do not batch updates for
     session end — a stale board misleads every future session. Every
@@ -608,7 +614,7 @@ def plan_update(
             )
         except ValueError as e:
             return f"Cannot update item: {e}"
-    kwargs: dict = dict(status=status, title=title, body=body,
+    kwargs: dict = dict(status=status, title=title, body=body, append=append,
                         priority=priority, tags=tags)
     if parent_id is not None:
         kwargs["parent_id"] = parent_id
