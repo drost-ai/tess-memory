@@ -147,6 +147,7 @@ Twelve tools, served over MCP:
         │  digest    what a week achieved                           │
         │  project   a rolling profile of each project              │
         │  plan      the board your agents write and maintain       │
+        │  image     descriptions of the images agents were sent    │
         └──────────────────────────────────────────────────────────┘
                            ▼
                  retrieve  meaning + keywords + importance + recency

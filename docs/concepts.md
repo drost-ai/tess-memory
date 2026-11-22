@@ -20,6 +20,7 @@ sources; it never writes to them. Each source has a type that says how to read i
 |---|---|
 | `claude-code` | Claude Code session files |
 | `codex` | Codex session rollouts, including archived ones |
+| `antigravity` | Google Antigravity conversations (the `agy` command) |
 | `tess-core` | Sessions of any agent built on Tess Core |
 | `transcript` | A folder of plain transcript files |
 
@@ -52,6 +53,7 @@ One session produces memory at several levels, and time adds more:
 | `digest` | A summary of one week | "What did we get done last week?" |
 | `project` | A rolling profile of a project | "What is this project and where is it?" |
 | `plan` | Items on the plan board | "What is next?" |
+| `image` | A description of an image someone sent an agent | "Which screenshot showed that error?" |
 
 Each `memory` has a **kind** (`decision`, `fact`, `preference`, `solution`, `problem`,
 `task_state`) and an **importance** from 1 to 10 that the distilling model assigns.
